@@ -1,0 +1,4 @@
+# tools/build.sh: albero coreboot, crossgcc, build
+/work/
+# tools/build.sh: le ROM
+/dist/

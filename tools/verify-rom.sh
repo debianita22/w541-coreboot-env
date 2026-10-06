@@ -1,0 +1,288 @@
+#!/bin/bash
+# verify-rom.sh - controlla una ROM di tools/build.sh prima che diventi una
+# release. Esce con 1 se anche un solo controllo non passa (righe NO).
+#
+#   tools/verify-rom.sh --variant mrc|nri [opzioni] ROM [CHIP8M CHIP4M]
+#
+#   ROM            l'immagine completa del flash, 12 MiB
+#   CHIP8M CHIP4M  (facoltative) le immagini dei due chip: devono essere i
+#                  primi 8 MiB e gli ultimi 4 MiB della ROM
+#
+# Opzioni:
+#   --reference R     l'immagine con gli 8 MiB bassi attesi (default:
+#                     legacy/coreboot-4.22/coreboot.rom, quella che gira sul
+#                     portatile: IFD, GbE e ME non devono cambiare)
+#   --cbfstool P      cbfstool (default: work/coreboot/build-<variante>/cbfstool)
+#   --ifittool P      ifittool per il FIT (default: quello della stessa build)
+#   --localversion S  il CONFIG_LOCALVERSION atteso (default: solo il suffisso
+#                     della variante)
+#   --release         anche: compilata con il crossgcc (non ANY_TOOLCHAIN) e
+#                     senza patch opzionali (+NOME nella versione)
+#
+# Controlli:
+#   1. 12 MiB; gli 8 MiB bassi identici a quelli di --reference: IFD a 0x0
+#      (firma 0x0FF0A55A a 0x10), GbE a 0x1000 (uguale a blobs/gbe.bin), ME
+#      da 0x3000, 0x500000-0x7FFFFF vuoto (regione BIOS non usata)
+#   2. FMAP: BIOS a 0x800000 per 4 MiB con COREBOOT, SMMSTORE, RO_VPD e
+#      RW_MRC_CACHE; queste tre vuote (niente variabili UEFI, seriale o
+#      training della RAM di un'altra macchina)
+#   3. CBFS: i file di ogni build; mrc.bin solo nella mrc, uguale a
+#      blobs/mrc.bin e a 0xFFFA0000, dove lo chiama la romstage;
+#      pci10de,11fc.rom uguale al VBIOS NVIDIA di blobs/
+#   4. microcode per la CPU del W541 (CPUID 306C3) e voci microcode nel FIT
+#   5. vettore di reset: un jmp a 0xFFFFFFF0
+#   6. il .config dentro la ROM: board, RAM init della variante, IFD, ME
+#      (me_cleaner) e GbE, flash non bloccato (regioni sbloccate,
+#      BOOTMEDIA_LOCK_NONE e niente SMM_BWP: il prossimo aggiornamento si fa
+#      ancora con flashrom -p internal)
+set -uo pipefail
+O="$(cd "$(dirname "$0")/.." && pwd)"
+
+die() { printf '\033[31m[x] %s\033[0m\n' "$*" >&2; exit 2; }
+
+VARIANT=""
+REFERENCE="${O}/legacy/coreboot-4.22/coreboot.rom"
+CBFSTOOL=""
+IFITTOOL=""
+LOCALVERSION=""
+RELEASE=no
+FILES=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--variant)      VARIANT="${2:-}"; shift 2 ;;
+		--reference)    REFERENCE="${2:-}"; shift 2 ;;
+		--cbfstool)     CBFSTOOL="${2:-}"; shift 2 ;;
+		--ifittool)     IFITTOOL="${2:-}"; shift 2 ;;
+		--localversion) LOCALVERSION="${2:-}"; shift 2 ;;
+		--release)      RELEASE=yes; shift ;;
+		-h|--help)      sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+		-*)             die "opzione sconosciuta: $1" ;;
+		*)              FILES+=("$1"); shift ;;
+	esac
+done
+case "${VARIANT}" in mrc|nri) ;; *) die "--variant mrc|nri" ;; esac
+[ ${#FILES[@]} -eq 1 ] || [ ${#FILES[@]} -eq 3 ] || die "uso: verify-rom.sh --variant mrc|nri [opzioni] ROM [CHIP8M CHIP4M]"
+ROM="${FILES[0]}"
+CHIP8="${FILES[1]:-}"
+CHIP4="${FILES[2]:-}"
+[ -f "${ROM}" ] || die "${ROM}: non c'e'"
+[ -f "${REFERENCE}" ] || die "--reference ${REFERENCE}: non c'e'"
+[ -n "${CBFSTOOL}" ] || CBFSTOOL="${O}/work/coreboot/build-${VARIANT}/cbfstool"
+[ -x "${CBFSTOOL}" ] || die "cbfstool non trovato (${CBFSTOOL}): --cbfstool"
+if [ -z "${IFITTOOL}" ] && [ -x "$(dirname "${CBFSTOOL}")/util/cbfstool/ifittool" ]; then
+	IFITTOOL="$(dirname "${CBFSTOOL}")/util/cbfstool/ifittool"
+fi
+
+fail=0
+ok()  { printf '  ok  %s\n' "$*"; }
+bad() { printf '  NO  %s\n' "$*"; fail=1; }
+TMP="$(mktemp -d)"
+trap 'rm -rf "${TMP}"' EXIT
+
+ROM_SIZE=$((12 * 1024 * 1024))
+LOW_SIZE=$((8 * 1024 * 1024))
+CHIP_SIZE=$((4 * 1024 * 1024))
+# mrc.bin-position della romstage Haswell (haswell_mrc/Makefile.mk), come
+# offset nel file: 0xFFFA0000 - (4 GiB - 12 MiB)
+MRC_ADDR=0xfffa0000
+MRC_OFF=$(( MRC_ADDR - (0x100000000 - ROM_SIZE) ))
+
+# $1 dall'offset $2 per $3 byte e' tutto 0xFF?
+all_ff() {
+	[ "$(tail -c +"$(( $2 + 1 ))" "$1" | head -c "$3" | tr -d '\377' | wc -c)" = 0 ]
+}
+# $1 a partire dall'offset $2 contiene il file $3?
+at_offset() {
+	cmp -s -n "$(stat -c%s "$3")" <(tail -c +"$(( $2 + 1 ))" "$1") "$3"
+}
+hex() { printf '0x%x' "$1"; }
+
+echo "${ROM} (${VARIANT})"
+
+# --- 1. dimensione, IFD, GbE e ME ------------------------------------------
+size="$(stat -c%s "${ROM}")"
+if [ "${size}" = "${ROM_SIZE}" ]; then ok "12 MiB"; else bad "dimensione ${size}, attesa ${ROM_SIZE}"; fi
+if cmp -s -n "${LOW_SIZE}" "${ROM}" "${REFERENCE}"; then
+	ok "0x000000-0x7FFFFF (IFD, GbE, ME) identici a ${REFERENCE#"${O}/"}"
+else
+	bad "0x000000-0x7FFFFF diversi da ${REFERENCE#"${O}/"}: IFD, GbE o ME cambiati ($(cmp -l -n "${LOW_SIZE}" "${ROM}" "${REFERENCE}" 2>/dev/null | wc -l) byte)"
+fi
+sig="$(od -An -tx1 -j 16 -N4 "${ROM}" | tr -d ' \n')"
+if [ "${sig}" = 5aa5f00f ]; then ok "descrittore Intel (0x0FF0A55A a 0x10)"; else bad "nessun descrittore Intel a 0x10 (${sig})"; fi
+if [ -f "${O}/blobs/gbe.bin" ]; then
+	if at_offset "${ROM}" $((0x1000)) "${O}/blobs/gbe.bin"; then ok "GbE a 0x1000 uguale a blobs/gbe.bin"; else bad "GbE a 0x1000 diversa da blobs/gbe.bin"; fi
+fi
+if all_ff "${ROM}" $((0x500000)) $((0x300000)); then
+	ok "0x500000-0x7FFFFF vuoto (regione BIOS fuori da coreboot)"
+else
+	bad "0x500000-0x7FFFFF non vuoto"
+fi
+
+# --- 2. FMAP ---------------------------------------------------------------
+if "${CBFSTOOL}" "${ROM}" layout -w > "${TMP}/layout.txt" 2>&1; then
+	sed -n "s/^'\([A-Z0-9_]*\)' (.*size \([0-9]*\), offset \([0-9]*\))$/\1 \2 \3/p" \
+		"${TMP}/layout.txt" > "${TMP}/regions"
+else
+	bad "cbfstool layout: $(head -1 "${TMP}/layout.txt")"
+	: > "${TMP}/regions"
+fi
+region() { awk -v r="$1" '$1 == r { print $2, $3; exit }' "${TMP}/regions"; }
+read -r bsize boff <<< "$(region BIOS)"
+if [ "${boff:-}" = "${LOW_SIZE}" ] && [ "${bsize:-}" = "${CHIP_SIZE}" ]; then
+	ok "FMAP: BIOS 0x800000-0xBFFFFF (chip da 4 MiB)"
+else
+	bad "FMAP: BIOS ${boff:-?}+${bsize:-?}, atteso 0x800000+0x400000"
+fi
+for r in COREBOOT SMMSTORE RO_VPD RW_MRC_CACHE; do
+	read -r rsize roff <<< "$(region "${r}")"
+	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
+	if [ "${roff}" -lt "${LOW_SIZE}" ] || [ $(( roff + rsize )) -gt "${ROM_SIZE}" ]; then
+		bad "FMAP: ${r} fuori dalla regione BIOS"
+		continue
+	fi
+	case "${r}" in
+		COREBOOT) ok "FMAP: COREBOOT $(hex "${roff}") ($(( rsize / 1024 )) KiB)" ;;
+		*) if all_ff "${ROM}" "${roff}" "${rsize}"; then
+			ok "FMAP: ${r} $(hex "${roff}") vuota"
+		else
+			bad "FMAP: ${r} non vuota (dati di una macchina nella ROM)"
+		fi ;;
+	esac
+done
+
+# --- 3. CBFS ---------------------------------------------------------------
+"${CBFSTOOL}" "${ROM}" print -r COREBOOT > "${TMP}/cbfs.txt" 2>&1 || bad "cbfstool print: $(head -1 "${TMP}/cbfs.txt")"
+awk 'NR > 2 { print $1 }' "${TMP}/cbfs.txt" > "${TMP}/names"
+has() { grep -qxF -- "$1" "${TMP}/names"; }
+extract() { "${CBFSTOOL}" "${ROM}" extract -r COREBOOT -n "$1" -f "$2" > /dev/null 2>&1; }
+missing=()
+for f in bootblock fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml \
+	fallback/payload cpu_microcode_blob.bin intel_fit vbt.bin config revision build_info \
+	pci10de,11fc.rom; do
+	has "${f}" || missing+=("${f}")
+done
+if [ ${#missing[@]} -eq 0 ]; then ok "CBFS: stage, payload, DSDT, VBT, microcode, FIT, config"; else bad "CBFS: mancano ${missing[*]}"; fi
+if [ "${VARIANT}" = mrc ]; then
+	if ! has mrc.bin; then
+		bad "CBFS: manca mrc.bin (variante mrc)"
+	else
+		extract mrc.bin "${TMP}/mrc.bin"
+		if cmp -s "${TMP}/mrc.bin" "${O}/blobs/mrc.bin"; then ok "mrc.bin uguale a blobs/mrc.bin"; else bad "mrc.bin diverso da blobs/mrc.bin"; fi
+		if at_offset "${ROM}" "${MRC_OFF}" "${O}/blobs/mrc.bin"; then
+			ok "mrc.bin a ${MRC_ADDR}"
+		else
+			bad "mrc.bin non a ${MRC_ADDR} (offset $(hex "${MRC_OFF}") nel file)"
+		fi
+	fi
+else
+	if has mrc.bin; then bad "CBFS: mrc.bin nella variante nri"; else ok "niente mrc.bin (RAM init nativa)"; fi
+fi
+if has pci10de,11fc.rom && extract pci10de,11fc.rom "${TMP}/vbios.rom" \
+	&& cmp -s "${TMP}/vbios.rom" "${O}/blobs/vbios_10de_11fc_1.rom"; then
+	ok "pci10de,11fc.rom uguale a blobs/vbios_10de_11fc_1.rom"
+else
+	bad "pci10de,11fc.rom assente o diverso da blobs/vbios_10de_11fc_1.rom"
+fi
+
+# --- 4. microcode e FIT -------------------------------------------------------
+if extract cpu_microcode_blob.bin "${TMP}/ucode.bin"; then
+	# header Intel: versione 1, firma CPU a +12, dimensione totale a +32
+	sigs="$(python3 -I -c '
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+o, out = 0, []
+while o + 48 <= len(d):
+    hv, rev, _, sig = struct.unpack_from("<4I", d, o)
+    total = struct.unpack_from("<I", d, o + 32)[0] or 2048
+    if hv != 1:
+        break
+    out.append("%x:%x" % (sig, rev))
+    o += total
+print(" ".join(out))' "${TMP}/ucode.bin")"
+	case " ${sigs} " in
+		*" 306c3:"*) ok "microcode per CPUID 306C3 (${sigs})" ;;
+		*) bad "nessun microcode per CPUID 306C3 (${sigs:-blob vuoto})" ;;
+	esac
+else
+	bad "cpu_microcode_blob.bin non estraibile"
+fi
+if [ -n "${IFITTOOL}" ]; then
+	n="$("${IFITTOOL}" -f "${ROM}" -D -r COREBOOT 2>/dev/null | grep -c 'Microcode' || true)"
+	if [ "${n}" -ge 1 ]; then ok "FIT: ${n} voci microcode"; else bad "FIT senza voci microcode"; fi
+else
+	echo "  --  FIT non controllato (ifittool non trovato)"
+fi
+
+# --- 5. vettore di reset --------------------------------------------------------
+rv="$(od -An -tx1 -j $(( size - 16 )) -N1 "${ROM}" | tr -d ' \n')"
+case "${rv}" in
+	e9|eb) ok "vettore di reset: jmp (${rv}) a 0xFFFFFFF0" ;;
+	*) bad "vettore di reset: ${rv:-?} a 0xFFFFFFF0, atteso un jmp" ;;
+esac
+
+# --- 6. il .config nella ROM ----------------------------------------------------
+if extract config "${TMP}/config"; then
+	want() { if grep -qxF -- "$1" "${TMP}/config"; then ok "config: $1"; else bad "config: manca $1"; fi; }
+	never() { if grep -qxF -- "$1" "${TMP}/config"; then bad "config: $1 (${2})"; else ok "config: no ${1%%=*}"; fi; }
+	want CONFIG_BOARD_LENOVO_THINKPAD_W541=y
+	want CONFIG_CBFS_SIZE=0x400000
+	if [ "${VARIANT}" = mrc ]; then
+		want CONFIG_HAVE_MRC=y
+		never CONFIG_USE_NATIVE_RAMINIT=y "RAM init nativa nella variante mrc"
+	else
+		want CONFIG_USE_NATIVE_RAMINIT=y
+		never CONFIG_HAVE_MRC=y "mrc.bin nella variante nri"
+	fi
+	want CONFIG_VGA_BIOS_DGPU=y
+	want CONFIG_MAINBOARD_USE_LIBGFXINIT=y
+	want CONFIG_PAYLOAD_EDK2=y
+	want CONFIG_HAVE_IFD_BIN=y
+	want CONFIG_HAVE_ME_BIN=y
+	want CONFIG_USE_ME_CLEANER=y
+	want CONFIG_HAVE_GBE_BIN=y
+	want CONFIG_UNLOCK_FLASH_REGIONS=y
+	want CONFIG_BOOTMEDIA_LOCK_NONE=y
+	never CONFIG_BOOTMEDIA_SMM_BWP=y "flash scrivibile solo da SMM: flashrom -p internal non aggiornerebbe piu'"
+	lv="$(sed -n 's/^CONFIG_LOCALVERSION="\(.*\)"$/\1/p' "${TMP}/config")"
+	if [ -n "${LOCALVERSION}" ]; then
+		if [ "${lv}" = "${LOCALVERSION}" ]; then ok "versione: ${lv}"; else bad "versione: '${lv}', attesa '${LOCALVERSION}'"; fi
+	else
+		case "${lv}" in
+			*-"${VARIANT}"|*-"${VARIANT}"+*) ok "versione: ${lv}" ;;
+			*) bad "versione: '${lv}' non finisce con -${VARIANT}" ;;
+		esac
+	fi
+	if [ "${RELEASE}" = yes ]; then
+		never CONFIG_ANY_TOOLCHAIN=y "compilata con il toolchain del sistema, non con il crossgcc"
+		case "${lv}" in *+*) bad "versione con patch opzionali (${lv}): non per una release" ;; *) ok "nessuna patch opzionale" ;; esac
+	fi
+else
+	bad "config non estraibile dal CBFS"
+fi
+if extract revision "${TMP}/revision"; then
+	ev="$(sed -n 's/^#define COREBOOT_EXTRA_VERSION "\(.*\)"$/\1/p' "${TMP}/revision")"
+	if [ "${ev}" = "-${lv:-}" ]; then ok "revision: COREBOOT_EXTRA_VERSION ${ev}"; else bad "revision: COREBOOT_EXTRA_VERSION '${ev}', atteso '-${lv:-}'"; fi
+fi
+
+# --- immagini dei due chip -------------------------------------------------------
+if [ -n "${CHIP8}" ]; then
+	if [ "$(stat -c%s "${CHIP8}" 2>/dev/null)" = "${LOW_SIZE}" ] \
+		&& cmp -s <(head -c "${LOW_SIZE}" "${ROM}") "${CHIP8}"; then
+		ok "$(basename "${CHIP8}"): i primi 8 MiB della ROM"
+	else
+		bad "$(basename "${CHIP8}"): non sono i primi 8 MiB della ROM"
+	fi
+	if [ "$(stat -c%s "${CHIP4}" 2>/dev/null)" = "${CHIP_SIZE}" ] \
+		&& cmp -s <(tail -c "${CHIP_SIZE}" "${ROM}") "${CHIP4}"; then
+		ok "$(basename "${CHIP4}"): gli ultimi 4 MiB della ROM"
+	else
+		bad "$(basename "${CHIP4}"): non sono gli ultimi 4 MiB della ROM"
+	fi
+fi
+
+if [ "${fail}" = 0 ]; then
+	echo "  tutti i controlli passano"
+else
+	echo "  qualche controllo NON passa (righe NO)" >&2
+fi
+exit "${fail}"
