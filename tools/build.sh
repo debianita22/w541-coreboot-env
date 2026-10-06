@@ -242,6 +242,52 @@ cmd_prepare() {
 	state > "${STAMP}"
 }
 
+# I sorgenti del crossgcc in util/crossgcc/tarballs/ prima di buildgcc, che
+# poi li trova li' e li riverifica. Per ognuno l'URL di buildgcc, poi
+# ftp.gnu.org al posto di ftpmirror.gnu.org (rimanda a un mirror a caso, a
+# volte irraggiungibile dai runner di GitHub), poi il mirror di coreboot; il
+# checksum e' quello di util/crossgcc/sum/.
+seed_tarballs() {
+	local cg="${TREE}/util/crossgcc" vars pkg file base mirror sum url last got
+	mkdir -p "${cg}/tarballs"
+	# solo le assegnazioni semplici di buildgcc: versioni, archivi, URL
+	vars="$(sed -n -e '/^[A-Z_]*_VERSION=/p' -e '/^[A-Z_]*_ARCHIVE=/p' \
+		-e '/^[A-Z_]*_BASE_URL=/p' -e '/^COREBOOT_MIRROR_URL=/p' "${cg}/buildgcc")"
+	while read -r pkg file base mirror; do
+		[ -n "${file}" ] && [ -n "${base}" ] || die "crossgcc: ${pkg} non trovato in buildgcc"
+		[ -f "${cg}/sum/${file}.cksum" ] || die "crossgcc: manca sum/${file}.cksum"
+		sum="$(cut -d' ' -f1 "${cg}/sum/${file}.cksum")"
+		if [ -f "${cg}/tarballs/${file}" ] && [ "$(sha1sum < "${cg}/tarballs/${file}" | cut -d' ' -f1)" = "${sum}" ]; then
+			echo "  ${file} gia' scaricato"
+			continue
+		fi
+		got=no
+		last=""
+		for url in "${base}/${file}" "${base/#https:\/\/ftpmirror.gnu.org\//https://ftp.gnu.org/gnu/}/${file}" "${mirror}/${file}"; do
+			[ "${url}" != "${last}" ] || continue
+			last="${url}"
+			if curl -fsSL --retry 3 --retry-delay 10 --connect-timeout 30 --max-time 1800 \
+				-o "${cg}/tarballs/${file}.part" "${url}" \
+				&& [ "$(sha1sum < "${cg}/tarballs/${file}.part" | cut -d' ' -f1)" = "${sum}" ]; then
+				mv "${cg}/tarballs/${file}.part" "${cg}/tarballs/${file}"
+				echo "  ${file} da ${url}"
+				got=yes
+				break
+			fi
+			echo "  ${file}: ${url} non va (download o checksum)"
+		done
+		rm -f "${cg}/tarballs/${file}.part"
+		[ "${got}" = yes ] || die "crossgcc: ${file} non si scarica da nessun mirror"
+	done < <(
+		eval "${vars}"
+		for pkg in GMP MPFR MPC BINUTILS GCC NASM IASL; do
+			a="${pkg}_ARCHIVE"
+			u="${pkg}_BASE_URL"
+			echo "${pkg} ${!a:-} ${!u:-} ${COREBOOT_MIRROR_URL:-}"
+		done
+	)
+}
+
 xgcc_ok() {
 	local t
 	for t in i386-elf-gcc i386-elf-gnatbind iasl nasm; do
@@ -266,6 +312,8 @@ cmd_toolchain() {
 		return 0
 	fi
 	[ -d "${TREE}/util/crossgcc" ] || die "prima tools/build.sh prepare"
+	say "sorgenti del crossgcc"
+	seed_tarballs
 	say "crossgcc i386 + Ada, iasl, nasm (lungo: 30-60 minuti)"
 	# BUILD_LANGUAGES esplicito: senza GNAT buildgcc si ferma, invece di fare
 	# un compilatore solo C che poi non compila libgfxinit
