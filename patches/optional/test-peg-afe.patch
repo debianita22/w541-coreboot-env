@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:09:18 +0200
+Subject: [PATCH] [TEST] nb/intel/haswell: Program PEG AFE when MRC does not
+
+peg_dmi_recipe() implements the PEG and DMI AFE (PHY) recipe, but only
+the DMI half is ever used. MRC.bin programs the PEG AFE itself unless
+the PEG devices are hidden from it, which HASWELL_HIDE_PEG_FROM_MRC
+does by default so that the iGPU stays usable; its help text warns
+that this "can make PEG devices unstable". Native raminit does not
+program it either. In both cases the PEG link starts training with the
+reset defaults. On the W541, the dGPU link reaches 8 GT/s x16 on the
+OEM firmware.
+
+Apply the PEG half of the recipe once, before starting link training
+on the enabled PEG ports, with native raminit and when PEG is hidden
+from MRC. It covers all eight bundles of the PEG PHY and already
+writes the shared registers of all PEG functions. Build the recipe and
+the VCU mailbox code for the MRC case too, and update the comment and
+the help text that describe the missing AFE settings.
+
+Not for upstream until tested on hardware: compare LnkSta (speed and
+width) and the AER error counters of 00:01.0 and 01:00.0 under GPU load
+with and without this change, with native raminit and with MRC.bin.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/Kconfig     |  4 ++--
+ src/northbridge/intel/haswell/Makefile.mk |  1 +
+ src/northbridge/intel/haswell/early_peg.c | 19 +++++++++++++++----
+ 3 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/Kconfig b/src/northbridge/intel/haswell/Kconfig
+index 11950198a..908afe513 100644
+--- a/src/northbridge/intel/haswell/Kconfig
++++ b/src/northbridge/intel/haswell/Kconfig
+@@ -117,8 +117,8 @@ config HASWELL_HIDE_PEG_FROM_MRC
+ 	help
+ 	  If set, hides all PEG devices from MRC. This allows the iGPU
+ 	  to be used even when a dedicated graphics card is present.
+-	  However, it prevents MRC from programming PEG AFE registers,
+-	  which can make PEG devices unstable. When unsure, choose N.
++	  MRC then does not program the PEG AFE registers, so coreboot
++	  programs them before starting PEG link training.
+ 
+ # The UEFI System Agent binary needs to be at a fixed offset in the flash
+ # and can therefore only reside in the COREBOOT fmap region
+diff --git a/src/northbridge/intel/haswell/Makefile.mk b/src/northbridge/intel/haswell/Makefile.mk
+index c5cc82fc1..53f696f63 100644
+--- a/src/northbridge/intel/haswell/Makefile.mk
++++ b/src/northbridge/intel/haswell/Makefile.mk
+@@ -34,6 +34,7 @@ romstage-y += early_dmi.c early_pcie.c vcu_mailbox.c
+ subdirs-y  += broadwell_mrc
+ 
+ else
++romstage-$(CONFIG_HASWELL_HIDE_PEG_FROM_MRC) += early_pcie.c vcu_mailbox.c
+ subdirs-y  += haswell_mrc
+ endif
+ endif
+diff --git a/src/northbridge/intel/haswell/early_peg.c b/src/northbridge/intel/haswell/early_peg.c
+index bb59d5d6d..c756b655d 100644
+--- a/src/northbridge/intel/haswell/early_peg.c
++++ b/src/northbridge/intel/haswell/early_peg.c
+@@ -32,10 +32,9 @@ static void start_peg2_link_training(const u8 func)
+ 	 *
+ 	 * If one really wants to enable the Intel iGPU as primary, hide
+ 	 * all PEG devices during MRC execution. This will trick the MRC
+-	 * into thinking there aren't any, and will enable the IGD. Note
+-	 * that PEG AFE settings will not be programmed, which may cause
+-	 * stability problems at higher PCIe link speeds. The most ideal
+-	 * way to fix this problem for good is to implement native init.
++	 * into thinking there aren't any, and will enable the IGD. MRC
++	 * then does not program the PEG AFE settings, which is done in
++	 * northbridge_setup_peg() instead.
+ 	 */
+ 	if (CONFIG(HASWELL_HIDE_PEG_FROM_MRC)) {
+ 		pci_and_config32(HOST_BRIDGE, DEVEN, ~deven_for_peg(func));
+@@ -48,6 +47,18 @@ void northbridge_setup_peg(void)
+ {
+ 	const u32 deven = pci_read_config32(HOST_BRIDGE, DEVEN);
+ 
++	/*
++	 * Program the PEG AFE settings before training the links. MRC does
++	 * this on its own, unless the PEG devices are hidden from it, and
++	 * native raminit does not. The recipe covers the whole PEG PHY, so
++	 * apply it once through PEG10.
++	 */
++	const bool program_afe = CONFIG(USE_NATIVE_RAMINIT) ||
++				 CONFIG(HASWELL_HIDE_PEG_FROM_MRC);
++
++	if (program_afe && (deven & DEVEN_D1F0EN))
++		peg_dmi_recipe(true, PEG_DEV(0));
++
+ 	for (u8 func = 0; func < MAX_PEG_FUNC; func++) {
+ 		if (deven & deven_for_peg(func)) {
+ 			start_peg2_link_training(func);
+-- 
+2.43.0
+

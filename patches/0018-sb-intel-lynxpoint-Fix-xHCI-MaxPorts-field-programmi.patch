@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:06:08 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Fix xHCI MaxPorts field programming
+
+MaxPorts is HCSPARAMS1[31:24], and LPT-H needs 15 + the number of
+SuperSpeed ports in it, i.e. 21 (0x15). The native USB init however
+masks and shifts the value by 28 bits: only bits 31:28 get cleared, and
+21 << 28 truncates to 5 << 28. If the field is writable and starts out
+as 0x15, MaxPorts reads back as 0x55 (85) afterwards, so the OS and
+payloads see 64 extra root hub ports that do not exist.
+
+Program the whole 8-bit field.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet: HCSPARAMS1, e.g.
+in /sys/kernel/debug/usb/xhci/0000:00:14.0/reg-cap, must report 0x15
+in bits 31:24.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/early_usb_native.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/early_usb_native.c b/src/southbridge/intel/lynxpoint/early_usb_native.c
+index cb6f6ee8e..b63ae3d50 100644
+--- a/src/southbridge/intel/lynxpoint/early_usb_native.c
++++ b/src/southbridge/intel/lynxpoint/early_usb_native.c
+@@ -133,7 +133,7 @@ static void common_xhci_hc_init(void)
+ 
+ 	if (!is_lp) {
+ 		const unsigned int max_ports = 15 + ss_port_count();
+-		clrsetbits32(xhci_bar + XHCI_HCS_PARAMS_1, 0xf << 28, max_ports << 28);
++		clrsetbits32(xhci_bar + XHCI_HCS_PARAMS_1, 0xffU << 24, max_ports << 24);
+ 	}
+ 
+ 	clrsetbits32(xhci_bar + XHCI_HCS_PARAMS_3, 0xffff << 16 | 0xff, 0x200 << 16 | 0x0a);
+-- 
+2.43.0
+

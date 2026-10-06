@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Wed, 30 Sep 2026 23:13:45 +0200
+Subject: [PATCH] mb/lenovo/haswell: Keep dGPU power state on S3 resume
+
+With ACPI runtime PM the OS may power the dGPU off before entering S3.
+Romstage still applies the "enable_dual_graphics" option on resume
+and turns the GPU back on behind the back of the OS.
+
+Leave the dGPU power state alone on S3 resume when runtime PM is
+enabled. The power resource _STA reports the actual state, so the OS
+powers the GPU on again when it needs it.
+
+TEST=Built for W541 and T440p. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/romstage.c | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/src/mainboard/lenovo/haswell/romstage.c b/src/mainboard/lenovo/haswell/romstage.c
+index 518bd4b61..64d8cd442 100644
+--- a/src/mainboard/lenovo/haswell/romstage.c
++++ b/src/mainboard/lenovo/haswell/romstage.c
+@@ -6,6 +6,7 @@
+ #include <option.h>
+ #include <ec/lenovo/pmh7/pmh7.h>
+ #include <device/pci_ops.h>
++#include <romstage_handoff.h>
+ 
+ void mainboard_config_rcba(void)
+ {
+@@ -23,10 +24,20 @@ void mb_late_romstage_setup(void)
+ {
+ 	u8 enable_peg = get_uint_option("enable_dual_graphics", 0);
+ 
+-	bool power_en = pmh7_dgpu_power_state();
++	/*
++	 * With ACPI runtime PM the OS may have powered the dGPU off before
++	 * suspending: keep that state on S3 resume, the power resource _STA
++	 * reports it and the OS powers the GPU back on when it needs it.
++	 */
++	bool keep_state = CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM) && enable_peg &&
++			  romstage_handoff_is_resume();
+ 
+-	if (enable_peg != power_en)
+-		pmh7_dgpu_power_enable(!power_en);
++	if (!keep_state) {
++		bool power_en = pmh7_dgpu_power_state();
++
++		if (enable_peg != power_en)
++			pmh7_dgpu_power_enable(!power_en);
++	}
+ 
+ 	if (!enable_peg) {
+ 		// Hide disabled dGPU device
+-- 
+2.43.0
+

@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:04:12 +0200
+Subject: [PATCH] nb/intel/haswell: Use PCH backlight duty cycle for ACPI
+
+The ACPI brightness methods read and write the PWM duty cycle at
+INTEL_GMA_BCLV_OFFSET and the PWM period at INTEL_GMA_BCLM_OFFSET.
+Haswell overrides the duty cycle offset with 0x48254 (BLC_PWM_CPU_CTL),
+the Sandy Bridge location, while the period is read from the default
+0xc8256, the upper half of BLC_PWM_PCH_CTL2.
+
+With a Lynx Point PCH the backlight PWM runs in PCH override mode: the
+GMA init sets BLM_PCH_OVERRIDE_ENABLE, and so does the Linux driver,
+which writes the duty cycle to BLC_PWM_PCH_CTL2[15:0] only. Nothing
+writes BLC_PWM_CPU_CTL, so _BQC computes the current level from a stale
+register and reports the lowest level, and the legacy _BCM fallback
+writes to a register that has no effect. Brightness keys handled by the
+firmware then step relative to the lowest level as well.
+
+Drop the override, so that the default 0xc8254 (BLC_PWM_PCH_CTL2[15:0])
+is used, like on Broadwell.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet: with the
+acpi_video backlight, the value read from actual_brightness must follow
+the level written to brightness.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/Kconfig | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/Kconfig b/src/northbridge/intel/haswell/Kconfig
+index 6015c3170..11950198a 100644
+--- a/src/northbridge/intel/haswell/Kconfig
++++ b/src/northbridge/intel/haswell/Kconfig
+@@ -127,9 +127,6 @@ config RO_REGION_ONLY
+ 	depends on VBOOT
+ 	default "mrc.bin"
+ 
+-config INTEL_GMA_BCLV_OFFSET
+-	default 0x48254
+-
+ config ENABLE_DDR_2X_REFRESH
+ 	bool "Enable DRAM Refresh 2x support"
+ 	default n
+-- 
+2.43.0
+

@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:08:24 +0200
+Subject: [PATCH] nb/intel/haswell: Set Mini-HD BCLK dividers from CDCLK
+
+The Mini-HD (display audio) controller derives its 24 MHz BCLK from
+CDCLK as CDCLK * EM4 / EM5. minihd_init() always programs 4 / 75, which
+is only right for a 450 MHz CDCLK. The GMA init selects 540 MHz on
+non-ULT Haswell parts unless CDCLK is fused to 450 MHz, so BCLK runs
+at 28.8 MHz and display audio plays at the wrong rate until an OS
+driver reprograms EM4/EM5.
+
+Record the dividers for the CDCLK that the GMA init selects, using the
+same values as the Linux HDA driver (337.5 MHz: 16/225, 450 MHz: 4/75,
+540 MHz: 4/90, 675 MHz: 8/225), and program them in minihd_init().
+The GMA (00:02.0) is initialized before the Mini-HD (00:03.0); without
+it, the previous 450 MHz values are kept.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/gma.c     | 35 +++++++++++++++++++++++++
+ src/northbridge/intel/haswell/haswell.h |  3 +++
+ src/northbridge/intel/haswell/minihd.c  | 10 ++++---
+ 3 files changed, 45 insertions(+), 3 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/gma.c b/src/northbridge/intel/haswell/gma.c
+index fc44a98a5..b5eb9ce77 100644
+--- a/src/northbridge/intel/haswell/gma.c
++++ b/src/northbridge/intel/haswell/gma.c
+@@ -429,6 +429,39 @@ enum gt_cdclk {
+ 	GT_CDCLK_675,
+ };
+ 
++/* Mini-HD BCLK = CDCLK * M / N must be 24 MHz. Default to 450 MHz CDCLK. */
++static u32 minihd_bclk_m = 4;
++static u32 minihd_bclk_n = 75;
++
++void gma_get_minihd_bclk_dividers(u32 *m, u32 *n)
++{
++	*m = minihd_bclk_m;
++	*n = minihd_bclk_n;
++}
++
++static void set_minihd_bclk_dividers(enum gt_cdclk cdclk)
++{
++	switch (cdclk) {
++	case GT_CDCLK_337:
++		minihd_bclk_m = 16;
++		minihd_bclk_n = 225;
++		break;
++	case GT_CDCLK_540:
++		minihd_bclk_m = 4;
++		minihd_bclk_n = 90;
++		break;
++	case GT_CDCLK_675:
++		minihd_bclk_m = 8;
++		minihd_bclk_n = 225;
++		break;
++	case GT_CDCLK_450:
++	default:
++		minihd_bclk_m = 4;
++		minihd_bclk_n = 75;
++		break;
++	}
++}
++
+ static enum gt_cdclk get_cdclk(bool is_broadwell, enum gpu_type type)
+ {
+ 	/* TODO: Make this a config option? */
+@@ -529,6 +562,8 @@ static void gma_cdclk_init(struct device *dev, bool is_broadwell)
+ 	 */
+ 	gtt_rmw(LCPLL_CTL, ~LCPLL_CLK_FREQ_MASK, cdsel << 26);
+ 
++	set_minihd_bclk_dividers(cdclk);
++
+ 	if (is_broadwell || type == GPU_TYPE_ULX) {
+ 		/* Inform power controller of selected frequency */
+ 		gtt_pcode_write(HSW_PCODE_DE_WRITE_FREQ_REQ, cdsel);
+diff --git a/src/northbridge/intel/haswell/haswell.h b/src/northbridge/intel/haswell/haswell.h
+index 4d2da0178..0c669c442 100644
+--- a/src/northbridge/intel/haswell/haswell.h
++++ b/src/northbridge/intel/haswell/haswell.h
+@@ -43,6 +43,9 @@ void peg_dmi_recipe(const bool is_peg, const pci_devfn_t dev);
+ 
+ void report_platform_info(void);
+ 
++/* Mini-HD BCLK dividers for the CDCLK selected by the GMA init */
++void gma_get_minihd_bclk_dividers(u32 *m, u32 *n);
++
+ struct acpi_rsdp;
+ unsigned long northbridge_write_acpi_tables(const struct device *device, unsigned long start,
+ 					    struct acpi_rsdp *rsdp);
+diff --git a/src/northbridge/intel/haswell/minihd.c b/src/northbridge/intel/haswell/minihd.c
+index 123a934f0..e8c2d93bf 100644
+--- a/src/northbridge/intel/haswell/minihd.c
++++ b/src/northbridge/intel/haswell/minihd.c
+@@ -7,6 +7,7 @@
+ #include <device/pci_ids.h>
+ #include <device/pci_ops.h>
+ #include <device/mmio.h>
++#include <northbridge/intel/haswell/haswell.h>
+ #include <southbridge/intel/lynxpoint/hda_verb.h>
+ 
+ #if CONFIG(AZALIA_USE_LEGACY_VERB_TABLE)
+@@ -103,15 +104,18 @@ static void minihd_init(struct device *dev)
+ 	/* Set Bus Master */
+ 	pci_or_config16(dev, PCI_COMMAND, PCI_COMMAND_MASTER);
+ 
+-	/* Mini-HD configuration */
++	/* Mini-HD configuration: BCLK = CDCLK * EM4 / EM5 = 24 MHz */
++	u32 bclk_m, bclk_n;
++	gma_get_minihd_bclk_dividers(&bclk_m, &bclk_n);
++
+ 	reg32 = read32(base + 0x100c);
+ 	reg32 &= 0xfffc0000;
+-	reg32 |= 0x4;
++	reg32 |= bclk_m;
+ 	write32(base + 0x100c, reg32);
+ 
+ 	reg32 = read32(base + 0x1010);
+ 	reg32 &= 0xfffc0000;
+-	reg32 |= 0x4b;
++	reg32 |= bclk_n;
+ 	write32(base + 0x1010, reg32);
+ 
+ 	/* Init the codec and write the verb table */
+-- 
+2.43.0
+

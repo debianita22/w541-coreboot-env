@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 12:08:09 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add CFR setup menu
+
+With the EDK2 payload, these boards default to no option backend, so
+all runtime options are fixed to their built-in defaults. For example,
+the NVIDIA GPU of the W541 stays powered off unless the CMOS backend is
+selected and the option is changed with nvramtool.
+
+Add a CFR setup menu and enable it for EDK2 with SMMSTORE, like on the
+X220/X230. Options are then kept in the UEFI variable store, which can
+also be read in romstage, where "enable_dual_graphics" is evaluated.
+
+Besides the console and H8 EC forms, which are added automatically,
+the menu has:
+- System: ME PCI interface, NMI, power state after power loss
+- Processor: PL1/PL2 package power limits (0 = CPU default) and the
+  power limit lock
+- CPU voltage: OC mailbox undervolt offsets, if undervolting support
+  is enabled
+- Graphics: the NVIDIA GPU ("enable_dual_graphics")
+
+Undervolting support stays disabled by default: the offsets are
+applied before the payload starts and are kept in flash, so an offset
+the CPU does not tolerate can only be cleared with an external
+programmer. Note that existing configs keep their option backend:
+start from a defconfig to switch to the UEFI variable store.
+
+TEST=Built for W541 and T440p with CFR and the UEFI variable store
+option backend, with and without undervolting support. Checked that a
+W541 config with the EDK2 payload now selects the UEFI variable store
+instead of no option backend, and decoded the generated CFR data.
+Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig     |  3 +-
+ src/mainboard/lenovo/haswell/Makefile.mk |  1 +
+ src/mainboard/lenovo/haswell/cfr.c       | 87 ++++++++++++++++++++++++
+ 3 files changed, 90 insertions(+), 1 deletion(-)
+ create mode 100644 src/mainboard/lenovo/haswell/cfr.c
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index b104f2136..02a427b7e 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -4,6 +4,7 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 	def_bool n
+ 	select AZALIA_USE_LEGACY_VERB_TABLE
+ 	select BOARD_ROMSIZE_KB_12288
++	select DRIVERS_OPTION_CFR_ENABLED if PAYLOAD_EDK2 && SMMSTORE
+ 	select EC_LENOVO_H8
+ 	select EC_LENOVO_PMH7
+ 	select H8_HAS_BAT_THRESHOLDS_IMPL
+@@ -105,6 +106,6 @@ config LENOVO_HASWELL_DGPU_RUNTIME_PM
+ 	  Provide ACPI power resources (D3cold through _PR3 on the PEG port)
+ 	  and the NVIDIA Optimus _DSM for the discrete GPU, so the OS can
+ 	  power it off while it is idle, as the OEM firmware does. Only
+-	  relevant with the "enable_dual_graphics" CMOS option enabled.
++	  relevant with the "enable_dual_graphics" option enabled.
+ 
+ endif
+diff --git a/src/mainboard/lenovo/haswell/Makefile.mk b/src/mainboard/lenovo/haswell/Makefile.mk
+index 7305e46e8..f96e1b892 100644
+--- a/src/mainboard/lenovo/haswell/Makefile.mk
++++ b/src/mainboard/lenovo/haswell/Makefile.mk
+@@ -4,6 +4,7 @@ romstage-y += variants/$(VARIANT_DIR)/gpio.c
+ romstage-y += variants/$(VARIANT_DIR)/romstage.c
+ 
+ ramstage-y += mainboard.c
++ramstage-$(CONFIG_DRIVERS_OPTION_CFR) += cfr.c
+ 
+ ramstage-$(CONFIG_MAINBOARD_USE_LIBGFXINIT) += variants/$(VARIANT_DIR)/gma-mainboard.ads
+ 
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+new file mode 100644
+index 000000000..56b231570
+--- /dev/null
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -0,0 +1,87 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#include <boot/coreboot_tables.h>
++#include <cpu/intel/haswell/cfr.h>
++#include <drivers/intel/oc_mailbox/cfr.h>
++#include <drivers/option/cfr_frontend.h>
++#include <southbridge/intel/lynxpoint/cfr.h>
++
++/*
++ * The upper bounds leave some headroom over the defaults of the fastest
++ * CPU offered in these systems (i7-4940MX: 57 W TDP, 71 W PL2).
++ */
++static const struct sm_object tdp_pl1_override = SM_DECLARE_NUMBER({
++	.opt_name	= "tdp_pl1_override",
++	.ui_name	= "CPU PL1 power limit (W)",
++	.ui_helptext	= "Long-duration CPU package power limit.\n"
++			  "0 = CPU default (TDP). Range: 0-75 W.",
++	.default_value	= 0,
++	.min		= 0,
++	.max		= 75,
++	.step		= 1,
++	.display_flags	= 0,
++});
++
++static const struct sm_object tdp_pl2_override = SM_DECLARE_NUMBER({
++	.opt_name	= "tdp_pl2_override",
++	.ui_name	= "CPU PL2 power limit (W)",
++	.ui_helptext	= "Short-duration CPU package power limit.\n"
++			  "0 = CPU default (1.25 x TDP). Range: 0-95 W.\n"
++			  "Must be >= PL1 (enforced at boot).",
++	.default_value	= 0,
++	.min		= 0,
++	.max		= 95,
++	.step		= 1,
++	.display_flags	= 0,
++});
++
++static const struct sm_object enable_dual_graphics = SM_DECLARE_BOOL({
++	.opt_name	= "enable_dual_graphics",
++	.ui_name	= "NVIDIA discrete GPU",
++	.ui_helptext	= "Power on and enable the NVIDIA GPU on models that have one.\n"
++			  "When disabled, the GPU is powered off and hidden.",
++	.default_value	= false,
++});
++
++static struct sm_obj_form system = {
++	.ui_name = "System",
++	.obj_list = (const struct sm_object *[]) {
++		&me_disable,
++		&nmi,
++		&power_on_after_fail,
++		NULL
++	},
++};
++
++static struct sm_obj_form processor = {
++	.ui_name = "Processor",
++	.obj_list = (const struct sm_object *[]) {
++		&tdp_pl1_override,
++		&tdp_pl2_override,
++		&cpu_power_limit_lock,
++		NULL
++	},
++};
++
++static struct sm_obj_form graphics = {
++	.ui_name = "Graphics",
++	.obj_list = (const struct sm_object *[]) {
++		&enable_dual_graphics,
++		NULL
++	},
++};
++
++static struct sm_obj_form *sm_root[] = {
++	&system,
++	&processor,
++#if CONFIG(INTEL_OC_MAILBOX_ENABLE_UNDERVOLTING)
++	&cpu_voltage,
++#endif
++	&graphics,
++	NULL
++};
++
++void mb_cfr_setup_menu(struct lb_cfr *cfr_root)
++{
++	cfr_write_setup_menu(cfr_root, sm_root);
++}
+-- 
+2.43.0
+

@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:05:25 +0200
+Subject: [PATCH] mb/lenovo/haswell: Report hotkeys like the OEM firmware
+
+The OEM firmware of the W541 (GNETxxWW) ignores EC event 0x11, reports
+event 0x12 as HKEY 0x1002, and reports events 0x66 to 0x69 (Fn-F9 to
+Fn-F12) as HKEY 0x101d to 0x1020. coreboot uses the default H8 layout,
+which reports 0x11 and 0x12 as 0x1002 and 0x1003, 0x66 and 0x67 as
+0x100a and 0x1013, and ignores 0x68 and 0x69.
+
+Select the alternative Fn-F2/F3 layout and the Fn-F9 to Fn-F12 layout,
+which match the OEM firmware for these events.
+
+TEST=Built for W541 and T440p, and checked the _Q11, _Q12 and _Q66 to
+_Q69 methods in the DSDT. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/dsdt.asl | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 046584a87..70d13de92 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -4,6 +4,8 @@
+ #define BRIGHTNESS_DOWN \_SB.PCI0.GFX0.DECB
+ #define THINKPAD_EC_GPE 17
+ #define THINKPAD_EC_WAKE_GPE 0x1d /* GPIO13 */
++#define EC_LENOVO_H8_ALT_FN_F2F3_LAYOUT 1
++#define EC_LENOVO_H8_FN_F9_F12_LAYOUT 1
+ 
+ #include <acpi/acpi.h>
+ DefinitionBlock(
+-- 
+2.43.0
+

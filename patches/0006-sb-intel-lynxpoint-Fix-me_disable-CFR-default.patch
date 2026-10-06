@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 12:46:22 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Fix me_disable CFR default
+
+The ME code reads "me_disable" with CONFIG(DISABLE_ME_PCI) as fallback,
+and DISABLE_ME_PCI defaults to y, so the MEI PCI interface is hidden
+when no value is stored. The CFR object however defaults to 0
+("Enabled"): the setup menu shows the opposite of what the firmware
+does, and saving the menu with its defaults turns the interface on.
+
+Use CONFIG(DISABLE_ME_PCI) as the default, like other CFR objects that
+follow a Kconfig option (e.g. serial_console). This also covers Wildcat
+Point, which shares this header and the ME code.
+
+TEST=Built google/mccloud with CFR. Checked the CFR data generated for
+lenovo/w541: me_disable defaults to 1 ("Disabled").
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/cfr.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/cfr.h b/src/southbridge/intel/lynxpoint/cfr.h
+index 83950ea8b..e574a2683 100644
+--- a/src/southbridge/intel/lynxpoint/cfr.h
++++ b/src/southbridge/intel/lynxpoint/cfr.h
+@@ -28,7 +28,7 @@ static const struct sm_object me_disable = SM_DECLARE_ENUM({
+ 	.opt_name	= "me_disable",
+ 	.ui_name	= "Intel Management Engine",
+ 	.ui_helptext	= "Enable or disable the PCI/HECI interface of the Intel Management Engine",
+-	.default_value	= 0,
++	.default_value	= CONFIG(DISABLE_ME_PCI),
+ 	.values		= (const struct sm_enum_value[]) {
+ 				{ "Disabled",	1	},
+ 				{ "Enabled",	0	},
+-- 
+2.43.0
+

@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:04:33 +0200
+Subject: [PATCH] mb/lenovo/haswell: Restore Bluetooth and WWAN state on resume
+
+_PTS turns the radios off through RADI(0), and on S3 resume ramstage
+turns Bluetooth and WWAN back on according to the "bluetooth" and
+"wwan" options, both enabled by default. The state that thinkpad_acpi
+asked to restore at resume (SBDC/SWAN) is never applied, because _WAK
+does not call HKEY.WAKE like the other boards with an H8 EC do. A radio
+turned off by the user comes back on after every suspend.
+
+Call HKEY.WAKE from _WAK.
+
+TEST=Built for W541 and T440p. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/acpi/platform.asl | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/acpi/platform.asl b/src/mainboard/lenovo/haswell/acpi/platform.asl
+index 42587fd78..07381b80e 100644
+--- a/src/mainboard/lenovo/haswell/acpi/platform.asl
++++ b/src/mainboard/lenovo/haswell/acpi/platform.asl
+@@ -2,6 +2,9 @@
+ 
+ Method(_WAK,1)
+ {
++	/* Wake the HKEY to init BT/WWAN */
++	\_SB.PCI0.LPCB.EC.HKEY.WAKE (Arg0)
++
+ 	Return(Package(){0,0})
+ }
+ 
+-- 
+2.43.0
+

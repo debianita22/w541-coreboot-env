@@ -1,0 +1,347 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Wed, 30 Sep 2026 23:13:35 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add runtime PM for the W541 dGPU
+
+With the "enable_dual_graphics" option set, romstage powers on the
+dGPU (Quadro K1100M or K2100M) and it stays on until shutdown: there
+is no ACPI interface for the OS to turn it off while it is idle.
+
+The OEM firmware (GNETxxWW) provides a power resource on the PEG port
+in _PR0/_PR3 with _S0W = 4, and an NVIDIA Optimus _DSM on the GPU. The
+sequencing itself is done in SMM. On W541 units running it, Linux
+reports "optimus capabilities: enabled, status dynamic power" and
+"nouveau: detected PR support, will not use DSM", i.e. the GPU is put
+into D3cold through the root port power resource.
+
+Implement the same interface in AML:
+ - PGPR power resource on PEGP. The dGPU rails and PERST# are driven
+   through PMH7 register 0x50 (bits 3 and 7), like romstage does. The
+   link is disabled before power is removed and retrained after power
+   is restored, following the Haswell switchable graphics reference
+   flow. _STA reports the actual PMH7 state.
+ - Optimus _DSM functions 0x00, 0x1a and 0x1b. Linux nouveau enables
+   runtime PM by default only when it finds them.
+ - Restore the GPU subsystem ID after power-up. The OEM firmware sets
+   17aa:221e for Windows 8.1 and later, which is also what most W541
+   units report under Linux.
+
+The PEG PHY stays powered and package C7 is not allowed while the GPU
+is off, so no PEG register save/restore is needed.
+
+TEST=Built for W541 and T440p. The _DSM results and the _ON/_OFF/_STA
+sequence on the PMH7 bits were checked in acpiexec. Not tested on
+hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig       |  10 +
+ src/mainboard/lenovo/haswell/acpi/dgpu.asl | 262 +++++++++++++++++++++
+ src/mainboard/lenovo/haswell/dsdt.asl      |   4 +
+ 3 files changed, 276 insertions(+)
+ create mode 100644 src/mainboard/lenovo/haswell/acpi/dgpu.asl
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 0b2e48bee..b104f2136 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -97,4 +97,14 @@ config THINKPADEC_HKEY_EISAID
+ config GFX_GMA_PANEL_1_PORT
+ 	default "DP3" if BOARD_LENOVO_THINKPAD_W541
+ 
++config LENOVO_HASWELL_DGPU_RUNTIME_PM
++	bool "Runtime power management for the NVIDIA dGPU"
++	depends on BOARD_LENOVO_THINKPAD_W541
++	default y
++	help
++	  Provide ACPI power resources (D3cold through _PR3 on the PEG port)
++	  and the NVIDIA Optimus _DSM for the discrete GPU, so the OS can
++	  power it off while it is idle, as the OEM firmware does. Only
++	  relevant with the "enable_dual_graphics" CMOS option enabled.
++
+ endif
+diff --git a/src/mainboard/lenovo/haswell/acpi/dgpu.asl b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
+new file mode 100644
+index 000000000..cebd5da62
+--- /dev/null
++++ b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
+@@ -0,0 +1,262 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++/*
++ * Runtime power management for the NVIDIA dGPU (Optimus, no display mux).
++ *
++ * The OEM firmware (GNETxxWW) exposes a power resource on the PEG root port
++ * (_PR0/_PR3, i.e. D3cold) and an NVIDIA Optimus _DSM on the GPU; the actual
++ * power sequencing is done in SMM. This provides the same interface in AML:
++ *
++ *  - dGPU rails and PERST# are driven through PMH7 register 0x50 (bit 3 power
++ *    enable, bit 7 reset, active low), the same knobs romstage uses for the
++ *    "enable_dual_graphics" option.
++ *  - The PEG link is disabled before power is removed and retrained after
++ *    power-up, following the Haswell switchable graphics reference flow.
++ *
++ * The PEG PHY is left powered and package C7 is not allowed while the GPU is
++ * off, so no PEG register save/restore is needed.
++ */
++
++#define PMH7_DGPU_CTRL		0x50
++#define DGPU_PWR_BIT		3
++#define DGPU_RST_N_BIT		7
++
++/* PEG link state (PEG reg 0x216[3:0]): 0 = down/detect, >= 7 = L0 */
++#define PEG_LINK_UP		7
++
++/* NVIDIA Optimus _DSM */
++#define NVOP_UUID		"a486d8f8-0bda-471b-a72b-6042a6b5bee0"
++#define NVOP_REVISION		0x100
++#define NVOP_FUNC_SUPPORT	0x00
++#define NVOP_FUNC_CAPS		0x1a
++#define NVOP_FUNC_STATUS	0x1b
++#define NV_ERROR_UNSPECIFIED	0x80000001
++#define NV_ERROR_UNSUPPORTED	0x80000002
++
++Scope (\_SB.PCI0.PEGP)
++{
++	/* PEG root port (0:1.0) config space, including extended registers */
++	OperationRegion (PEGR, SystemMemory,
++			 CONFIG_ECAM_MMCONF_BASE_ADDRESS + 0x8000, 0x1000)
++	Field (PEGR, ByteAcc, NoLock, Preserve)
++	{
++		Offset (0x06),
++		PSTS,	16,	/* PCI status (RW1C) */
++		Offset (0x1e),
++		SSTS,	16,	/* Secondary status (RW1C) */
++		Offset (0xaa),
++		DSTS,	16,	/* Device status (RW1C) */
++		Offset (0xb0),
++		,	4,
++		LNKD,	1,	/* Link control: link disable */
++		Offset (0xb2),
++		LSTS,	16,	/* Link status (RW1C bits) */
++		Offset (0xc0),
++		RSTS,	32,	/* Root status (RW1C PME status) */
++		Offset (0xd2),
++		LST2,	16,	/* Link status 2 (RW1C bits) */
++		Offset (0x11a),
++		,	1,
++		VCNP,	1,	/* VC0 negotiation pending */
++		Offset (0x1c4),
++		UESS,	32,	/* Uncorrectable error status (RW1C) */
++		Offset (0x1d0),
++		CESS,	32,	/* Correctable error status (RW1C) */
++		Offset (0x216),
++		LNKS,	4,	/* PEG link state */
++		Offset (0x508),
++		TREN,	1,	/* PEG link training enable */
++		Offset (0xd9c),
++		LERR,	32,	/* Lane error status (RW1C) */
++	}
++
++	/* PMH7 index/data interface */
++	OperationRegion (PMHR, SystemIO, 0x15ec, 3)
++	Field (PMHR, ByteAcc, NoLock, Preserve)
++	{
++		PMIL,	8,
++		PMIH,	8,
++		PMDA,	8,
++	}
++
++	Mutex (PMXM, 0)
++
++	/* Set bit Arg0 of the PMH7 dGPU control register to Arg1 */
++	Method (DGSB, 2, Serialized)
++	{
++		Acquire (PMXM, 0xffff)
++		PMIL = PMH7_DGPU_CTRL
++		PMIH = 0
++		Local0 = PMDA
++		If (Arg1) {
++			Local0 |= 1 << Arg0
++		} Else {
++			Local0 &= ~(1 << Arg0)
++		}
++		PMDA = Local0
++		Release (PMXM)
++	}
++
++	/* Returns 1 when the dGPU rails are enabled */
++	Method (DGPS, 0, Serialized)
++	{
++		Acquire (PMXM, 0xffff)
++		PMIL = PMH7_DGPU_CTRL
++		PMIH = 0
++		Local0 = (PMDA >> DGPU_PWR_BIT) & 1
++		Release (PMXM)
++		Return (Local0)
++	}
++
++	/* Clear stale status bits left by the link going up or down */
++	Method (CLRS, 0, Serialized)
++	{
++		PSTS = 0xffff
++		SSTS = 0xffff
++		DSTS = 0xffff
++		LSTS = 0xffff
++		RSTS = 0xffffffff
++		LST2 = 0xffff
++		UESS = 0xffffffff
++		CESS = 0xffffffff
++		LERR = 0xffffffff
++	}
++
++	PowerResource (PGPR, 0, 0)
++	{
++		/* Report the real state: romstage may change it (boot, S3 resume) */
++		Method (_STA, 0, Serialized)
++		{
++			Return (DGPS ())
++		}
++
++		Method (_ON, 0, Serialized)
++		{
++			If (!DGPS ()) {
++				/* Keep the GPU in reset while its rails come up */
++				DGSB (DGPU_RST_N_BIT, 0)
++				DGSB (DGPU_PWR_BIT, 1)
++				Sleep (100)
++				DGSB (DGPU_RST_N_BIT, 1)
++				/* 100 ms from PERST# deassertion to config requests */
++				Sleep (100)
++			}
++
++			CLRS ()
++			TREN = 1
++			LNKD = 0
++
++			Local0 = 500
++			While ((LNKS < PEG_LINK_UP) && Local0) {
++				Sleep (1)
++				Local0--
++			}
++
++			Local0 = 200
++			While (VCNP && Local0) {
++				Sleep (1)
++				Local0--
++			}
++
++			/* The GPU forgets its subsystem ID when powered off */
++			\_SB.PCI0.PEGP.DEV0.RSID ()
++		}
++
++		Method (_OFF, 0, Serialized)
++		{
++			If (!DGPS ()) {
++				Return (Zero)
++			}
++
++			/* Take the link down before removing power */
++			LNKD = 1
++			Local0 = 100
++			While (LNKS && Local0) {
++				Sleep (1)
++				Local0--
++			}
++
++			DGSB (DGPU_RST_N_BIT, 0)
++			Sleep (1)
++			DGSB (DGPU_PWR_BIT, 0)
++			/* Let the rails discharge before a subsequent _ON */
++			Sleep (100)
++			Return (Zero)
++		}
++	}
++
++	Name (_PR0, Package () { PGPR })
++	Name (_PR2, Package () { PGPR })
++	Name (_PR3, Package () { PGPR })
++
++	/* D3cold is supported while in S0 */
++	Name (_S0W, 4)
++}
++
++Scope (\_SB.PCI0.PEGP.DEV0)
++{
++	OperationRegion (GPUC, PCI_Config, 0, 0x100)
++	Field (GPUC, DWordAcc, NoLock, Preserve)
++	{
++		GVID,	16,
++		Offset (0x40),
++		GSID,	32,	/* NVIDIA: writable alias of the subsystem IDs */
++	}
++
++	/* Subsystem ID programmed by the OEM firmware for Windows 8.1+ */
++	Method (RSID, 0, Serialized)
++	{
++		If (GVID == 0x10de) {
++			GSID = 0x221e17aa
++		}
++	}
++
++	Method (_INI, 0, Serialized)
++	{
++		RSID ()
++	}
++
++	Method (NVOP, 1, Serialized)
++	{
++		Switch (ToInteger (Arg0))
++		{
++			Case (NVOP_FUNC_SUPPORT)
++			{
++				/* Functions 0x00, 0x1a and 0x1b */
++				Return (Buffer (4) { 0x01, 0x00, 0x00, 0x0c })
++			}
++			Case (NVOP_FUNC_CAPS)
++			{
++				Local0 = Buffer (4) {}
++				CreateDWordField (Local0, 0, CAPS)
++				/* Optimus enabled */
++				CAPS = 1
++				/* Current GPU control status: powered on */
++				If (\_SB.PCI0.PEGP.DGPS ()) {
++					CAPS |= 3 << 3
++				}
++				/* Platform can power the dGPU off */
++				CAPS |= 1 << 24
++				Return (Local0)
++			}
++			Case (NVOP_FUNC_STATUS)
++			{
++				Return (Buffer (4) { 0x00, 0x00, 0x00, 0x00 })
++			}
++		}
++
++		Return (NV_ERROR_UNSUPPORTED)
++	}
++
++	Method (_DSM, 4, Serialized)
++	{
++		If (Arg0 == ToUUID (NVOP_UUID)) {
++			If (ToInteger (Arg1) != NVOP_REVISION) {
++				Return (NV_ERROR_UNSPECIFIED)
++			}
++			Return (NVOP (Arg2))
++		}
++
++		Return (Buffer (1) { 0x00 })
++	}
++}
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 708f524b0..212657d7e 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -27,4 +27,8 @@ DefinitionBlock(
+ 		#include <drivers/intel/gma/acpi/default_brightness_levels.asl>
+ 		#include <southbridge/intel/lynxpoint/acpi/pch.asl>
+ 	}
++
++#if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
++	#include "acpi/dgpu.asl"
++#endif
+ }
+-- 
+2.43.0
+

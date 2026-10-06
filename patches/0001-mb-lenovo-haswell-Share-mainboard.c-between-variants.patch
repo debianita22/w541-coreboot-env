@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Wed, 30 Sep 2026 23:12:23 +0200
+Subject: [PATCH] mb/lenovo/haswell: Share mainboard.c between variants
+
+Only the T440p variant builds mainboard.c, so the W541 misses both
+things it provides:
+
+ - A Lenovo-format SMBIOS BIOS version ("CBET4000 <version>"). Without
+   it, the Linux thinkpad_acpi driver does not bind on the W541 unless
+   loaded with force_load=1, and hotkeys, mute LEDs, fan control and
+   the keyboard backlight and battery interfaces are unavailable. With
+   the OEM firmware the driver binds ("ThinkPad BIOS GNETxxWW, EC
+   GMHTxxWW"). The system version already reads "ThinkPad W541"
+   through CONFIG_MAINBOARD_VERSION, like on the OEM firmware.
+ - The INT15 handler for the Intel VGA option ROM. The W541 uses the
+   same IGD (8086:0416) with an eDP panel, so it needs the same hooks.
+
+Move mainboard.c to the common directory and select INTEL_INT15 for
+both variants.
+
+Also give the W541 a VGA_BIOS_ID default. The IGD option ROM shipped
+in the OEM firmware carries device ID 0406, which is also the ID that
+map_oprom_vendev() maps 0416 to, so pci_rom_probe() finds it under its
+own name.
+
+See commit 5263a2bdaa09 ("mb/lenovo/t440p: Report Lenovo-format SMBIOS
+values for thinkpad_acpi").
+
+TEST=Built for T440p and W541. Not tested on hardware.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig                          | 3 ++-
+ src/mainboard/lenovo/haswell/Makefile.mk                      | 2 ++
+ src/mainboard/lenovo/haswell/{variants/t440p => }/mainboard.c | 0
+ src/mainboard/lenovo/haswell/variants/t440p/Makefile.mk       | 3 ---
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+ rename src/mainboard/lenovo/haswell/{variants/t440p => }/mainboard.c (100%)
+ delete mode 100644 src/mainboard/lenovo/haswell/variants/t440p/Makefile.mk
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 23e51c643..0b2e48bee 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -16,6 +16,7 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 	select HAVE_CMOS_DEFAULT
+ 	select HAVE_OPTION_TABLE
+ 	select INTEL_GMA_HAVE_VBT
++	select INTEL_INT15
+ 	select MAINBOARD_HAS_LIBGFXINIT
+ 	select MAINBOARD_HAS_TPM1
+ 	select MAINBOARD_USES_IFD_GBE_REGION
+@@ -28,7 +29,6 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 
+ config BOARD_LENOVO_THINKPAD_T440P
+ 	select BOARD_LENOVO_HASWELL_COMMON
+-	select INTEL_INT15
+ 	select H8_HAS_BAT_CHARGE_BEHAVIOUR
+ 	select DRIVERS_REALTEK_RTSX_PCI_CARDREADER
+ 
+@@ -78,6 +78,7 @@ config ONBOARD_VGA_IS_PRIMARY
+ config VGA_BIOS_ID
+ 	string
+ 	default "8086,0416" if BOARD_LENOVO_THINKPAD_T440P
++	default "8086,0406" if BOARD_LENOVO_THINKPAD_W541
+ 
+ config USBDEBUG_HCD_INDEX
+ 	int
+diff --git a/src/mainboard/lenovo/haswell/Makefile.mk b/src/mainboard/lenovo/haswell/Makefile.mk
+index 3861ea195..7305e46e8 100644
+--- a/src/mainboard/lenovo/haswell/Makefile.mk
++++ b/src/mainboard/lenovo/haswell/Makefile.mk
+@@ -3,6 +3,8 @@
+ romstage-y += variants/$(VARIANT_DIR)/gpio.c
+ romstage-y += variants/$(VARIANT_DIR)/romstage.c
+ 
++ramstage-y += mainboard.c
++
+ ramstage-$(CONFIG_MAINBOARD_USE_LIBGFXINIT) += variants/$(VARIANT_DIR)/gma-mainboard.ads
+ 
+ subdirs-y += variants/$(VARIANT_DIR)
+diff --git a/src/mainboard/lenovo/haswell/variants/t440p/mainboard.c b/src/mainboard/lenovo/haswell/mainboard.c
+similarity index 100%
+rename from src/mainboard/lenovo/haswell/variants/t440p/mainboard.c
+rename to src/mainboard/lenovo/haswell/mainboard.c
+diff --git a/src/mainboard/lenovo/haswell/variants/t440p/Makefile.mk b/src/mainboard/lenovo/haswell/variants/t440p/Makefile.mk
+deleted file mode 100644
+index ffdfd1771..000000000
+--- a/src/mainboard/lenovo/haswell/variants/t440p/Makefile.mk
++++ /dev/null
+@@ -1,3 +0,0 @@
+-## SPDX-License-Identifier: GPL-2.0-only
+-
+-ramstage-y += mainboard.c
+-- 
+2.43.0
+

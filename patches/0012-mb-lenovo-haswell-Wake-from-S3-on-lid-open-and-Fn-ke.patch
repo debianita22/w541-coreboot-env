@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:03:05 +0200
+Subject: [PATCH] mb/lenovo/haswell: Wake from S3 on lid open and Fn key
+
+The H8 LID and SLPB devices report GPE 0x18 (GPIO8) in _PRW, so the OS
+arms GPIO8 as wake source before entering S3. On these boards the EC
+wake signal is on GPIO13, i.e. GPE 0x1d: the OEM firmware of the W541
+(GNETxxWW) uses 0x1d in both _PRW methods and handles it in _L1D, and
+the SMI handler shared by the T440p and W541 routes GPIO13 to SCI on S3
+entry when the EC wake events are enabled. As a result, opening the lid
+or pressing Fn does not wake the machine from S3, only the power button
+does.
+
+Use GPE 0x1d for the EC wake on these boards. Like the OEM firmware,
+read the EC wake cause (EC 0x36) in _L1D and notify the device that
+caused the wake.
+
+TEST=Built for W541 and T440p, the DSDT has 0x1d in both _PRW methods.
+Not tested on hardware yet: with the lid wake enabled in
+/proc/acpi/wakeup, closing the lid must suspend and opening it must
+resume the machine.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/acpi/ec.asl | 24 ++++++++++++++++++++++++
+ src/mainboard/lenovo/haswell/dsdt.asl    |  1 +
+ 2 files changed, 25 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/acpi/ec.asl b/src/mainboard/lenovo/haswell/acpi/ec.asl
+index 8dea15207..be1d7192f 100644
+--- a/src/mainboard/lenovo/haswell/acpi/ec.asl
++++ b/src/mainboard/lenovo/haswell/acpi/ec.asl
+@@ -2,3 +2,27 @@
+ 
+ #include <ec/lenovo/h8/acpi/ec.asl>
+ #include <ec/lenovo/h8/acpi/thinkpad_bat_thresholds_b0.asl>
++
++Scope (EC)
++{
++	Field (ERAM, ByteAcc, NoLock, Preserve)
++	{
++		Offset (0x36),
++		HWAC, 16,	/* Wake cause */
++	}
++}
++
++/* EC wake on GPIO13 (THINKPAD_EC_WAKE_GPE), handled like the OEM firmware */
++Scope (\_GPE)
++{
++	Method (_L1D, 0, NotSerialized)
++	{
++		Local0 = \_SB.PCI0.LPCB.EC.HWAC
++		If (Local0 & 0x04) {
++			Notify (\_SB.PCI0.LPCB.EC.LID, 0x02)
++		}
++		If (Local0 & 0x98) {
++			Notify (\_SB.PCI0.LPCB.EC.SLPB, 0x02)
++		}
++	}
++}
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 212657d7e..046584a87 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -3,6 +3,7 @@
+ #define BRIGHTNESS_UP \_SB.PCI0.GFX0.INCB
+ #define BRIGHTNESS_DOWN \_SB.PCI0.GFX0.DECB
+ #define THINKPAD_EC_GPE 17
++#define THINKPAD_EC_WAKE_GPE 0x1d /* GPIO13 */
+ 
+ #include <acpi/acpi.h>
+ DefinitionBlock(
+-- 
+2.43.0
+

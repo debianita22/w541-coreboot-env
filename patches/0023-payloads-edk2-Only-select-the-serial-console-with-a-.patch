@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 4 Oct 2026 02:33:38 +0200
+Subject: [PATCH] payloads/edk2: Only select the serial console with a UART
+ driver
+
+EDK2_DEBUG and EDK2_SERIAL_SUPPORT select CONSOLE_SERIAL, which
+depends on DRIVERS_UART. On boards without a UART driver, e.g.
+lenovo/w541, either option leaves CONSOLE_SERIAL with unmet
+dependencies and the build stops in olddefconfig. Configs that had
+EDK2_SERIAL_SUPPORT enabled before the rework no longer build, and
+debug builds of edk2 are not possible on these boards at all.
+
+A serial console needs a UART, so make EDK2_SERIAL_SUPPORT depend on
+DRIVERS_UART, and only select CONSOLE_SERIAL for debug builds when a
+UART driver is available.
+
+Fixes: commit b4917ed44d04 ("payloads/edk2: rework serial output configuration")
+
+TEST=olddefconfig with KCONFIG_WERROR=1 fails for lenovo/w541 with
+EDK2_SERIAL_SUPPORT or EDK2_DEBUG before this change and passes after
+it. emulation/qemu-q35 and lenovo/t480 still get CONSOLE_SERIAL with
+either option.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ payloads/external/edk2/Kconfig | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/payloads/external/edk2/Kconfig b/payloads/external/edk2/Kconfig
+index 68021bd60..f857f19bb 100644
+--- a/payloads/external/edk2/Kconfig
++++ b/payloads/external/edk2/Kconfig
+@@ -123,7 +123,7 @@ choice
+ 
+ config EDK2_DEBUG
+ 	bool "Generate edk2 debug build"
+-	select CONSOLE_SERIAL
++	select CONSOLE_SERIAL if DRIVERS_UART
+ 	help
+ 	  Generate a debug build. Select this if you want to enable serial debugging output.
+ 
+@@ -261,6 +261,7 @@ config EDK2_SERIAL_SUPPORT
+ 	bool "Enable serial console"
+ 	default y if EDK2_DEBUG
+ 	default n
++	depends on DRIVERS_UART
+ 	depends on !EDK2_CBMEM_LOGGING
+ 	select CONSOLE_SERIAL
+ 	help
+-- 
+2.43.0
+

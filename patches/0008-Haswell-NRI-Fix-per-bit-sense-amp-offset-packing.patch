@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 19:59:44 +0200
+Subject: [PATCH] Haswell NRI: Fix per-bit sense amp offset packing
+
+When packing the per-bit read Vref offsets into RX_OFFSET_VDQ, `<<`
+binds tighter than `&`, so `vref & 0xf << (4 * bit)` masks vref with
+0xf0, 0xf00 and so on. Since vref is at most 15, only bit 0 keeps its
+trained value; bits 1 to 7 of every byte lane end up with code 0, the
+most negative offset (8 is neutral), instead of the trained one. The
+"BitSAmp" log line prints the correct values, which hides the issue.
+Nothing rewrites the register later and it is saved for fast boot and
+S3 resume, so this costs read voltage margin on every boot.
+
+Shift the clamped value into place and OR it into the register value.
+Bump the register frame revision so that cached training data with the
+broken offsets is discarded and trained again.
+
+Fixes: commit 5d291de6011a ("haswell NRI: Do sense amplifier offset training")
+
+TEST=Built for lenovo/w541 with native raminit. Checked on the host
+that the packed value for per-bit codes 8,7,9,8,6,8,a,7 is 0x7a868978
+(was 0x00000008). Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/native_raminit/save_restore.c  | 5 ++++-
+ .../intel/haswell/native_raminit/train_sense_amp_offset.c    | 2 +-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/native_raminit/save_restore.c b/src/northbridge/intel/haswell/native_raminit/save_restore.c
+index 5be68808d..6e199d344 100644
+--- a/src/northbridge/intel/haswell/native_raminit/save_restore.c
++++ b/src/northbridge/intel/haswell/native_raminit/save_restore.c
+@@ -14,8 +14,11 @@ uint32_t reg_frame_rev(void)
+ 	 * The structures that get saved to flash are contained within
+ 	 * this translation unit, so changes outside this file shouldn't
+ 	 * require invalidating the cache.
++	 *
++	 * Exception: revision 2 discards data saved with broken per-bit
++	 * sense amplifier offsets, so that they get trained again.
+ 	 */
+-	return 1;
++	return 2;
+ }
+ 
+ struct register_save {
+diff --git a/src/northbridge/intel/haswell/native_raminit/train_sense_amp_offset.c b/src/northbridge/intel/haswell/native_raminit/train_sense_amp_offset.c
+index 6989dd631..938ae70a3 100644
+--- a/src/northbridge/intel/haswell/native_raminit/train_sense_amp_offset.c
++++ b/src/northbridge/intel/haswell/native_raminit/train_sense_amp_offset.c
+@@ -299,7 +299,7 @@ static void train_samp_offset(struct sysinfo *ctrl)
+ 					vref = 0;
+ 
+ 				ctrl->rxdqvrefpb[channel][0][byte][bit].center = vref;
+-				rx_offset_vdq += vref & 0xf << (4 * bit);
++				rx_offset_vdq |= (uint32_t)vref << (4 * bit);
+ 				printk(BIOS_DEBUG, "%x", vref);
+ 			}
+ 			mchbar_write32(RX_OFFSET_VDQ(channel, byte), rx_offset_vdq);
+-- 
+2.43.0
+

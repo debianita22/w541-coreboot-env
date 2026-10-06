@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:05:12 +0200
+Subject: [PATCH] ec/lenovo/h8: Add hotkey layout for Fn-F9 to Fn-F12 of
+ T440/T540
+
+On the keyboards of the X240/T440/T540 generation, Fn-F9 to Fn-F12 are
+settings, search, show all windows and computer. The EC reports them as
+events 0x66 to 0x69, and the OEM firmware forwards them as HKEY events
+0x101d to 0x1020, which thinkpad_acpi maps to KEY_CONFIG, KEY_SEARCH,
+KEY_SCALE and KEY_FILE.
+
+The default layout maps event 0x66 to HKEY 0x100a and 0x67 to 0x1013,
+and has no handler for 0x68 and 0x69. Also, MHKA does not advertise
+hotkeys 0x1d to 0x20 (mask bits 28 to 31), so thinkpad_acpi never
+enables them and drops such events even when they are reported.
+
+Add EC_LENOVO_H8_FN_F9_F12_LAYOUT for these keyboards: report the four
+keys as hotkeys 0x1d to 0x20 and include their bits in MHKA, like the
+OEM firmware does (it returns 0xfffffffb).
+
+TEST=Built for lenovo/x230 (default layout) and lenovo/w541 with the
+new layout, and checked _Q66 to _Q69 and MHKA in the W541 DSDT.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/acpi/ec.asl       | 38 ++++++++++++++++++++++++++++++
+ src/ec/lenovo/h8/acpi/thinkpad.asl |  5 ++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/src/ec/lenovo/h8/acpi/ec.asl b/src/ec/lenovo/h8/acpi/ec.asl
+index 31aabe65f..a8cb147fb 100644
+--- a/src/ec/lenovo/h8/acpi/ec.asl
++++ b/src/ec/lenovo/h8/acpi/ec.asl
+@@ -233,6 +233,10 @@ Device(EC)
+ 		^HKEY.RHK (0x08)
+ 	}
+ 
++#if defined(EC_LENOVO_H8_EXTENDED_FN_LAYOUT) && defined(EC_LENOVO_H8_FN_F9_F12_LAYOUT)
++#error "EC_LENOVO_H8_EXTENDED_FN_LAYOUT and EC_LENOVO_H8_FN_F9_F12_LAYOUT are exclusive"
++#endif
++
+ #ifdef EC_LENOVO_H8_EXTENDED_FN_LAYOUT
+ 	/* Fn-F9: settings window */
+ 	Method (_Q66, 0, NotSerialized)
+@@ -258,10 +262,12 @@ Device(EC)
+ 		^HKEY.RHKX (0x1311)
+ 	}
+ #else
++#ifndef EC_LENOVO_H8_FN_F9_F12_LAYOUT
+ 	Method (_Q66, 0, NotSerialized)
+ 	{
+ 		^HKEY.RHK (0x0A)
+ 	}
++#endif
+ 
+ 	Method (_Q1A, 0, NotSerialized)
+ 	{
+@@ -294,10 +300,42 @@ Device(EC)
+ 		^HKEY.RHK (0x12)
+ 	}
+ 
++#ifdef EC_LENOVO_H8_FN_F9_F12_LAYOUT
++	/*
++	 * Fn-F9 to Fn-F12 of the X240/T440/T540 keyboard generation,
++	 * reported as HKEY events 0x101d to 0x1020 like the OEM firmware.
++	 * MHKA includes their mask bits with this layout.
++	 */
++
++	/* Fn-F9: settings */
++	Method (_Q66, 0, NotSerialized)
++	{
++		^HKEY.RHK (0x1D)
++	}
++
++	/* Fn-F10: search */
++	Method (_Q67, 0, NotSerialized)
++	{
++		^HKEY.RHK (0x1E)
++	}
++
++	/* Fn-F11: show all windows */
++	Method (_Q68, 0, NotSerialized)
++	{
++		^HKEY.RHK (0x1F)
++	}
++
++	/* Fn-F12: computer */
++	Method (_Q69, 0, NotSerialized)
++	{
++		^HKEY.RHK (0x20)
++	}
++#else
+ 	Method (_Q67, 0, NotSerialized)
+ 	{
+ 		^HKEY.RHK (0x13)
+ 	}
++#endif
+ 
+ 	Method (_Q63, 0, NotSerialized)
+ 	{
+diff --git a/src/ec/lenovo/h8/acpi/thinkpad.asl b/src/ec/lenovo/h8/acpi/thinkpad.asl
+index f8f2dc029..28877a611 100644
+--- a/src/ec/lenovo/h8/acpi/thinkpad.asl
++++ b/src/ec/lenovo/h8/acpi/thinkpad.asl
+@@ -115,7 +115,12 @@ Device (HKEY)
+ 	/* Mask hotkey all. */
+ 	Method (MHKA, 0, NotSerialized)
+ 	{
++#ifdef EC_LENOVO_H8_FN_F9_F12_LAYOUT
++		/* Also Fn-F9 to Fn-F12 (hotkeys 0x1d to 0x20) */
++		Return (0xF7FFFFFF)
++#else
+ 		Return (0x07FFFFFF)
++#endif
+ 	}
+ 
+ 	/* Report tablet mode switch state */
+-- 
+2.43.0
+

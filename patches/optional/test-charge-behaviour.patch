@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Wed, 30 Sep 2026 23:12:51 +0200
+Subject: [PATCH] mb/lenovo/haswell: Enable ACPI charge behaviour on W541
+
+The OEM firmware of the W541 (GNETxxWW, shared with the W540) provides
+the HKEY battery methods that coreboot implements for the T440p:
+BICG/BICS for inhibit-charge and BDSG/BDSS for force-discharge. Both
+boards already share the H8 battery threshold implementation at EC
+offset 0xb0.
+
+Select H8_HAS_BAT_CHARGE_BEHAVIOUR for both variants instead of the
+T440p only. See commit d2c02ab35737 ("mb/lenovo/t440p: Enable ACPI
+charge behaviour").
+
+TEST=Built for W541. Not validated on hardware yet: the W541 runs a
+different EC firmware (GMHTxxWW) than the T440p (GLHTxxWW), and the
+EC registers used here (0x0f, 0x21, 0xb4, 0xb5) were only verified on
+the T440p. Note that the AC detach handler writes 0xb4/0xb5.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 02a427b7e..04b8c3e7c 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -7,6 +7,7 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 	select DRIVERS_OPTION_CFR_ENABLED if PAYLOAD_EDK2 && SMMSTORE
+ 	select EC_LENOVO_H8
+ 	select EC_LENOVO_PMH7
++	select H8_HAS_BAT_CHARGE_BEHAVIOUR
+ 	select H8_HAS_BAT_THRESHOLDS_IMPL
+ 	select H8_HAS_BAT_INFO_EXTENDED
+ 	select H8_HAS_LEDLOGO
+@@ -30,7 +31,6 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 
+ config BOARD_LENOVO_THINKPAD_T440P
+ 	select BOARD_LENOVO_HASWELL_COMMON
+-	select H8_HAS_BAT_CHARGE_BEHAVIOUR
+ 	select DRIVERS_REALTEK_RTSX_PCI_CARDREADER
+ 
+ config BOARD_LENOVO_THINKPAD_W541
+-- 
+2.43.0
+

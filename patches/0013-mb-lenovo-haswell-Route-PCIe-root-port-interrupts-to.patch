@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:03:46 +0200
+Subject: [PATCH] mb/lenovo/haswell: Route PCIe root port interrupts to PIRQA-D
+
+The ACPI routing tables of the PCH root ports (IRQM() in
+southbridge/intel/common/acpi/pcie.asl) assume that D28IR routes INTA
+to INTD to PIRQA to PIRQD, and swizzle the pins of downstream devices
+by root port number. For example, INTA of a device behind root port 2
+is reported as GSI 17. The OEM firmware reports the same routing, e.g.
+INTA behind EXP2 is GSI 17 and INTD is GSI 16.
+
+These boards however route all four pins of device 28 to PIRQA, so the
+hardware delivers every legacy interrupt from behind the root ports on
+GSI 16. Devices behind root ports 2 to 4 that use INTx instead of MSI,
+and devices using INTB to INTD behind root ports 1 and 5, do not get
+their interrupts, e.g. an ath9k WiFi card, which uses INTx by default,
+in the slot on root port 2.
+
+Route the pins to PIRQA-D to match the ACPI tables.
+
+TEST=Built for W541 and T440p. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/romstage.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/mainboard/lenovo/haswell/romstage.c b/src/mainboard/lenovo/haswell/romstage.c
+index 64d8cd442..f786f68bf 100644
+--- a/src/mainboard/lenovo/haswell/romstage.c
++++ b/src/mainboard/lenovo/haswell/romstage.c
+@@ -12,7 +12,7 @@ void mainboard_config_rcba(void)
+ {
+ 	RCBA16(D31IR) = DIR_ROUTE(PIRQA, PIRQD, PIRQC, PIRQA);
+ 	RCBA16(D29IR) = DIR_ROUTE(PIRQH, PIRQD, PIRQA, PIRQC);
+-	RCBA16(D28IR) = DIR_ROUTE(PIRQA, PIRQA, PIRQA, PIRQA);
++	RCBA16(D28IR) = DIR_ROUTE(PIRQA, PIRQB, PIRQC, PIRQD);
+ 	RCBA16(D27IR) = DIR_ROUTE(PIRQG, PIRQB, PIRQC, PIRQD);
+ 	RCBA16(D26IR) = DIR_ROUTE(PIRQA, PIRQF, PIRQC, PIRQD);
+ 	RCBA16(D25IR) = DIR_ROUTE(PIRQE, PIRQF, PIRQG, PIRQH);
+-- 
+2.43.0
+

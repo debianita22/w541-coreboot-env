@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 12:04:49 +0200
+Subject: [PATCH] drivers/intel/oc_mailbox: Mark CFR form as maybe unused
+
+The cpu_voltage form is a non-const static object defined in cfr.h,
+and mainboards only reference it when undervolting support
+(INTEL_OC_MAILBOX_ENABLE_UNDERVOLTING) is enabled. With CFR enabled and
+undervolting disabled, every cfr.c including the header fails to build:
+
+  src/drivers/intel/oc_mailbox/cfr.h:88:27: error: 'cpu_voltage'
+  defined but not used [-Werror=unused-variable]
+
+This is not caught by the build bot because CFR is only enabled with
+the EDK2 payload, and the boards using the header default the option
+to y.
+
+Mark the form __maybe_unused so the option can be turned off.
+
+TEST=Built google/mccloud with CFR enabled and undervolting disabled:
+the build fails without this change and succeeds with it.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/intel/oc_mailbox/cfr.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/drivers/intel/oc_mailbox/cfr.h b/src/drivers/intel/oc_mailbox/cfr.h
+index 6ea5c34f8..688742812 100644
+--- a/src/drivers/intel/oc_mailbox/cfr.h
++++ b/src/drivers/intel/oc_mailbox/cfr.h
+@@ -85,7 +85,7 @@ static const struct sm_object oc_undervolt_digital_io = SM_DECLARE_NUMBER({
+ 	.display_flags	= 0,
+ }, WITH_DEP_VALUES(&oc_undervolt_apply, true));
+ 
+-static struct sm_obj_form cpu_voltage = {
++static struct sm_obj_form __maybe_unused cpu_voltage = {
+ 	.ui_name = "CPU voltage (OC mailbox)",
+ 	.obj_list = (const struct sm_object *[]) {
+ 		&oc_undervolt_apply,
+-- 
+2.43.0
+

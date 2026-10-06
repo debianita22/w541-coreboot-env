@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:06:08 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Fix OC mapping of USB2 ports 8 to 13
+
+On LPT-H, USB2 ports 8 to 13 are mapped to the OC4 to OC7 pins through
+EHCI2 OCMAP and xHCI U2OCM2. Each OC pin has one byte in these
+registers, with bit 0 for port 8. The native USB init uses the port
+index itself as bit offset, like for ports 0 to 7, so every port lands
+in the byte of the next OC pin, and OC7 cannot be mapped at all (the
+shift check rejects it). On the W541, for example, OCMAP becomes
+0x300c0300 instead of 0x00300c03.
+
+Use the port index relative to port 8, as bd82x6x does for its second
+EHCI controller.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/early_usb_native.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/early_usb_native.c b/src/southbridge/intel/lynxpoint/early_usb_native.c
+index b63ae3d50..ff167fa1c 100644
+--- a/src/southbridge/intel/lynxpoint/early_usb_native.c
++++ b/src/southbridge/intel/lynxpoint/early_usb_native.c
+@@ -402,7 +402,7 @@ static void usb_overcurrent_mapping(void)
+ 		}
+ 		/* Ports 8 .. 13 => OC 4 .. 7 (LPT-H only) */
+ 		if (!is_lp && idx >= 8 && oc_pin >= 4) {
+-			const int shift = PORT_TO_OC_SHIFT(idx, oc_pin - 4);
++			const int shift = PORT_TO_OC_SHIFT(idx - 8, oc_pin - 4);
+ 			if (shift_ok(shift)) {
+ 				printk(BIOS_DEBUG, "mapped to OC pin %u\n", oc_pin);
+ 				ehci_2_ocmap |= 1 << shift;
+-- 
+2.43.0
+

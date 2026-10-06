@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:03:05 +0200
+Subject: [PATCH] ec/lenovo/h8: Make the EC wake GPE configurable
+
+The _PRW methods of the LID and SLPB devices hard-code GPE 0x18
+(GPIO8), which is not where the EC wake signal is routed on every
+ThinkPad. Add THINKPAD_EC_WAKE_GPE, which mainboards can define like
+THINKPAD_EC_GPE, and keep 0x18 as default. The default is set in
+lid.asl and sleepbutton.asl, as some boards include lid.asl on its own.
+
+No change for existing boards.
+
+TEST=Built for lenovo/x230, lenovo/s230u and lenovo/t440p, the DSDTs
+still use 0x18.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/acpi/lid.asl         | 7 ++++++-
+ src/ec/lenovo/h8/acpi/sleepbutton.asl | 7 ++++++-
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/ec/lenovo/h8/acpi/lid.asl b/src/ec/lenovo/h8/acpi/lid.asl
+index 7695e4e5a..f70e3d614 100644
+--- a/src/ec/lenovo/h8/acpi/lid.asl
++++ b/src/ec/lenovo/h8/acpi/lid.asl
+@@ -1,5 +1,10 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
++/* GPE of the EC wake signal, mainboards can override it */
++#ifndef THINKPAD_EC_WAKE_GPE
++#define THINKPAD_EC_WAKE_GPE 0x18
++#endif
++
+ Field(ERAM, ByteAcc, NoLock, Preserve)
+ {
+ 		Offset (0x32),
+@@ -21,7 +26,7 @@ Device(LID)
+ 
+ 	Method(_PRW, 0, NotSerialized)
+ 	{
+-		Return (Package() { 0x18, 0x03 })
++		Return (Package() { THINKPAD_EC_WAKE_GPE, 0x03 })
+ 	}
+ 
+ 	Method(_PSW, 1, NotSerialized)
+diff --git a/src/ec/lenovo/h8/acpi/sleepbutton.asl b/src/ec/lenovo/h8/acpi/sleepbutton.asl
+index 441dc65c9..e2dfc5eed 100644
+--- a/src/ec/lenovo/h8/acpi/sleepbutton.asl
++++ b/src/ec/lenovo/h8/acpi/sleepbutton.asl
+@@ -1,5 +1,10 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
++/* GPE of the EC wake signal, mainboards can override it */
++#ifndef THINKPAD_EC_WAKE_GPE
++#define THINKPAD_EC_WAKE_GPE 0x18
++#endif
++
+ Field(ERAM, ByteAcc, NoLock, Preserve)
+ {
+ 		Offset (0x32),
+@@ -14,7 +19,7 @@ Device(SLPB)
+ 	Name (_HID, EisaId ("PNP0C0E"))
+ 	Method(_PRW, 0, NotSerialized)
+ 	{
+-		Return (Package() { 0x18, 0x03 })
++		Return (Package() { THINKPAD_EC_WAKE_GPE, 0x03 })
+ 	}
+ 
+ 	Method(_PSW, 1, NotSerialized)
+-- 
+2.43.0
+

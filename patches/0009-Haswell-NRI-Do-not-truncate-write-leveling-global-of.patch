@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 19:59:56 +0200
+Subject: [PATCH] Haswell NRI: Do not truncate write leveling global offset
+
+calc_global_offset() returns the PI offset needed when the write delay
+target is outside the SC_WR_ADD_DELAY range: +128 or more for targets
+above 2, and -128 or less for targets below 0. get_pi_offset() takes
+this value as int8_t, so +128 becomes -128 and +/-256 becomes 0.
+
+The write leveling clean-up hits this when the bytes of a rank only
+pass with a write delay offset of 3, or when refining the target moves
+it to 3 or more, or to -2 or less. The bytes then end up 256 PI ticks
+(two SC_WR_ADD_DELAY steps) away from where they passed, which is
+likely to make later write training fail. The code before the clean-up
+used int16_t for this offset.
+
+Take the global offset as int16_t again.
+
+Fixes: commit f86a9eb0e153 ("Haswell NRI: Tidy up write leveling clean-up routine")
+
+TEST=Built for lenovo/w541 with native raminit. Not tested on
+hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../intel/haswell/native_raminit/train_jedec_write_leveling.c   | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/northbridge/intel/haswell/native_raminit/train_jedec_write_leveling.c b/src/northbridge/intel/haswell/native_raminit/train_jedec_write_leveling.c
+index a8ce54053..d502cfa39 100644
+--- a/src/northbridge/intel/haswell/native_raminit/train_jedec_write_leveling.c
++++ b/src/northbridge/intel/haswell/native_raminit/train_jedec_write_leveling.c
+@@ -56,7 +56,7 @@ static int16_t calc_global_offset(const int8_t tgt_off)
+ 		return 0;
+ }
+ 
+-static int16_t get_pi_offset(const int8_t b_off, const int8_t tgt_off, const int8_t g_off)
++static int16_t get_pi_offset(const int8_t b_off, const int8_t tgt_off, const int16_t g_off)
+ {
+ 	return (b_off - tgt_off) * 128 + g_off;
+ }
+-- 
+2.43.0
+

@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 20:00:45 +0200
+Subject: [PATCH] Haswell NRI: Reset when the fast path fails on S3 resume
+
+If restoring the saved training data fails during S3 resume, e.g. when
+the SPD data read on resume does not match the saved copy,
+raminit_main() falls back to full training while the boot mode is still
+S3. In that mode the JEDEC init and the pre-training steps are skipped,
+so training runs against DRAM that is still in self-refresh, fails, and
+die() halts the machine. The user has to power it off by hand.
+
+Training would destroy the memory contents anyway, so an S3 resume
+cannot recover at this point. Do what the other failed S3 paths already
+do and reset, so that the machine comes up with a normal boot.
+
+TEST=Built for lenovo/w541 with native raminit. Not tested on hardware
+yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../intel/haswell/native_raminit/raminit_main.c          | 9 +++++++++
+ .../intel/haswell/native_raminit/raminit_native.c        | 2 +-
+ .../intel/haswell/native_raminit/raminit_native.h        | 1 +
+ 3 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/northbridge/intel/haswell/native_raminit/raminit_main.c b/src/northbridge/intel/haswell/native_raminit/raminit_main.c
+index 18a78fcde..e673291fd 100644
+--- a/src/northbridge/intel/haswell/native_raminit/raminit_main.c
++++ b/src/northbridge/intel/haswell/native_raminit/raminit_main.c
+@@ -264,6 +264,15 @@ void raminit_main(const enum raminit_boot_mode bootmode)
+ 		status = try_raminit(&mighty_ctrl, fast_boot, ARRAY_SIZE(fast_boot));
+ 		if (status == RAMINIT_STATUS_SUCCESS)
+ 			return;
++
++		/*
++		 * Memory is in self-refresh and its contents must survive an S3
++		 * resume, so training cannot be used as a fallback. Reset instead.
++		 */
++		if (bootmode == BOOTMODE_S3) {
++			printk(BIOS_EMERG, "Fast path failed on S3 resume, resetting\n");
++			raminit_reset();
++		}
+ 	}
+ 
+ 	/** TODO: Try more than once **/
+diff --git a/src/northbridge/intel/haswell/native_raminit/raminit_native.c b/src/northbridge/intel/haswell/native_raminit/raminit_native.c
+index ab1e4ff1a..9a0597408 100644
+--- a/src/northbridge/intel/haswell/native_raminit/raminit_native.c
++++ b/src/northbridge/intel/haswell/native_raminit/raminit_native.c
+@@ -81,7 +81,7 @@ static void clear_disb(void)
+ 	pci_and_config16(PCH_LPC_DEV, GEN_PMCON_2, ~GEN_PMCON_2_DISB);
+ }
+ 
+-static void raminit_reset(void)
++void raminit_reset(void)
+ {
+ 	clear_disb();
+ 	system_reset();
+diff --git a/src/northbridge/intel/haswell/native_raminit/raminit_native.h b/src/northbridge/intel/haswell/native_raminit/raminit_native.h
+index 50ad872cd..7423defd1 100644
+--- a/src/northbridge/intel/haswell/native_raminit/raminit_native.h
++++ b/src/northbridge/intel/haswell/native_raminit/raminit_native.h
+@@ -530,6 +530,7 @@ static inline void mchbar_write64(const uintptr_t x, const uint64_t v)
+ }
+ 
+ void raminit_main(enum raminit_boot_mode bootmode);
++void raminit_reset(void);
+ 
+ enum raminit_status collect_spd_info(struct sysinfo *ctrl);
+ enum raminit_status initialise_mpll(struct sysinfo *ctrl);
+-- 
+2.43.0
+

@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Wed, 30 Sep 2026 23:14:02 +0200
+Subject: [PATCH] [LOCAL] mb/lenovo/haswell: Add NVIDIA Optimus key for Windows
+
+Not for upstream: the key belongs to NVIDIA and is not distributed
+with coreboot.
+
+The Windows NVIDIA driver requests an Optimus key through NVOP
+function 0x10 and keeps Optimus disabled without it. Add an option
+that returns the key from a local opvk.inc, extracted from the OEM
+firmware DSDT (buffer OPVK in method GOBT).
+
+TEST=Built for W541 with and without the option. NVOP 0x00 and 0x10
+results checked in acpiexec.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig         | 10 +++++++
+ src/mainboard/lenovo/haswell/acpi/.gitignore |  1 +
+ src/mainboard/lenovo/haswell/acpi/dgpu.asl   | 30 ++++++++++++++++++--
+ 3 files changed, 39 insertions(+), 2 deletions(-)
+ create mode 100644 src/mainboard/lenovo/haswell/acpi/.gitignore
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 04b8c3e7c..38b6268ce 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -108,4 +108,14 @@ config LENOVO_HASWELL_DGPU_RUNTIME_PM
+ 	  power it off while it is idle, as the OEM firmware does. Only
+ 	  relevant with the "enable_dual_graphics" option enabled.
+ 
++config LENOVO_HASWELL_NVIDIA_OPVK
++	bool "Provide the NVIDIA Optimus key (Windows)"
++	depends on LENOVO_HASWELL_DGPU_RUNTIME_PM
++	help
++	  The Windows NVIDIA driver asks the firmware for an Optimus key
++	  (NVOP function 0x10) and keeps Optimus disabled without it. The key
++	  is not part of coreboot: extract it from the OEM firmware (buffer
++	  OPVK in method GOBT of the DSDT) and store it, as comma-separated
++	  bytes, in src/mainboard/lenovo/haswell/acpi/opvk.inc.
++
+ endif
+diff --git a/src/mainboard/lenovo/haswell/acpi/.gitignore b/src/mainboard/lenovo/haswell/acpi/.gitignore
+new file mode 100644
+index 000000000..05470cdc5
+--- /dev/null
++++ b/src/mainboard/lenovo/haswell/acpi/.gitignore
+@@ -0,0 +1 @@
++opvk.inc
+diff --git a/src/mainboard/lenovo/haswell/acpi/dgpu.asl b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
+index cebd5da62..4ea3bd7b9 100644
+--- a/src/mainboard/lenovo/haswell/acpi/dgpu.asl
++++ b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
+@@ -28,6 +28,7 @@
+ #define NVOP_UUID		"a486d8f8-0bda-471b-a72b-6042a6b5bee0"
+ #define NVOP_REVISION		0x100
+ #define NVOP_FUNC_SUPPORT	0x00
++#define NVOP_FUNC_GET_OBJ	0x10
+ #define NVOP_FUNC_CAPS		0x1a
+ #define NVOP_FUNC_STATUS	0x1b
+ #define NV_ERROR_UNSPECIFIED	0x80000001
+@@ -216,15 +217,40 @@ Scope (\_SB.PCI0.PEGP.DEV0)
+ 		RSID ()
+ 	}
+ 
+-	Method (NVOP, 1, Serialized)
++#if CONFIG(LENOVO_HASWELL_NVIDIA_OPVK)
++	/* Optimus key from the OEM firmware, not distributed with coreboot */
++	Name (OPVK, Buffer () {
++		#include "opvk.inc"
++	})
++#endif
++
++	Method (NVOP, 2, Serialized)
+ 	{
+ 		Switch (ToInteger (Arg0))
+ 		{
+ 			Case (NVOP_FUNC_SUPPORT)
+ 			{
++#if CONFIG(LENOVO_HASWELL_NVIDIA_OPVK)
++				/* Functions 0x00, 0x10, 0x1a and 0x1b */
++				Return (Buffer (4) { 0x01, 0x00, 0x01, 0x0c })
++#else
+ 				/* Functions 0x00, 0x1a and 0x1b */
+ 				Return (Buffer (4) { 0x01, 0x00, 0x00, 0x0c })
++#endif
++			}
++#if CONFIG(LENOVO_HASWELL_NVIDIA_OPVK)
++			Case (NVOP_FUNC_GET_OBJ)
++			{
++				If (ObjectType (Arg1) == 3) {
++					CreateWordField (Arg1, 2, USRG)
++					/* "VK": Optimus validation key */
++					If (USRG == 0x564b) {
++						Return (OPVK)
++					}
++				}
++				Return (Zero)
+ 			}
++#endif
+ 			Case (NVOP_FUNC_CAPS)
+ 			{
+ 				Local0 = Buffer (4) {}
+@@ -254,7 +280,7 @@ Scope (\_SB.PCI0.PEGP.DEV0)
+ 			If (ToInteger (Arg1) != NVOP_REVISION) {
+ 				Return (NV_ERROR_UNSPECIFIED)
+ 			}
+-			Return (NVOP (Arg2))
++			Return (NVOP (Arg2, Arg3))
+ 		}
+ 
+ 		Return (Buffer (1) { 0x00 })
+-- 
+2.43.0
+

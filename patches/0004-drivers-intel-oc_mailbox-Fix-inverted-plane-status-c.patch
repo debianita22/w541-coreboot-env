@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 1 Oct 2026 12:03:29 +0200
+Subject: [PATCH] drivers/intel/oc_mailbox: Fix inverted plane status check
+
+set_plane_undervolt() returns true on success, but the caller sets the
+status bit for a plane when the call succeeds. As a result, a fully
+successful run logs "plane programming failed, status = 0x3f" (0x1f
+without the digital I/O plane) at error level, while a run where every
+plane fails logs that all planes were programmed successfully.
+
+Set the bit when programming a plane fails, so that the status reports
+the failed planes as the log message says. Only the log output changes.
+
+Fixes: commit fa68b6668623 ("drivers/intel/oc_mailbox: Add OC_MAILBOX undervolt driver")
+
+TEST=Built for google/mccloud and lenovo/w541 with undervolting enabled.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/intel/oc_mailbox/oc_mailbox.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/drivers/intel/oc_mailbox/oc_mailbox.c b/src/drivers/intel/oc_mailbox/oc_mailbox.c
+index f318e49b5..3cf5b449c 100644
+--- a/src/drivers/intel/oc_mailbox/oc_mailbox.c
++++ b/src/drivers/intel/oc_mailbox/oc_mailbox.c
+@@ -206,7 +206,7 @@ static void oc_mailbox_undervolt(void)
+ 	 */
+ 	for (enum oc_mailbox_plane i = 0; i <= last_plane; i++) {
+ 		const unsigned int undervolt_mv = get_uint_option(plane_opt_names[i], 0);
+-		if (set_plane_undervolt(i, undervolt_mv))
++		if (!set_plane_undervolt(i, undervolt_mv))
+ 			status |= 1 << i;
+ 	}
+ 	if (status == 0)
+-- 
+2.43.0
+

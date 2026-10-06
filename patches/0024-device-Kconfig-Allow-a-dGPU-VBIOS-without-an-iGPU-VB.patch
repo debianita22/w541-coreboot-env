@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 4 Oct 2026 02:34:29 +0200
+Subject: [PATCH] device/Kconfig: Allow a dGPU VBIOS without an iGPU VBIOS
+
+VGA_BIOS_DGPU depends on VGA_BIOS, so the VBIOS of a discrete GPU can
+only be added together with one for the integrated GPU. On boards that
+initialize the iGPU natively, that image is never used, and VGA_BIOS
+also selects VGA_ROM_RUN_DEFAULT, which switches the default graphics
+init from libgfxinit to running option ROMs. For example, a config for
+lenovo/w541 with only the NVIDIA VBIOS silently drops it, so the GPU
+gets no _ROM method, while adding an Intel VBIOS to keep it changes
+the graphics init.
+
+The CBFS file of the dGPU image does not depend on VGA_BIOS, so drop
+the Kconfig dependency.
+
+TEST=olddefconfig for lenovo/w541 with only VGA_BIOS_DGPU keeps it and
+libgfxinit. With both VGA_BIOS and VGA_BIOS_DGPU, the result does not
+change. Built lenovo/w541 with only the NVIDIA VBIOS and checked that
+pci10de,11fc.rom is in CBFS.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/device/Kconfig | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/device/Kconfig b/src/device/Kconfig
+index f3a3ef7be..33e8306c5 100644
+--- a/src/device/Kconfig
++++ b/src/device/Kconfig
+@@ -918,11 +918,16 @@ config VGA_BIOS_SECOND_ID
+ 
+ config VGA_BIOS_DGPU
+ 	bool "Add a discrete VGA BIOS image"
+-	depends on VGA_BIOS
++	depends on ARCH_X86
+ 	help
+ 	  Select this option if you have a VGA BIOS image for discrete GPU
+ 	  that you would like to add to your ROM.
+ 
++	  This does not need a VGA BIOS for the integrated GPU. Boards that
++	  initialize it natively, e.g. with libgfxinit, can add only the
++	  discrete GPU image, which the OS can then read through the ACPI
++	  _ROM method of the GPU.
++
+ 	  You will be able to specify the location and file name of the
+ 	  image later.
+ 
+-- 
+2.43.0
+
