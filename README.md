@@ -1,6 +1,7 @@
 # ThinkPad W541 coreboot
 
-[![Latest release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?style=flat-square&label=latest%20release)](https://github.com/debianita22/w541-coreboot-env/releases/latest)
+[![MRC release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-mrc&style=flat-square&label=mrc)](https://github.com/debianita22/w541-coreboot-env/releases)
+[![NRI release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-nri&style=flat-square&label=nri)](https://github.com/debianita22/w541-coreboot-env/releases)
 [![Check](https://img.shields.io/github/actions/workflow/status/debianita22/w541-coreboot-env/check.yml?branch=main&style=flat-square&label=check)](https://github.com/debianita22/w541-coreboot-env/actions/workflows/check.yml)
 [![Build](https://img.shields.io/github/actions/workflow/status/debianita22/w541-coreboot-env/build.yml?style=flat-square&label=build)](https://github.com/debianita22/w541-coreboot-env/actions/workflows/build.yml)
 [![License](https://img.shields.io/github/license/debianita22/w541-coreboot-env?style=flat-square)](LICENSE)
