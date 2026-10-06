@@ -73,8 +73,20 @@ die()  { note error "$*"; printf '\033[31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 note() {
 	[ -n "${GITHUB_ACTIONS:-}" ] || return 0
 	local msg="$2"
-	msg="${msg//'%'/'%25'}"; msg="${msg//$'\n'/'%0A'}"
+	msg="${msg//'%'/'%25'}"; msg="${msg//$'\r'/}"; msg="${msg//$'\n'/'%0A'}"
 	echo "::$1 title=build.sh::${msg}"
+}
+# Dopo un errore: le ultime righe dei log $2... in un'annotazione ($1 il
+# titolo). Il log intero di un job non sempre si scarica, le annotazioni si'.
+failure_report() {
+	local title="$1" f msg=""
+	shift
+	for f in "$@"; do
+		[ -s "${f}" ] || continue
+		msg+="== ${f#"${WORK}/"}"$'\n'"$(tail -n 40 "${f}" | cut -c1-300)"$'\n'
+	done
+	[ -n "${msg}" ] && note error "${title}"$'\n'"${msg}"
+	return 0
 }
 
 VARIANTS=()
@@ -257,8 +269,17 @@ cmd_toolchain() {
 	say "crossgcc i386 + Ada, iasl, nasm (lungo: 30-60 minuti)"
 	# BUILD_LANGUAGES esplicito: senza GNAT buildgcc si ferma, invece di fare
 	# un compilatore solo C che poi non compila libgfxinit
-	make -C "${TREE}" crossgcc-i386 CPUS="${JOBS}" BUILD_LANGUAGES=c,ada UPDATED_SUBMODULES=1 \
-		|| die "crossgcc: build fallita (util/crossgcc/build-*/*.log nell'albero)"
+	local log="${WORK}/crossgcc.log" logs d
+	if ! make -C "${TREE}" crossgcc-i386 CPUS="${JOBS}" BUILD_LANGUAGES=c,ada UPDATED_SUBMODULES=1 2>&1 \
+		| tee "${log}"; then
+		# il log di make e quello del pacchetto che si e' fermato
+		logs=("${log}")
+		for d in "${TREE}"/util/crossgcc/build-*; do
+			if [ -f "${d}/.failed" ]; then logs+=("${d}/build.log"); fi
+		done
+		failure_report "crossgcc" "${logs[@]}"
+		die "crossgcc: build fallita (${log}, util/crossgcc/build-*/build.log nell'albero)"
+	fi
 	xgcc_ok || die "crossgcc incompleto in ${XGCC}/bin"
 	"${XGCC}/bin/i386-elf-gcc" --version | head -1
 }
@@ -348,7 +369,12 @@ cmd_roms() {
 		say ".config ${v}"
 		variant_config "${v}"
 		say "build ${v} ($(localversion "${v}"))"
-		mk "${v}" -j"${JOBS}" || die "${v}: build fallita"
+		if ! mk "${v}" -j"${JOBS}" 2>&1 | tee "${TREE}/build-${v}/make.log"; then
+			# con -j l'errore non e' per forza in fondo: anche le righe con "rror"
+			grep -n -i -B2 -A6 'error' "${TREE}/build-${v}/make.log" | tail -n 60 > "${TREE}/build-${v}/errors.log" || true
+			failure_report "build ${v}" "${TREE}/build-${v}/errors.log" "${TREE}/build-${v}/make.log"
+			die "${v}: build fallita (build-${v}/make.log nell'albero)"
+		fi
 		# i file di questa variante di un giro precedente, anche di altre versioni
 		rm -f "${DIST}"/w541-coreboot-*-"${v}"[.+-]*
 		collect "${v}"
