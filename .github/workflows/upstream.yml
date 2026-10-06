@@ -1,0 +1,77 @@
+# Ogni lunedi': coreboot ed EDK2 si sono mossi dal pin?
+#
+#   coreboot  la serie applica ancora su main? Patch gia' upstream? Una
+#             release nuova (YY.MM)? Un issue "coreboot: ...", aggiornato a
+#             ogni giro e chiuso quando non c'e' piu' niente da fare
+#             (tools/upstream.sh coreboot).
+#   edk2      il ramo uefipayload_AAMM di MrChromebox dopo il commit pinnato
+#             nei defconfig: un issue "EDK2: ...", chiuso quando torna pari
+#             (tools/upstream.sh edk2).
+# I pin si spostano a mano: le patch vanno riviste e le ROM provate sul
+# portatile prima di una release.
+#
+# A mano (Run workflow): "dry_run" fa le verifiche senza toccare gli issue.
+name: Upstream
+run-name: ${{ inputs.dry_run && 'Upstream (prova)' || 'Upstream' }}
+
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo verifiche: niente issue"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream
+  cancel-in-progress: false
+
+jobs:
+  coreboot:
+    name: coreboot main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: La serie su main
+        env:
+          IN_DRY: ${{ inputs.dry_run }}
+        run: |
+          if [ "${IN_DRY:-false}" = true ]; then
+            ./tools/upstream.sh coreboot --dry-run
+          else
+            ./tools/upstream.sh coreboot
+          fi
+
+  edk2:
+    name: EDK2 MrChromebox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Commit dopo il pin?
+        env:
+          IN_DRY: ${{ inputs.dry_run }}
+        run: |
+          if [ "${IN_DRY:-false}" = true ]; then
+            ./tools/upstream.sh edk2 --dry-run
+          else
+            ./tools/upstream.sh edk2
+          fi

@@ -1,0 +1,202 @@
+# La build delle due ROM e le due release.
+#
+#   tag vX.Y.Z o vX.Y.Z-rcN    build e release vX.Y.Z-mrc e vX.Y.Z-nri
+#                              (git tag v1.0.0 && git push origin v1.0.0)
+#   Run workflow, "version"    lo stesso senza tag a mano: i tag vX.Y.Z-mrc e
+#                              vX.Y.Z-nri li crea la release
+#   Run workflow, version      build di prova: niente release, le ROM negli
+#   vuota, o push su ci-test/** artifact del run (14 giorni)
+#
+# Ogni release ha l'immagine completa da 12 MiB (IFD, GbE, ME, coreboot), le
+# immagini dei due chip per un programmatore esterno, il .config, il layout e
+# SHA256SUMS. tools/verify-rom.sh blocca la release se gli 8 MiB bassi non
+# sono identici a legacy/coreboot-4.22/coreboot.rom.
+#
+# Quale release e' cosa (tools/ci.sh):
+#   - mrc: RAM init con mrc.bin, come la 4.22. "latest" se non e' una
+#     pre-release ed e' la versione piu' alta.
+#   - nri: RAM init nativa, sempre pre-release (upstream "[NOT COMPLETE]").
+#   - pre-release tutte e due con la casella "prerelease" o un trattino nella
+#     versione (v1.1.0-rc1); le release vere solo dal ramo principale. Una
+#     pre-release provata sul portatile diventa release senza ricostruirla:
+#       gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=false --latest
+#   - il job Release si puo' rilanciare: le bozze di un tentativo fallito si
+#     cancellano e si rifanno; un tag che c'e' gia' deve essere sul commit della
+#     build.
+#
+# Il crossgcc di coreboot (i386 con Ada, iasl, nasm: 30-60 minuti) sta nella
+# cache di Actions con la chiave di "tools/build.sh toolchain-key": si
+# ricostruisce solo quando il pin di coreboot cambia toolchain.
+name: Build
+run-name: >-
+  ${{ github.ref_type == 'tag' && format('Release {0}', github.ref_name)
+  || inputs.version != '' && format('Release {0}{1}', inputs.version, (inputs.prerelease || contains(inputs.version, '-')) && ' (pre-release)' || '')
+  || format('Build di prova ({0})', github.ref_name) }}
+
+on:
+  push:
+    # solo la versione: i tag delle release (v1.0.0-mrc, v1.0.0-nri) non
+    # combaciano e non ripartono da soli
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+']
+    branches: ['ci-test/**']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versione da pubblicare (es. v1.0.0). Vuota: build di prova, niente release"
+        type: string
+        default: ""
+      prerelease:
+        description: "Pre-release anche la mrc (la nri lo e' sempre)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Una release per versione alla volta: il push del tag e un Run workflow con
+# la stessa versione stanno nello stesso gruppo.
+concurrency:
+  group: build-${{ github.ref_type == 'tag' && github.ref_name || inputs.version || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: Versione e controlli
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      # la storia intera: una release vera deve stare sul ramo principale
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Versione
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_PRERELEASE: ${{ inputs.prerelease }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: ./tools/ci.sh version
+
+      # gli stessi controlli di check.yml: un errore qui costa un minuto
+      - name: Strumenti
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          pip install -q --break-system-packages actionlint-py
+      - name: tools/ci-check.sh
+        run: ./tools/ci-check.sh
+
+  build:
+    name: ROM mrc e nri
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # gnat: Ada nel crossgcc (libgfxinit); imagemagick e uuid-dev: EDK2
+      - name: Pacchetti
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
+            zlib1g-dev m4 curl git python3 uuid-dev imagemagick >/dev/null
+          gcc --version | head -1
+          gnatmake --version | head -1
+
+      - name: coreboot pinnato, submodule, patch e blob
+        run: ./tools/build.sh prepare
+
+      - name: Chiave del crossgcc
+        id: tc
+        run: echo "key=$(./tools/build.sh toolchain-key)" >> "${GITHUB_OUTPUT}"
+
+      - name: crossgcc dalla cache
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: work/coreboot/util/crossgcc/xgcc
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: crossgcc
+        run: ./tools/build.sh toolchain
+
+      # salvato subito: una build delle ROM fallita non butta via un'ora di
+      # crossgcc
+      - name: crossgcc nella cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: work/coreboot/util/crossgcc/xgcc
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: ROM
+        run: ./tools/build.sh --release --version "${VERSION}" roms
+
+      - name: Riepilogo
+        run: |
+          {
+            echo "### ${VERSION}"
+            echo
+            echo '```'
+            (cd dist && sha256sum -- *.rom)
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: w541-coreboot-${{ needs.setup.outputs.version }}
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [setup, build]
+    if: needs.setup.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      PRERELEASE: ${{ needs.setup.outputs.prerelease }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      # la storia e i tag: le note elencano i commit dall'ultima release
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: w541-coreboot-${{ needs.setup.outputs.version }}
+          path: dist
+
+      - name: Controlli
+        run: |
+          set -eu
+          cd dist
+          sha256sum -c SHA256SUMS
+          for v in mrc nri; do
+            for f in "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom" \
+              "w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.config" \
+              "w541-coreboot-${VERSION}-${v}-layout.txt"; do
+              test -s "${f}" || { echo "manca ${f}"; exit 1; }
+            done
+            # gli 8 MiB bassi: quelli della 4.22 (verify-rom.sh li ha gia'
+            # controllati nel job build; qui sui file che si pubblicano)
+            cmp -n 8388608 "w541-coreboot-${VERSION}-${v}.rom" ../legacy/coreboot-4.22/coreboot.rom
+          done
+          ls -la
+
+      - name: Pubblica
+        run: ./tools/ci.sh publish dist

@@ -1,0 +1,66 @@
+# Controlli veloci a ogni push e pull request: niente build delle ROM.
+#   scripts   tools/ci-check.sh: shellcheck, actionlint, SHA256SUMS dei blob,
+#             patches/series, chiave Optimus assente, defconfig coerenti
+#   patch     coreboot al commit pinnato + patches/series + i .config delle
+#             due varianti: ogni riga dei defconfig deve restare (Kconfig la
+#             lascia cadere senza errori se mancano le dipendenze)
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    name: Script, blob e defconfig
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Strumenti
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          pip install -q --break-system-packages actionlint-py
+          shellcheck --version | sed -n 2p
+          actionlint -version | head -1
+
+      - name: tools/ci-check.sh
+        run: ./tools/ci-check.sh
+
+  patches:
+    name: Patch e .config su coreboot pinnato
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # solo Kconfig: gcc del sistema (--toolchain host), niente crossgcc
+      - name: tools/build.sh prepare config
+        run: ./tools/build.sh --toolchain host prepare config
+
+      - name: Riepilogo
+        run: |
+          {
+            echo "### coreboot $(sed -n 's/^COREBOOT_DESCRIBE="\(.*\)"/\1/p' tools/build.sh)"
+            echo
+            echo "$(git -C work/coreboot log --oneline "$(sed -n 's/^COREBOOT_COMMIT="\(.*\)"/\1/p' tools/build.sh)..HEAD" | wc -l) patch applicate, .config di mrc e nri completi."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: config
+          path: |
+            work/coreboot/build-mrc/.config
+            work/coreboot/build-nri/.config
+          retention-days: 14
