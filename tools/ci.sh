@@ -187,17 +187,20 @@ EOF
 | File | Use |
 |---|---|
 | \`${rom}\` | **complete 12 MiB flash image**: descriptor (IFD), GbE, Intel ME and coreboot |
-| \`${chip8}\` | its first 8 MiB, for an external programmer on the 8 MiB chip |
-| \`${chip4}\` | its last 4 MiB (coreboot), for an external programmer on the 4 MiB chip |
+| \`${chip4}\` | its last 4 MiB: all of coreboot, for an external programmer on the 4 MiB chip |
+| \`${chip8}\` | its first 8 MiB: descriptor, GbE and ME of the machine the blobs come from, for the 8 MiB chip |
 | \`${cfg}\` | the complete coreboot \`.config\` |
 | \`${lay}\` | flash layout (FMAP) and CBFS contents |
 | \`SHA256SUMS\` | checksums of the files above |
 
-The lower 8 MiB (IFD, GbE, ME) are byte-identical to the coreboot 4.22 image
-in \`legacy/coreboot-4.22\`: unlocked regions, ME reduced by \`me_cleaner -S\`,
-and the GbE region with the MAC address of the laptop these blobs come from.
-On another W541 write only the BIOS region, as below: it keeps that machine's
-own descriptor, ME and MAC address.
+Flash layout (\`configs/w541.fmd\`): the first 5 MiB (IFD, GbE, ME) are
+byte-identical to the coreboot 4.22 image in \`legacy/coreboot-4.22\`:
+unlocked regions, ME reduced by \`me_cleaner -S\`, and the GbE region with the
+MAC address of the machine these blobs come from. Then, still on the 8 MiB
+chip, the regions coreboot writes at runtime (RAM training, UEFI variables,
+VPD), empty. coreboot itself is alone on the 4 MiB chip. An update from
+Linux writes only the BIOS region, as below: it keeps the machine's own
+descriptor, ME and MAC address.
 
 **Update from Linux**, on a W541 that already runs coreboot with an unlocked
 flash: only the BIOS region is written (details, VPD and recovery in
@@ -206,12 +209,14 @@ flash: only the BIOS region is written (details, VPD and recovery in
 \`\`\`sh
 sha256sum -c SHA256SUMS --ignore-missing
 sudo flashrom -p internal -r backup-\$(date +%F).rom        # whole 12 MiB, keep it off the laptop
+ls -l backup-*.rom                                        # 12582912 bytes (8388608: add -p internal:ich_spi_mode=hwseq)
 sudo flashrom -p internal --ifd -i bios -w ${rom}
 \`\`\`
 
-**External programmer** (recovery): \`${chip8}\` on the 8 MiB chip and
-\`${chip4}\` on the 4 MiB chip. On a different W541 write only \`${chip4}\`
-and leave its 8 MiB chip as it is.
+**External programmer** (recovery): \`${chip4}\` on the 4 MiB chip is all of
+coreboot; leave the 8 MiB chip as it is. \`${chip8}\` would give the laptop
+the descriptor, ME and MAC address of another machine: see
+[docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md#external-programmer).
 
 If flashrom cannot map the flash, boot once with \`iomem=relaxed\` on the
 kernel command line. Flashing resets the UEFI settings and boot entries: the
@@ -220,7 +225,9 @@ boot loader at that path too (Debian: \`sudo grub-install --removable\`), or
 pick it once with *Boot From File* in the boot manager (Esc at power-on).
 
 The NVIDIA GPU is **off by default**, as in upstream coreboot: turn it on in
-*Device Manager* → *Platform Setup Menu* → *Graphics* (Esc at power-on).
+*System Configuration* → *Platform Setup Menu* → *Graphics* (Esc at
+power-on). Suspend (S3) needs the RAM training saved at the first boot:
+test it from the second boot on.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload

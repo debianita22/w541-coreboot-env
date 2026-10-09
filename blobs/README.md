@@ -1,9 +1,10 @@
 # Blobs
 
-Binary files from the original firmware of the W541 this repository belongs
-to. `SHA256SUMS` pins them: `tools/build.sh` and `tools/ci-check.sh` stop if a
-file changes. They are proprietary (Intel, Lenovo, NVIDIA), not covered by the
-GPL of the rest of the repository.
+Binary files from the Lenovo firmware of a ThinkPad W541 (the one the 4.22
+image in `legacy/` was built for; its MAC address is below). `SHA256SUMS`
+pins them: `tools/build.sh` and `tools/ci-check.sh` stop if a file changes.
+They are proprietary (Intel, Lenovo, NVIDIA), not covered by the GPL of the
+rest of the repository.
 
 | File | Size | What | In the release images |
 |---|---|---|---|
@@ -16,5 +17,8 @@ GPL of the rest of the repository.
 | `vbios_8086_0416_1.rom` | 64 KiB | Intel VBIOS with PCI ID `8086:0416`; its checksum byte is wrong | no |
 
 The descriptor, GbE and ME regions that the build produces from these files
-are byte-identical to the lower 8 MiB of `legacy/coreboot-4.22/coreboot.rom`;
-`tools/verify-rom.sh` checks it on every build.
+are byte-identical to the first 5 MiB of `legacy/coreboot-4.22/coreboot.rom`;
+`tools/verify-rom.sh` checks it on every build. Another W541 has its own
+descriptor, GbE (MAC address) and ME version: an update with `flashrom --ifd
+-i bios` leaves them alone, and `docs/flashing.md` shows how to build the
+8 MiB chip image from your own backup for an external programmer.

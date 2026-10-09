@@ -31,23 +31,32 @@ Everything else is the same in the two variants.
 | File | Use |
 |---|---|
 | `w541-coreboot-<version>-<variant>.rom` | complete 12 MiB flash image: descriptor, GbE, Intel ME and coreboot |
-| `…-8mb-chip.rom` | first 8 MiB of the image, for an external programmer on the 8 MiB chip |
-| `…-4mb-chip.rom` | last 4 MiB of the image (coreboot), for the 4 MiB chip |
+| `…-4mb-chip.rom` | last 4 MiB of the image: all of coreboot, for an external programmer on the 4 MiB chip |
+| `…-8mb-chip.rom` | first 8 MiB of the image: descriptor, GbE and ME **of the machine the blobs come from**, for the 8 MiB chip |
 | `….config` | the complete coreboot configuration |
 | `…-layout.txt` | flash map (FMAP) and CBFS contents |
 | `SHA256SUMS` | checksums |
 
-The W541 flash is two chips seen as one 12 MiB space:
+The W541 flash is two chips seen as one 12 MiB space. The layout is
+[`configs/w541.fmd`](configs/w541.fmd):
 
 | Range | Chip | Contents |
 |---|---|---|
 | `0x000000-0x000FFF` | 8 MiB | Intel flash descriptor (IFD), all regions unlocked |
-| `0x001000-0x002FFF` | 8 MiB | GbE, with the MAC address of the laptop the blobs come from |
+| `0x001000-0x002FFF` | 8 MiB | GbE, with the MAC address of the machine the blobs come from |
 | `0x003000-0x4FFFFF` | 8 MiB | Intel ME 9.1, reduced with `me_cleaner -S` (ROMP and BUP only, AltMeDisable set) |
-| `0x500000-0x7FFFFF` | 8 MiB | BIOS region, unused (`0xFF`) |
-| `0x800000-0xBFFFFF` | 4 MiB | coreboot: `RW_MRC_CACHE`, `SMMSTORE` (UEFI variables), `RO_VPD`, `FMAP`, `COREBOOT` (CBFS) |
+| `0x500000-0x593FFF` | 8 MiB | regions coreboot writes at runtime, empty in the image: `RW_MRC_CACHE` (RAM training), `SMMSTORE` (UEFI variables and settings), `RO_VPD` |
+| `0x594000-0x7FFFFF` | 8 MiB | unused (`0xFF`) |
+| `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and `COREBOOT` (CBFS): all of coreboot |
 
-The lower 8 MiB are byte-identical to `legacy/coreboot-4.22/coreboot.rom`,
+The regions written at runtime sit on the 8 MiB chip, as in the coreboot
+24.08 build the laptop runs today and in Libreboot's images for this board;
+coreboot's default map would put them on the 4 MiB chip, where saving the
+RAM training is not proven to work, and S3 resume depends on it. coreboot
+itself lives alone on the 4 MiB chip, so `…-4mb-chip.rom` is a complete
+coreboot for recovery with an external programmer.
+
+The first 5 MiB are byte-identical to `legacy/coreboot-4.22/coreboot.rom`,
 the image this project started from: `tools/verify-rom.sh` stops a release
 otherwise. On a W541 that already runs coreboot, an update rewrites only the
 BIOS region (`flashrom --ifd -i bios`), so the descriptor, the ME and the MAC
@@ -63,9 +72,10 @@ Inside coreboot:
   `_ROM` method of the GPU, with runtime power management (the GPU is switched
   off when idle) and its power state kept across suspend;
 - CPU microcode from coreboot's `intel-microcode`, also referenced by the FIT;
-- a setup menu (Esc at power-on, *Device Manager* → *Platform Setup Menu*):
-  NVIDIA GPU, CPU power limits, Intel ME, power-on after power failure, NMI.
-  Settings live in UEFI variables in the `SMMSTORE` flash region;
+- a setup menu (Esc at power-on, *System Configuration* → *Platform Setup
+  Menu*): NVIDIA GPU, CPU power limits, Intel ME, power-on after power
+  failure, NMI. Settings live in UEFI variables in the `SMMSTORE` flash
+  region;
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -84,7 +94,8 @@ in `legacy/`), from Linux:
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
 sudo flashrom -p internal -r backup-$(date +%F).rom      # whole 12 MiB: keep it off the laptop
-sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.0-mrc.rom
+ls -l backup-*.rom                                        # must be 12582912 bytes
+sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.1-mrc.rom
 ```
 
 The UEFI settings and boot entries start from scratch after flashing. Before
@@ -142,7 +153,7 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, and optional patches ([patches/README.md](patches/README.md)) |
 | `tools/` | build, verification, CI and upstream-check scripts |
-| `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration the laptop ran before |
+| `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md) |
 
 ## Binary blobs
