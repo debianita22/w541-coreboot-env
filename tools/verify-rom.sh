@@ -9,9 +9,9 @@
 #                  primi 8 MiB e gli ultimi 4 MiB della ROM
 #
 # Opzioni:
-#   --reference R     l'immagine con gli 8 MiB bassi attesi (default:
-#                     legacy/coreboot-4.22/coreboot.rom, quella che gira sul
-#                     portatile: IFD, GbE e ME non devono cambiare)
+#   --reference R     l'immagine con i primi 5 MiB attesi (default:
+#                     legacy/coreboot-4.22/coreboot.rom, costruita dagli
+#                     stessi blob: IFD, GbE e ME non devono cambiare)
 #   --cbfstool P      cbfstool (default: work/coreboot/build-<variante>/cbfstool)
 #   --ifittool P      ifittool per il FIT (default: quello della stessa build)
 #   --localversion S  il CONFIG_LOCALVERSION atteso (default: solo il suffisso
@@ -20,12 +20,15 @@
 #                     senza patch opzionali (+NOME nella versione)
 #
 # Controlli:
-#   1. 12 MiB; gli 8 MiB bassi identici a quelli di --reference: IFD a 0x0
-#      (firma 0x0FF0A55A a 0x10), GbE a 0x1000 (uguale a blobs/gbe.bin), ME
-#      da 0x3000, 0x500000-0x7FFFFF vuoto (regione BIOS non usata)
-#   2. FMAP: BIOS a 0x800000 per 4 MiB con COREBOOT, SMMSTORE, RO_VPD e
-#      RW_MRC_CACHE; queste tre vuote (niente variabili UEFI, seriale o
-#      training della RAM di un'altra macchina)
+#   1. 12 MiB; i primi 5 MiB (IFD, GbE, ME) identici a quelli di --reference:
+#      IFD a 0x0 (firma 0x0FF0A55A a 0x10), GbE a 0x1000 (uguale a
+#      blobs/gbe.bin), ME da 0x3000; 0x500000-0x7FFFFF tutto 0xFF (le regioni
+#      scrivibili vuote: niente variabili UEFI, seriale o training della RAM
+#      di un'altra macchina)
+#   2. FMAP come configs/w541.fmd: SI_BIOS 0x500000-0xBFFFFF; RW_MRC_CACHE,
+#      SMMSTORE e RO_VPD nel chip da 8 MiB (sotto 0x800000); FMAP e COREBOOT
+#      nel chip da 4 MiB (da 0x800000), cosi' l'immagine di quel chip e' un
+#      coreboot completo
 #   3. CBFS: i file di ogni build; mrc.bin solo nella mrc, uguale a
 #      blobs/mrc.bin e a 0xFFFA0000, dove lo chiama la romstage;
 #      pci10de,11fc.rom uguale al VBIOS NVIDIA di blobs/
@@ -82,6 +85,8 @@ trap 'rm -rf "${TMP}"' EXIT
 ROM_SIZE=$((12 * 1024 * 1024))
 LOW_SIZE=$((8 * 1024 * 1024))
 CHIP_SIZE=$((4 * 1024 * 1024))
+# IFD + GbE + ME: la parte che non cambia mai
+INTEL_SIZE=$((0x500000))
 # mrc.bin-position della romstage Haswell (haswell_mrc/Makefile.mk), come
 # offset nel file: 0xFFFA0000 - (4 GiB - 12 MiB)
 MRC_ADDR=0xfffa0000
@@ -102,20 +107,20 @@ echo "${ROM} (${VARIANT})"
 # --- 1. dimensione, IFD, GbE e ME ------------------------------------------
 size="$(stat -c%s "${ROM}")"
 if [ "${size}" = "${ROM_SIZE}" ]; then ok "12 MiB"; else bad "dimensione ${size}, attesa ${ROM_SIZE}"; fi
-if cmp -s -n "${LOW_SIZE}" "${ROM}" "${REFERENCE}"; then
-	ok "0x000000-0x7FFFFF (IFD, GbE, ME) identici a ${REFERENCE#"${O}/"}"
+if cmp -s -n "${INTEL_SIZE}" "${ROM}" "${REFERENCE}"; then
+	ok "0x000000-0x4FFFFF (IFD, GbE, ME) identici a ${REFERENCE#"${O}/"}"
 else
-	bad "0x000000-0x7FFFFF diversi da ${REFERENCE#"${O}/"}: IFD, GbE o ME cambiati ($(cmp -l -n "${LOW_SIZE}" "${ROM}" "${REFERENCE}" 2>/dev/null | wc -l) byte)"
+	bad "0x000000-0x4FFFFF diversi da ${REFERENCE#"${O}/"}: IFD, GbE o ME cambiati ($(cmp -l -n "${INTEL_SIZE}" "${ROM}" "${REFERENCE}" 2>/dev/null | wc -l) byte)"
 fi
 sig="$(od -An -tx1 -j 16 -N4 "${ROM}" | tr -d ' \n')"
 if [ "${sig}" = 5aa5f00f ]; then ok "descrittore Intel (0x0FF0A55A a 0x10)"; else bad "nessun descrittore Intel a 0x10 (${sig})"; fi
 if [ -f "${O}/blobs/gbe.bin" ]; then
 	if at_offset "${ROM}" $((0x1000)) "${O}/blobs/gbe.bin"; then ok "GbE a 0x1000 uguale a blobs/gbe.bin"; else bad "GbE a 0x1000 diversa da blobs/gbe.bin"; fi
 fi
-if all_ff "${ROM}" $((0x500000)) $((0x300000)); then
-	ok "0x500000-0x7FFFFF vuoto (regione BIOS fuori da coreboot)"
+if all_ff "${ROM}" "${INTEL_SIZE}" $(( LOW_SIZE - INTEL_SIZE )); then
+	ok "0x500000-0x7FFFFF tutto 0xFF (regioni scrivibili vuote)"
 else
-	bad "0x500000-0x7FFFFF non vuoto"
+	bad "0x500000-0x7FFFFF non vuoto (dati di una macchina nella ROM, o CBFS nel chip da 8 MiB)"
 fi
 
 # --- 2. FMAP ---------------------------------------------------------------
@@ -127,27 +132,35 @@ else
 	: > "${TMP}/regions"
 fi
 region() { awk -v r="$1" '$1 == r { print $2, $3; exit }' "${TMP}/regions"; }
-read -r bsize boff <<< "$(region BIOS)"
-if [ "${boff:-}" = "${LOW_SIZE}" ] && [ "${bsize:-}" = "${CHIP_SIZE}" ]; then
-	ok "FMAP: BIOS 0x800000-0xBFFFFF (chip da 4 MiB)"
+read -r bsize boff <<< "$(region SI_BIOS)"
+if [ "${boff:-}" = "${INTEL_SIZE}" ] && [ "${bsize:-}" = $(( ROM_SIZE - INTEL_SIZE )) ]; then
+	ok "FMAP: SI_BIOS 0x500000-0xBFFFFF (la regione BIOS del descrittore)"
 else
-	bad "FMAP: BIOS ${boff:-?}+${bsize:-?}, atteso 0x800000+0x400000"
+	bad "FMAP: SI_BIOS ${boff:-?}+${bsize:-?}, atteso 0x500000+0x700000"
 fi
-for r in COREBOOT SMMSTORE RO_VPD RW_MRC_CACHE; do
+# le regioni scritte a ogni avvio nel chip da 8 MiB, vuote
+for r in RW_MRC_CACHE SMMSTORE RO_VPD; do
+	read -r rsize roff <<< "$(region "${r}")"
+	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
+	if [ "${roff}" -lt "${INTEL_SIZE}" ] || [ $(( roff + rsize )) -gt "${LOW_SIZE}" ]; then
+		bad "FMAP: ${r} $(hex "${roff}") non nel chip da 8 MiB (0x500000-0x7FFFFF)"
+		continue
+	fi
+	if all_ff "${ROM}" "${roff}" "${rsize}"; then
+		ok "FMAP: ${r} $(hex "${roff}") nel chip da 8 MiB, vuota"
+	else
+		bad "FMAP: ${r} non vuota (dati di una macchina nella ROM)"
+	fi
+done
+# coreboot tutto nel chip da 4 MiB
+for r in FMAP COREBOOT; do
 	read -r rsize roff <<< "$(region "${r}")"
 	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
 	if [ "${roff}" -lt "${LOW_SIZE}" ] || [ $(( roff + rsize )) -gt "${ROM_SIZE}" ]; then
-		bad "FMAP: ${r} fuori dalla regione BIOS"
-		continue
+		bad "FMAP: ${r} $(hex "${roff}") non nel chip da 4 MiB (0x800000-0xBFFFFF)"
+	else
+		ok "FMAP: ${r} $(hex "${roff}") nel chip da 4 MiB ($(( rsize / 1024 )) KiB)"
 	fi
-	case "${r}" in
-		COREBOOT) ok "FMAP: COREBOOT $(hex "${roff}") ($(( rsize / 1024 )) KiB)" ;;
-		*) if all_ff "${ROM}" "${roff}" "${rsize}"; then
-			ok "FMAP: ${r} $(hex "${roff}") vuota"
-		else
-			bad "FMAP: ${r} non vuota (dati di una macchina nella ROM)"
-		fi ;;
-	esac
 done
 
 # --- 3. CBFS ---------------------------------------------------------------
@@ -225,7 +238,7 @@ if extract config "${TMP}/config"; then
 	want() { if grep -qxF -- "$1" "${TMP}/config"; then ok "config: $1"; else bad "config: manca $1"; fi; }
 	never() { if grep -qxF -- "$1" "${TMP}/config"; then bad "config: $1 (${2})"; else ok "config: no ${1%%=*}"; fi; }
 	want CONFIG_BOARD_LENOVO_THINKPAD_W541=y
-	want CONFIG_CBFS_SIZE=0x400000
+	want 'CONFIG_FMDFILE="w541/w541.fmd"'
 	if [ "${VARIANT}" = mrc ]; then
 		want CONFIG_HAVE_MRC=y
 		never CONFIG_USE_NATIVE_RAMINIT=y "RAM init nativa nella variante mrc"
@@ -277,6 +290,12 @@ if [ -n "${CHIP8}" ]; then
 		ok "$(basename "${CHIP4}"): gli ultimi 4 MiB della ROM"
 	else
 		bad "$(basename "${CHIP4}"): non sono gli ultimi 4 MiB della ROM"
+	fi
+	# da solo e' un coreboot completo: la FMAP e' in testa al chip
+	if [ "$(head -c 8 "${CHIP4}" 2>/dev/null)" = "__FMAP__" ]; then
+		ok "$(basename "${CHIP4}"): FMAP in testa, coreboot completo nel chip da 4 MiB"
+	else
+		bad "$(basename "${CHIP4}"): nessuna FMAP in testa al chip da 4 MiB"
 	fi
 fi
 

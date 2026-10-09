@@ -34,10 +34,13 @@
 #   --jobs N        default: nproc
 #
 # Ogni ROM e' un'immagine completa del flash da 12 MiB (chip da 8 MiB + chip
-# da 4 MiB): IFD, GbE e ME di blobs/ negli 8 MiB bassi, identici a quelli di
-# legacy/coreboot-4.22/coreboot.rom, e coreboot nei 4 MiB alti. In dist/ anche
-# le immagini dei due chip, per un programmatore esterno. Dall'interno si
-# aggiorna solo la regione BIOS: flashrom --ifd -i bios (docs/flashing.md).
+# da 4 MiB), con la mappa di configs/w541.fmd: IFD, GbE e ME di blobs/ nei
+# primi 5 MiB (identici a legacy/coreboot-4.22/coreboot.rom), poi le regioni
+# scritte a ogni avvio (training della RAM, variabili UEFI, VPD), vuote,
+# ancora nel chip da 8 MiB; coreboot (FMAP + CBFS) da solo nel chip da 4 MiB.
+# In dist/ anche le immagini dei due chip, per un programmatore esterno.
+# Dall'interno si aggiorna solo la regione BIOS: flashrom --ifd -i bios
+# (docs/flashing.md).
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -57,10 +60,10 @@ SUBMODULES=(
 	"intel-microcode 3rdparty/intel-microcode https://github.com/coreboot/intel-microcode.git"
 )
 
-# I file di blobs/ e assets/ che vanno nell'albero (w541/<nome>): i defconfig
-# li cercano li'. mrc.bin lo usa solo la variante mrc.
+# I file di blobs/, assets/ e configs/ che vanno nell'albero (w541/<nome>): i
+# defconfig li cercano li'. mrc.bin lo usa solo la variante mrc.
 TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
-	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp)
+	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp configs/w541.fmd)
 
 # git am: il committer e le date fisse rendono uguale ogni volta il commit in
 # cima all'albero (genbuild_h.sh ne prende data e hash)
@@ -386,8 +389,8 @@ collect() {
 	n="$(romname "${v}")"
 	cp "${b}/coreboot.rom" "${DIST}/${n}.rom"
 	# i due chip per un programmatore esterno: 0x000000-0x7FFFFF (IFD, GbE,
-	# ME e l'inizio vuoto della regione BIOS) e 0x800000-0xBFFFFF (coreboot,
-	# CBFS_SIZE 0x400000)
+	# ME e le regioni scrivibili, vuote) e 0x800000-0xBFFFFF (FMAP e CBFS:
+	# tutto coreboot)
 	head -c 8388608 "${b}/coreboot.rom" > "${DIST}/${n}-8mb-chip.rom"
 	tail -c 4194304 "${b}/coreboot.rom" > "${DIST}/${n}-4mb-chip.rom"
 	cp "${b}/.config" "${DIST}/${n}.config"

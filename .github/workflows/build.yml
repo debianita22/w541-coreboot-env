@@ -9,8 +9,9 @@
 #
 # Ogni release ha l'immagine completa da 12 MiB (IFD, GbE, ME, coreboot), le
 # immagini dei due chip per un programmatore esterno, il .config, il layout e
-# SHA256SUMS. tools/verify-rom.sh blocca la release se gli 8 MiB bassi non
-# sono identici a legacy/coreboot-4.22/coreboot.rom.
+# SHA256SUMS. tools/verify-rom.sh blocca la release se i primi 5 MiB non sono
+# identici a legacy/coreboot-4.22/coreboot.rom o la mappa non e' quella di
+# configs/w541.fmd.
 #
 # Quale release e' cosa (tools/ci.sh):
 #   - mrc: RAM init con mrc.bin, come la 4.22. "latest" se non e' una
@@ -192,9 +193,9 @@ jobs:
               "w541-coreboot-${VERSION}-${v}-layout.txt"; do
               test -s "${f}" || { echo "manca ${f}"; exit 1; }
             done
-            # gli 8 MiB bassi: quelli della 4.22 (verify-rom.sh li ha gia'
-            # controllati nel job build; qui sui file che si pubblicano)
-            cmp -n 8388608 "w541-coreboot-${VERSION}-${v}.rom" ../legacy/coreboot-4.22/coreboot.rom
+            # i primi 5 MiB (IFD, GbE, ME): quelli della 4.22 (verify-rom.sh li
+            # ha gia' controllati nel job build; qui sui file che si pubblicano)
+            cmp -n 5242880 "w541-coreboot-${VERSION}-${v}.rom" ../legacy/coreboot-4.22/coreboot.rom
           done
           ls -la
 

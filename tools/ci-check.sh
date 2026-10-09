@@ -13,7 +13,8 @@
 #   5. niente chiave Optimus NVIDIA nel repository (opvk.inc: solo locale)
 #   6. i due defconfig: diversi solo nella RAM init (cosi' mrc e nri
 #      differiscono solo li'), con IFD, ME e GbE (immagine completa), EDK2
-#      pinnato a un commit, i file in w541/ che tools/build.sh copia davvero
+#      pinnato a un commit, i file in w541/ che tools/build.sh copia davvero;
+#      la mappa configs/w541.fmd con le regioni scrivibili nel chip da 8 MiB
 #   7. il pin di coreboot in tools/build.sh: commit intero e describe coerente
 # L'applicazione delle patch e i .config li prova check.yml (job "patch").
 set -u
@@ -129,10 +130,26 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 	fi
 	# i file che i defconfig cercano in w541/ sono quelli che build.sh copia
 	tree_files="$(sed -n '/^TREE_FILES=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^.*/||p')"
-	for f in $(sed -n 's/^CONFIG_[A-Z0-9_]*_\(FILE\|PATH\)="w541\/\([^"]*\)"$/\2/p' configs/*.defconfig | sort -u); do
+	for f in $(sed -n 's/^CONFIG_[A-Z0-9_]*="w541\/\([^"]*\)"$/\1/p' configs/*.defconfig | sort -u); do
 		grep -qxF "${f}" <<< "${tree_files}" || bad "w541/${f} nei defconfig ma non in TREE_FILES di tools/build.sh"
 	done
-	ok "file in w541/: $(sed -n 's/^CONFIG_[A-Z0-9_]*_\(FILE\|PATH\)="w541\/\([^"]*\)"$/\2/p' configs/*.defconfig | sort -u | tr '\n' ' ')"
+	ok "file in w541/: $(sed -n 's/^CONFIG_[A-Z0-9_]*="w541\/\([^"]*\)"$/\1/p' configs/*.defconfig | sort -u | tr '\n' ' ')"
+	# la mappa del flash: le regioni scritte a ogni avvio nel chip da 8 MiB
+	# (0x500000-0x7FFFFF), FMAP e CBFS nel chip da 4 MiB
+	grep -qx 'CONFIG_FMDFILE="w541/w541.fmd"' configs/w541-mrc.defconfig || bad "w541-mrc: senza CONFIG_FMDFILE=\"w541/w541.fmd\""
+	if [ -f configs/w541.fmd ]; then
+		for r in RW_MRC_CACHE SMMSTORE RO_VPD; do
+			off="$(sed -n "s/^[[:space:]]*${r}@\(0x[0-9a-f]*\) .*/\1/p" configs/w541.fmd)"
+			[ -n "${off}" ] && [ $(( off )) -lt $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 8 MiB (offset in SI_BIOS sotto 0x300000)"
+		done
+		for r in FMAP "COREBOOT(CBFS)"; do
+			off="$(sed -n "s/^[[:space:]]*${r}@\(0x[0-9a-f]*\) .*/\1/p" configs/w541.fmd)"
+			[ -n "${off}" ] && [ $(( off )) -ge $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 4 MiB (offset in SI_BIOS da 0x300000)"
+		done
+		ok "w541.fmd: regioni scrivibili nel chip da 8 MiB, FMAP e CBFS nel chip da 4 MiB"
+	else
+		bad "configs/w541.fmd non c'e'"
+	fi
 fi
 
 step "pin di coreboot"

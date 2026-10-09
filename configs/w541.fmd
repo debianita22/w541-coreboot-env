@@ -1,0 +1,33 @@
+/*
+ * ThinkPad W541: due chip SPI, 8 MiB (0x000000-0x7FFFFF) e 4 MiB
+ * (0x800000-0xBFFFFF), visti come un flash da 12 MiB.
+ *
+ * Le regioni scritte a ogni avvio (training della RAM, variabili UEFI,
+ * VPD) stanno nel chip da 8 MiB, come nella build 24.08 che gira sul
+ * portatile e nelle immagini Libreboot per questa scheda: con la mappa
+ * di default (CBFS_SIZE=0x400000) finirebbero nel chip da 4 MiB, dove il
+ * salvataggio del training non e' provato e senza il quale la ripresa
+ * da S3 non funziona. coreboot (FMAP + CBFS) sta da solo nel chip da
+ * 4 MiB, che cosi' e' un'immagine completa per un programmatore esterno.
+ *
+ * SI_DESC, SI_GBE, SI_ME e SI_BIOS devono coincidere con le regioni del
+ * descrittore (blobs/ifd.bin): lo controlla ifdtool -t alla build.
+ * Dimensioni da rispettare: SMMSTORE = CONFIG_SMMSTORE_SIZE (0x80000),
+ * RW_MRC_CACHE = CONFIG_MRC_SETTINGS_CACHE_SIZE (0x10000),
+ * RO_VPD = CONFIG_VPD_FMAP_SIZE (0x4000).
+ */
+FLASH 0xc00000 {
+	SI_ALL@0x0 0x500000 {
+		SI_DESC@0x0 0x1000
+		SI_GBE@0x1000 0x2000
+		SI_ME@0x3000 0x4fd000
+	}
+	SI_BIOS@0x500000 0x700000 {
+		RW_MRC_CACHE@0x0 0x10000
+		SMMSTORE@0x10000 0x80000
+		RO_VPD@0x90000 0x4000
+		RW_UNUSED@0x94000 0x26c000
+		FMAP@0x300000 0x1000
+		COREBOOT(CBFS)@0x301000 0x3ff000
+	}
+}

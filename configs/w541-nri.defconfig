@@ -3,13 +3,14 @@
 # I file in w541/ li copia tools/build.sh da blobs/ e assets/.
 CONFIG_VENDOR_LENOVO=y
 CONFIG_BOARD_LENOVO_THINKPAD_W541=y
-# coreboot solo nei 4 MiB alti, cioe' nel chip da 4 MiB, come la 4.22
-# (il default della board e' 0x700000 e userebbe anche il chip da 8 MiB)
-CONFIG_CBFS_SIZE=0x400000
+# Mappa del flash: configs/w541.fmd (le regioni scritte a ogni avvio nel
+# chip da 8 MiB, coreboot da solo nel chip da 4 MiB: CBFS di 0x3ff000).
+# Con un FMDFILE Kconfig non chiede CBFS_SIZE.
+CONFIG_FMDFILE="w541/w541.fmd"
 
 # IFD, GbE e ME trattati come nella 4.22: regioni sbloccate, ME leggibile
 # dalla CPU, me_cleaner -S (della ME restano solo ROMP e BUP, piu' il bit
-# AltMeDisable). Gli 8 MiB bassi escono identici a quelli di
+# AltMeDisable). I primi 5 MiB escono identici a quelli di
 # legacy/coreboot-4.22/coreboot.rom: tools/verify-rom.sh lo controlla.
 CONFIG_HAVE_IFD_BIN=y
 CONFIG_IFD_BIN_PATH="w541/ifd.bin"
