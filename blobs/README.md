@@ -11,7 +11,7 @@ rest of the repository.
 | `ifd.bin` | 4 KiB | Intel flash descriptor: GbE `0x1000`, ME `0x3000-0x4FFFFF`, BIOS `0x500000-0xBFFFFF` | yes, with all regions unlocked, CPU read access to the ME region and the AltMeDisable strap set by `me_cleaner -S` |
 | `gbe.bin` | 8 KiB | GbE configuration, MAC address `54:ee:75:5c:68:de` | yes, unchanged, at `0x1000` |
 | `me.bin` | 5108 KiB | Intel ME firmware 9.1.32.1002, complete | yes, reduced by `me_cleaner -S` to ROMP and BUP |
-| `mrc.bin` | 186 KiB | Haswell memory reference code, the same as in the 4.22 image | `mrc` variant only, at `0xFFFA0000` |
+| `mrc.bin` | 187 KiB | Haswell memory reference code (version 1.6.1 build 2), taken from the coreboot 24.08 image that ran on the W541 before this project, on which S3 resume worked. The 4.22 image carries a different build of the same version (190180 bytes, `d368ba45…`), which hangs while restoring the memory on S3 resume | `mrc` variant only, at `0xFFFA0000` |
 | `vbios_10de_11fc_1.rom` | 94.5 KiB | NVIDIA Quadro K2100M VBIOS (PCI `10de:11fc`) | yes, as `pci10de,11fc.rom`, handed to the OS through ACPI `_ROM` |
 | `vbios_8086_0406_1.rom` | 64 KiB | Intel HD Graphics 4600 VBIOS (PCI `8086:0406`), modified | no: libgfxinit initializes the Intel GPU |
 | `vbios_8086_0416_1.rom` | 64 KiB | Intel VBIOS with PCI ID `8086:0416`; its checksum byte is wrong | no |

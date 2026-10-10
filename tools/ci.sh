@@ -166,9 +166,9 @@ cmd_notes() {
 	echo
 	if [ "${v}" = mrc ]; then
 		cat <<'EOF'
-RAM is initialized by Intel's `mrc.bin`, the same blob as in the coreboot 4.22
-image this repository started from (`legacy/coreboot-4.22`): the conservative
-choice.
+RAM is initialized by Intel's `mrc.bin`, the blob from the coreboot 24.08 image
+that ran on this W541 before this project (`blobs/README.md`): the
+conservative choice.
 EOF
 	else
 		cat <<EOF
@@ -231,10 +231,12 @@ pick it once with *Boot From File* in the boot manager (Esc at power-on).
 The NVIDIA GPU is **off by default**, as in upstream coreboot: turn it on in
 the setup menu (Esc at power-on), *Hardware* → *NVIDIA discrete GPU*.
 
-**Suspend to RAM (S3) does not resume yet**: the laptop sleeps and does not
-come back. Use suspend-to-idle meanwhile (\`mem_sleep_default=s2idle\` on the
-kernel command line). The event log records each entry into S3 and, after a
-resume that stopped, its last POST code: [diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang).
+**Suspend to RAM (S3)**: the \`mrc\` images up to v1.0.5 did not resume, because
+their \`mrc.bin\` (the 4.22 build) hangs while restoring the memory on resume.
+From v1.0.6 the image carries the \`mrc.bin\` of the 24.08 image that resumed on
+this laptop; the \`nri\` image never used it. If a resume still stops, the event
+log has its last POST code: [diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang);
+suspend-to-idle (\`mem_sleep_default=s2idle\`) works meanwhile.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload

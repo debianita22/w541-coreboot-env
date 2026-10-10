@@ -16,7 +16,7 @@ and publishes two complete flash images per version:
 
 | Release | RAM initialization | Status |
 |---|---|---|
-| `vX.Y.Z-mrc` | Intel `mrc.bin`, the same blob as the coreboot 4.22 image in `legacy/` | the conservative choice |
+| `vX.Y.Z-mrc` | Intel `mrc.bin`, the blob from the coreboot 24.08 image that ran on this W541 ([blobs/README.md](blobs/README.md)) | the conservative choice |
 | `vX.Y.Z-nri` | coreboot's native RAM init (NRI), no `mrc.bin` | always a pre-release: upstream still labels it *[NOT COMPLETE]* ([Libreboot](https://libreboot.org/docs/install/w541_external.html) ships it on the W541) |
 
 Everything else is the same in the two variants.
@@ -107,10 +107,13 @@ Inside coreboot:
 > on in the setup menu: *Hardware* → *NVIDIA discrete GPU*.
 
 > [!WARNING]
-> Suspend to RAM (S3) does not resume yet: the laptop sleeps and does not
-> come back. Use suspend-to-idle meanwhile (`mem_sleep_default=s2idle` on
-> the kernel command line); [docs/flashing.md](docs/flashing.md#diagnosing-a-hang)
-> shows how to find where a resume stops.
+> Suspend to RAM (S3): with the `mrc` images up to v1.0.5 the laptop sleeps
+> and does not come back, because that `mrc.bin` build hangs while
+> restoring the memory on resume (POST code `0x3a`, ten lines into its
+> log). From v1.0.6 the `mrc` image carries the `mrc.bin` of the 24.08
+> image that resumed on this laptop. If a resume still stops,
+> [docs/flashing.md](docs/flashing.md#diagnosing-a-hang) shows how to find
+> where, and suspend-to-idle (`mem_sleep_default=s2idle`) works meanwhile.
 
 ## Flashing
 

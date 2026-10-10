@@ -1,4 +1,5 @@
-# ThinkPad W541, RAM init con mrc.bin (lo stesso della build 4.22).
+# ThinkPad W541, RAM init con mrc.bin (quello della build 24.08 che girava sul
+# portatile: con quello della 4.22 la ripresa da S3 si ferma dentro il blob).
 # Immagine completa da 12 MiB: IFD, GbE e ME di blobs/ piu' coreboot.
 # I file in w541/ li copia tools/build.sh da blobs/ e assets/.
 CONFIG_VENDOR_LENOVO=y
