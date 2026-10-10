@@ -30,6 +30,23 @@ Each release has the complete image and the two chip images.
 - AC adapter connected, battery charged.
 - `flashrom` (`sudo apt install flashrom`). With two chips it switches to
   hardware sequencing by itself and reads and writes all 12 MiB.
+- Recent kernels drive the SPI controller themselves (`spi-intel`), and
+  flashrom 1.4 and later then go through `/dev/mtd0`: it reports "Opened
+  /dev/mtd0" and an "Opaque flash chip" of 8192 kB, sees one chip only and
+  has no descriptor regions, so `--ifd -i bios` cannot work. Release the
+  controller first, until the next reboot:
+
+  ```sh
+  lsmod | grep spi_intel                       # modules loaded?
+  sudo modprobe -r spi_intel_platform spi_intel
+  # built into the kernel instead: unbind the device
+  ls /sys/bus/platform/drivers/intel-spi/      # e.g. intel-spi
+  echo intel-spi | sudo tee /sys/bus/platform/drivers/intel-spi/unbind
+  ```
+
+  flashrom must then print `Found chipset "Intel Lynx Point"` and no
+  `/dev/mtd0`. If it refuses the laptop, add `:laptop=force_I_want_a_brick`
+  to `-p internal` (the W541 EC has its own flash, not the SPI chips).
 - Back up the whole flash, twice, and keep the copies off the laptop:
 
   ```sh

@@ -219,6 +219,9 @@ coreboot; leave the 8 MiB chip as it is. \`${chip8}\` would give the laptop
 the descriptor, ME and MAC address of another machine: see
 [docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md#external-programmer).
 
+If flashrom says "Opened /dev/mtd0" and finds an 8192 kB "Opaque flash chip",
+the kernel owns the SPI controller: run \`sudo modprobe -r spi_intel_platform
+spi_intel\` first ([details](https://github.com/${repo}/blob/main/docs/flashing.md#before-you-start)).
 If flashrom cannot map the flash, boot once with \`iomem=relaxed\` on the
 kernel command line. Flashing resets the UEFI settings and boot entries: the
 firmware then boots \`\\EFI\\BOOT\\BOOTX64.EFI\` from each disk, so install your
