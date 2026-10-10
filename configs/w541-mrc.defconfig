@@ -39,6 +39,11 @@ CONFIG_H8_SUPPORT_BT_ON_WIFI=y
 CONFIG_H8_FLASH_LEDS_ON_DEATH=y
 CONFIG_PCIEXP_HOTPLUG=y
 
+# Registro degli eventi nel flash (RW_ELOG di configs/w541.fmd): avvii,
+# sorgenti di wake, cadute di alimentazione, reset del watchdog. Si legge
+# con elogtool (util/cbfstool di coreboot).
+CONFIG_ELOG=y
+
 # Numero di serie e versione SMBIOS da VPD, come la 4.22
 CONFIG_VPD=y
 CONFIG_SMBIOS_SERIAL_FROM_VPD=y

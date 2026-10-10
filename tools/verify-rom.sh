@@ -26,7 +26,7 @@
 #      scrivibili vuote: niente variabili UEFI, seriale o training della RAM
 #      di un'altra macchina)
 #   2. FMAP come configs/w541.fmd: SI_BIOS 0x500000-0xBFFFFF; RW_MRC_CACHE,
-#      SMMSTORE e RO_VPD nel chip da 8 MiB (sotto 0x800000); FMAP e COREBOOT
+#      SMMSTORE, RO_VPD e RW_ELOG nel chip da 8 MiB (sotto 0x800000); FMAP e COREBOOT
 #      nel chip da 4 MiB (da 0x800000), cosi' l'immagine di quel chip e' un
 #      coreboot completo
 #   3. CBFS: i file di ogni build; mrc.bin solo nella mrc, uguale a
@@ -139,7 +139,7 @@ else
 	bad "FMAP: SI_BIOS ${boff:-?}+${bsize:-?}, atteso 0x500000+0x700000"
 fi
 # le regioni scritte a ogni avvio nel chip da 8 MiB, vuote
-for r in RW_MRC_CACHE SMMSTORE RO_VPD; do
+for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG; do
 	read -r rsize roff <<< "$(region "${r}")"
 	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
 	if [ "${roff}" -lt "${INTEL_SIZE}" ] || [ $(( roff + rsize )) -gt "${LOW_SIZE}" ]; then

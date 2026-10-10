@@ -14,7 +14,8 @@
  * descrittore (blobs/ifd.bin): lo controlla ifdtool -t alla build.
  * Dimensioni da rispettare: SMMSTORE = CONFIG_SMMSTORE_SIZE (0x80000),
  * RW_MRC_CACHE = CONFIG_MRC_SETTINGS_CACHE_SIZE (0x10000),
- * RO_VPD = CONFIG_VPD_FMAP_SIZE (0x4000).
+ * RO_VPD = CONFIG_VPD_FMAP_SIZE (0x4000). RW_ELOG e' il registro degli
+ * eventi (CONFIG_ELOG): coreboot lo formatta al primo avvio.
  */
 FLASH 0xc00000 {
 	SI_ALL@0x0 0x500000 {
@@ -26,7 +27,8 @@ FLASH 0xc00000 {
 		RW_MRC_CACHE@0x0 0x10000
 		SMMSTORE@0x10000 0x80000
 		RO_VPD@0x90000 0x4000
-		RW_UNUSED@0x94000 0x26c000
+		RW_ELOG@0x94000 0x4000
+		RW_UNUSED@0x98000 0x268000
 		FMAP@0x300000 0x1000
 		COREBOOT(CBFS)@0x301000 0x3ff000
 	}

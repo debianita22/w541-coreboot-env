@@ -45,8 +45,8 @@ The W541 flash is two chips seen as one 12 MiB space. The layout is
 | `0x000000-0x000FFF` | 8 MiB | Intel flash descriptor (IFD), all regions unlocked |
 | `0x001000-0x002FFF` | 8 MiB | GbE, with the MAC address of the machine the blobs come from |
 | `0x003000-0x4FFFFF` | 8 MiB | Intel ME 9.1, reduced with `me_cleaner -S` (ROMP and BUP only, AltMeDisable set) |
-| `0x500000-0x593FFF` | 8 MiB | regions coreboot writes at runtime, empty in the image: `RW_MRC_CACHE` (RAM training), `SMMSTORE` (UEFI variables and settings), `RO_VPD` |
-| `0x594000-0x7FFFFF` | 8 MiB | unused (`0xFF`) |
+| `0x500000-0x597FFF` | 8 MiB | regions coreboot writes at runtime, empty in the image: `RW_MRC_CACHE` (RAM training), `SMMSTORE` (UEFI variables and settings), `RO_VPD`, `RW_ELOG` (event log) |
+| `0x598000-0x7FFFFF` | 8 MiB | unused (`0xFF`) |
 | `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and `COREBOOT` (CBFS): all of coreboot |
 
 The regions written at runtime sit on the 8 MiB chip, as in the coreboot
@@ -90,6 +90,9 @@ Inside coreboot:
   Settings live in UEFI variables in the `SMMSTORE` flash region and apply
   at the next boot. XMP memory profiles are not supported: the memory runs
   at its JEDEC timings;
+- an event log in the `RW_ELOG` flash region (boots, wake sources, power
+  failures, watchdog resets), read with coreboot's `elogtool`
+  ([docs/flashing.md](docs/flashing.md#first-boot-and-settings));
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI

@@ -7,8 +7,8 @@ The images use the map in [`configs/w541.fmd`](../configs/w541.fmd):
 | Range | Chip | Contents |
 |---|---|---|
 | `0x000000-0x4FFFFF` | 8 MiB | descriptor, GbE, Intel ME: the same in every release, from `blobs/` |
-| `0x500000-0x593FFF` | 8 MiB | `RW_MRC_CACHE`, `SMMSTORE`, `RO_VPD`: written by coreboot at runtime, empty in the image |
-| `0x594000-0x7FFFFF` | 8 MiB | unused |
+| `0x500000-0x597FFF` | 8 MiB | `RW_MRC_CACHE`, `SMMSTORE`, `RO_VPD`, `RW_ELOG`: written by coreboot at runtime, empty in the image |
+| `0x598000-0x7FFFFF` | 8 MiB | unused |
 | `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and CBFS: all of coreboot |
 
 Each release has the complete image and the two chip images.
@@ -116,6 +116,16 @@ same way.
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
   fatal error (`H8_FLASH_LEDS_ON_DEATH`), for example a failed memory
   initialization: see [Recovery](#recovery).
+- Event log: coreboot records every boot, the wake source of a resume
+  (lid, Fn, a GPE), power failures, watchdog resets and the ME state in
+  the `RW_ELOG` region, which starts empty and is erased by a flash. Read
+  it with `elogtool` from coreboot's `util/cbfstool` (`make -C util/cbfstool
+  elogtool`, it needs libflashrom), or dump the region with flashrom:
+
+  ```sh
+  sudo elogtool list                                            # reads RW_ELOG through flashrom
+  sudo flashrom -p internal --fmap -i RW_ELOG -r elog.bin && elogtool list -f elog.bin
+  ```
 - Settings: Esc at power-on opens the setup menu, a grid of icons. Arrow
   keys, Enter and Esc, or the TrackPoint and touchpad, move around; F10
   saves, F9 loads the defaults of every category, not only the open one.

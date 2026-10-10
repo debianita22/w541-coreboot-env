@@ -199,9 +199,9 @@ byte-identical to the coreboot 4.22 image in \`legacy/coreboot-4.22\`:
 unlocked regions, ME reduced by \`me_cleaner -S\`, and the GbE region with the
 MAC address of the machine these blobs come from. Then, still on the 8 MiB
 chip, the regions coreboot writes at runtime (RAM training, UEFI variables,
-VPD), empty. coreboot itself is alone on the 4 MiB chip. An update from
-Linux writes only the BIOS region, as below: it keeps the machine's own
-descriptor, ME and MAC address.
+VPD, event log), empty. coreboot itself is alone on the 4 MiB chip. An
+update from Linux writes only the BIOS region, as below: it keeps the
+machine's own descriptor, ME and MAC address.
 
 **Update from Linux**, on a W541 that already runs coreboot with an unlocked
 flash: only the BIOS region is written (details, VPD and recovery in

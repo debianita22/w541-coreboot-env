@@ -164,7 +164,7 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 	# (0x500000-0x7FFFFF), FMAP e CBFS nel chip da 4 MiB
 	grep -qx 'CONFIG_FMDFILE="w541/w541.fmd"' configs/w541-mrc.defconfig || bad "w541-mrc: senza CONFIG_FMDFILE=\"w541/w541.fmd\""
 	if [ -f configs/w541.fmd ]; then
-		for r in RW_MRC_CACHE SMMSTORE RO_VPD; do
+		for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG; do
 			off="$(sed -n "s/^[[:space:]]*${r}@\(0x[0-9a-f]*\) .*/\1/p" configs/w541.fmd)"
 			[ -n "${off}" ] && [ $(( off )) -lt $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 8 MiB (offset in SI_BIOS sotto 0x300000)"
 		done
