@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:55:12 +0200
+Subject: [PATCH 28/35] cpu/intel/haswell: Add an option for VT-x
+
+VMX is enabled according to ENABLE_VMX. Add a vmx option, defaulting to
+ENABLE_VMX, and a CFR object for it, so that it can be changed from the
+setup menu. IA32_FEATURE_CONTROL is then locked as before.
+
+The lock bit is only cleared by a power-up reset, so after a warm reboot
+the MSR still holds the previous VMX state and a changed option would not
+apply. As mb/prodrive/hermes does, romstage checks the locked state
+against the option before raminit and does a full reset when they
+differ. S3 resume always starts with the MSR unlocked and is skipped.
+So are builds without SET_IA32_FC_LOCK_BIT: the OS may then lock the MSR
+with its own choice, and a reset would not change that.
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/cpu/intel/haswell/cfr.h              |  8 ++++++
+ src/cpu/intel/haswell/haswell.h          |  3 +++
+ src/cpu/intel/haswell/haswell_init.c     | 11 +++++---
+ src/cpu/intel/haswell/romstage.c         | 32 ++++++++++++++++++++++++
+ src/northbridge/intel/haswell/romstage.c |  5 ++++
+ 5 files changed, 55 insertions(+), 4 deletions(-)
+
+diff --git a/src/cpu/intel/haswell/cfr.h b/src/cpu/intel/haswell/cfr.h
+index c00a05986..477eaffd7 100644
+--- a/src/cpu/intel/haswell/cfr.h
++++ b/src/cpu/intel/haswell/cfr.h
+@@ -41,4 +41,12 @@ static const struct sm_object c_states = SM_DECLARE_BOOL({
+ 	.default_value	= true,
+ });
+ 
++static const struct sm_object vmx = SM_DECLARE_BOOL({
++	.opt_name	= "vmx",
++	.ui_name	= "Intel VT-x",
++	.ui_helptext	= "Intel Virtualization Technology: hardware support for\n"
++			  "virtual machines (VMX).",
++	.default_value	= CONFIG(ENABLE_VMX),
++});
++
+ #endif /* _CPU_INTEL_HASWELL_CFR_H_ */
+diff --git a/src/cpu/intel/haswell/haswell.h b/src/cpu/intel/haswell/haswell.h
+index 8826904e4..0cca857dc 100644
+--- a/src/cpu/intel/haswell/haswell.h
++++ b/src/cpu/intel/haswell/haswell.h
+@@ -174,6 +174,9 @@ bool haswell_c_states_enabled(void);
+ 
+ void set_max_freq(void);
+ 
++/* romstage.c: full reset if the vmx option differs from the locked state */
++void haswell_check_vmx_option(void);
++
+ /* pcode_mailbox.c */
+ int pcode_ready(void);
+ u32 pcode_mailbox_read(u32 command);
+diff --git a/src/cpu/intel/haswell/haswell_init.c b/src/cpu/intel/haswell/haswell_init.c
+index 2ff08cdec..526e7f7d1 100644
+--- a/src/cpu/intel/haswell/haswell_init.c
++++ b/src/cpu/intel/haswell/haswell_init.c
+@@ -350,6 +350,7 @@ static struct {
+ 	bool eist;
+ 	bool turbo;
+ 	bool c_states;
++	bool vmx;
+ } cpu_options;
+ 
+ static void read_cpu_options(void)
+@@ -361,11 +362,12 @@ static void read_cpu_options(void)
+ 	/* Turbo Boost needs P-states */
+ 	cpu_options.turbo = cpu_options.eist && get_uint_option("turbo_mode", 1);
+ 	cpu_options.c_states = get_uint_option("c_states", 1);
++	cpu_options.vmx = get_uint_option("vmx", CONFIG(ENABLE_VMX));
+ 	cpu_options.valid = true;
+ 
+-	printk(BIOS_DEBUG, "CPU: SpeedStep %s, Turbo Boost %s, C-states %s\n",
++	printk(BIOS_DEBUG, "CPU: SpeedStep %s, Turbo Boost %s, C-states %s, VT-x %s\n",
+ 	       cpu_options.eist ? "on" : "off", cpu_options.turbo ? "on" : "off",
+-	       cpu_options.c_states ? "on" : "off");
++	       cpu_options.c_states ? "on" : "off", cpu_options.vmx ? "on" : "off");
+ }
+ 
+ bool haswell_eist_enabled(void)
+@@ -565,8 +567,9 @@ static void cpu_core_init(struct device *cpu)
+ 
+ 	enable_lapic_tpr();
+ 
+-	/* Set virtualization based on Kconfig option */
+-	set_vmx_and_lock();
++	/* Set virtualization based on the vmx option (default: Kconfig) */
++	set_feature_ctrl_vmx_arg(cpu_options.vmx);
++	set_feature_ctrl_lock();
+ 
+ 	set_aesni_lock();
+ 
+diff --git a/src/cpu/intel/haswell/romstage.c b/src/cpu/intel/haswell/romstage.c
+index c74549438..b54cb6204 100644
+--- a/src/cpu/intel/haswell/romstage.c
++++ b/src/cpu/intel/haswell/romstage.c
+@@ -1,8 +1,12 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
++#include <arch/cpu.h>
++#include <cf9_reset.h>
+ #include <console/console.h>
+ #include <cpu/intel/haswell/haswell.h>
+ #include <cpu/x86/msr.h>
++#include <option.h>
++#include <types.h>
+ 
+ void set_max_freq(void)
+ {
+@@ -27,3 +31,31 @@ void set_max_freq(void)
+ 	printk(BIOS_DEBUG, "CPU: frequency set to %d MHz\n",
+ 	       ((perf_ctl.lo >> 8) & 0xff) * CPU_BCLK);
+ }
++
++/*
++ * IA32_FEATURE_CONTROL stays locked across warm resets, so a changed vmx
++ * option only applies after a full reset. Check before raminit, so that
++ * the reset does not waste a memory training.
++ */
++void haswell_check_vmx_option(void)
++{
++	/* If coreboot does not lock the MSR, the OS may lock it with its own choice */
++	if (!CONFIG(SET_IA32_FC_LOCK_BIT))
++		return;
++
++	if (!(cpu_get_feature_flags_ecx() & (CPUID_VMX | CPUID_SMX)))
++		return;
++
++	const msr_t msr = rdmsr(IA32_FEATURE_CONTROL);
++	if (!(msr.lo & FEATURE_CONTROL_LOCK_BIT))
++		return;
++
++	const bool enabled = msr.lo & FEATURE_ENABLE_VMX;
++	const bool wanted = get_uint_option("vmx", CONFIG(ENABLE_VMX));
++	if (enabled == wanted)
++		return;
++
++	printk(BIOS_INFO, "VT-x: IA32_FEATURE_CONTROL locked with VMX %s, full reset to %s it\n",
++	       enabled ? "on" : "off", wanted ? "enable" : "disable");
++	full_reset();
++}
+diff --git a/src/northbridge/intel/haswell/romstage.c b/src/northbridge/intel/haswell/romstage.c
+index 719fb027d..229b7d6b2 100644
+--- a/src/northbridge/intel/haswell/romstage.c
++++ b/src/northbridge/intel/haswell/romstage.c
+@@ -2,6 +2,7 @@
+ 
+ #include <arch/romstage.h>
+ #include <console/console.h>
++#include <cpu/intel/haswell/haswell.h>
+ #include <device/mmio.h>
+ #include <device/pci_ops.h>
+ #include <elog.h>
+@@ -30,6 +31,10 @@ void mainboard_romstage_entry(void)
+ 
+ 	const bool s3resume = southbridge_detect_s3_resume();
+ 
++	/* S3 resume always starts with IA32_FEATURE_CONTROL unlocked */
++	if (!s3resume)
++		haswell_check_vmx_option();
++
+ 	elog_boot_notify(s3resume);
+ 
+ 	/* Prepare USB controller early in S3 resume */
+-- 
+2.43.0
+

@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:57:52 +0200
+Subject: [PATCH 31/35] mb/lenovo/haswell: Add a cooling policy option
+
+Add a cooling_policy option to the setup menu:
+
+- Active (default, as before): the OS runs the fan at full speed from
+  80 C, 10 degrees below the passive trip point, and throttles the CPU
+  from 90 C.
+- Passive: the OS throttles the CPU from 90 C and only forces the fan to
+  full speed from 95 C. Below that, the EC runs the fan on its own curve.
+
+The passive policy sets F0ON in GNVS, which THM0 uses as its active trip
+point with H8_ACTIVE_TRIP_FROM_GNVS. The critical trip point stays at
+100 C.
+
+TEST=Built lenovo/w541.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/acpi_tables.c   | 11 +++++++++++
+ src/mainboard/lenovo/haswell/cfr.c           | 18 ++++++++++++++++++
+ src/mainboard/lenovo/haswell/setup_options.h | 12 ++++++++++++
+ 3 files changed, 41 insertions(+)
+ create mode 100644 src/mainboard/lenovo/haswell/setup_options.h
+
+diff --git a/src/mainboard/lenovo/haswell/acpi_tables.c b/src/mainboard/lenovo/haswell/acpi_tables.c
+index 0301443f8..a232eadc6 100644
+--- a/src/mainboard/lenovo/haswell/acpi_tables.c
++++ b/src/mainboard/lenovo/haswell/acpi_tables.c
+@@ -1,8 +1,11 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
+ #include <acpi/acpi_gnvs.h>
++#include <option.h>
+ #include <soc/nvs.h>
+ 
++#include "setup_options.h"
++
+ void mainboard_fill_gnvs(struct global_nvs *gnvs)
+ {
+ 	/* The lid is open by default. */
+@@ -12,4 +15,12 @@ void mainboard_fill_gnvs(struct global_nvs *gnvs)
+ 	gnvs->tcrt = 100;
+ 	/* Temperature at which OS will throttle CPU. */
+ 	gnvs->tpsv = 90;
++
++	/*
++	 * Temperature at which the OS runs the fan at full speed: 0 keeps the
++	 * default, 10 degrees below the passive trip point. With the passive
++	 * policy, throttle first and force the fan only 5 degrees above it.
++	 */
++	if (get_uint_option("cooling_policy", COOLING_POLICY_ACTIVE) == COOLING_POLICY_PASSIVE)
++		gnvs->f0on = gnvs->tpsv + 5;
+ }
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 56b231570..d614c7dc1 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -6,6 +6,8 @@
+ #include <drivers/option/cfr_frontend.h>
+ #include <southbridge/intel/lynxpoint/cfr.h>
+ 
++#include "setup_options.h"
++
+ /*
+  * The upper bounds leave some headroom over the defaults of the fastest
+  * CPU offered in these systems (i7-4940MX: 57 W TDP, 71 W PL2).
+@@ -43,6 +45,21 @@ static const struct sm_object enable_dual_graphics = SM_DECLARE_BOOL({
+ 	.default_value	= false,
+ });
+ 
++static const struct sm_object cooling_policy = SM_DECLARE_ENUM({
++	.opt_name	= "cooling_policy",
++	.ui_name	= "Cooling policy",
++	.ui_helptext	= "Active: the OS runs the fan at full speed from 80 C and\n"
++			  "throttles the CPU from 90 C.\n"
++			  "Passive: the OS throttles the CPU from 90 C and forces the\n"
++			  "fan to full speed only from 95 C; below that the EC runs\n"
++			  "the fan on its own curve. Quieter, slower under load.",
++	.default_value	= COOLING_POLICY_ACTIVE,
++	.values		= (const struct sm_enum_value[]) {
++				{ "Active",	COOLING_POLICY_ACTIVE	},
++				{ "Passive",	COOLING_POLICY_PASSIVE	},
++				SM_ENUM_VALUE_END			},
++});
++
+ static struct sm_obj_form system = {
+ 	.ui_name = "System",
+ 	.obj_list = (const struct sm_object *[]) {
+@@ -59,6 +76,7 @@ static struct sm_obj_form processor = {
+ 		&tdp_pl1_override,
+ 		&tdp_pl2_override,
+ 		&cpu_power_limit_lock,
++		&cooling_policy,
+ 		NULL
+ 	},
+ };
+diff --git a/src/mainboard/lenovo/haswell/setup_options.h b/src/mainboard/lenovo/haswell/setup_options.h
+new file mode 100644
+index 000000000..e1aac2bf7
+--- /dev/null
++++ b/src/mainboard/lenovo/haswell/setup_options.h
+@@ -0,0 +1,12 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef MAINBOARD_LENOVO_HASWELL_SETUP_OPTIONS_H
++#define MAINBOARD_LENOVO_HASWELL_SETUP_OPTIONS_H
++
++/* Values of the cooling_policy option */
++enum cooling_policy {
++	COOLING_POLICY_ACTIVE	= 0,	/* fan at full speed before throttling */
++	COOLING_POLICY_PASSIVE	= 1,	/* throttling before the fan at full speed */
++};
++
++#endif /* MAINBOARD_LENOVO_HASWELL_SETUP_OPTIONS_H */
+-- 
+2.43.0
+

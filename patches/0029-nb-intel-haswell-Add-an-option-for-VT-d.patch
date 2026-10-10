@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:55:33 +0200
+Subject: [PATCH 29/35] nb/intel/haswell: Add an option for VT-d
+
+The DMA remapping engines are always set up when the CPU supports
+VT-d. Add a vtd option, enabled by default, and a CFR object for it.
+When it is disabled, northbridge_setup_iommu() leaves GFXVTBAR and
+VTVC0BAR disabled.
+
+A DMAR table without any remapping hardware unit only makes the OS
+complain, so only create it when at least one of the BARs is enabled.
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/acpi.c       | 4 ++++
+ src/northbridge/intel/haswell/cfr.h        | 8 ++++++++
+ src/northbridge/intel/haswell/early_init.c | 6 ++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/src/northbridge/intel/haswell/acpi.c b/src/northbridge/intel/haswell/acpi.c
+index 58c1f5bba..b4a7f5cab 100644
+--- a/src/northbridge/intel/haswell/acpi.c
++++ b/src/northbridge/intel/haswell/acpi.c
+@@ -76,6 +76,10 @@ unsigned long northbridge_write_acpi_tables(const struct device *const dev,
+ 	if (capid0_a & VTD_DISABLE)
+ 		return current;
+ 
++	/* No remapping engine enabled (vtd option): no DMAR table */
++	if (!(mchbar_read32(GFXVTBAR) & 1) && !(mchbar_read32(VTVC0BAR) & 1))
++		return current;
++
+ 	acpi_dmar_t *const dmar = (acpi_dmar_t *)current;
+ 	printk(BIOS_DEBUG, "ACPI:    * DMAR\n");
+ 	acpi_create_dmar(dmar, DMAR_INTR_REMAP, acpi_fill_dmar);
+diff --git a/src/northbridge/intel/haswell/cfr.h b/src/northbridge/intel/haswell/cfr.h
+index 3917ba1b7..a1d025994 100644
+--- a/src/northbridge/intel/haswell/cfr.h
++++ b/src/northbridge/intel/haswell/cfr.h
+@@ -51,4 +51,12 @@ static const struct sm_object gfx_uma_size_mrc = SM_DECLARE_COMMENT({
+ 			  "The build with the native RAM init makes it configurable.",
+ });
+ 
++static const struct sm_object vtd = SM_DECLARE_BOOL({
++	.opt_name	= "vtd",
++	.ui_name	= "Intel VT-d",
++	.ui_helptext	= "DMA remapping (IOMMU): isolates devices from memory they\n"
++			  "do not own and allows PCI passthrough to virtual machines.",
++	.default_value	= true,
++});
++
+ #endif /* NB_INTEL_HASWELL_CFR_H */
+diff --git a/src/northbridge/intel/haswell/early_init.c b/src/northbridge/intel/haswell/early_init.c
+index 37742a523..f58a7b04f 100644
+--- a/src/northbridge/intel/haswell/early_init.c
++++ b/src/northbridge/intel/haswell/early_init.c
+@@ -152,6 +152,12 @@ static void northbridge_setup_iommu(void)
+ 	if (capid0_a & VTD_DISABLE)
+ 		return;
+ 
++	/* Leave the remapping engines disabled: no DMAR table either */
++	if (!get_uint_option("vtd", 1)) {
++		printk(BIOS_DEBUG, "VT-d disabled by the vtd option\n");
++		return;
++	}
++
+ 	/* Setup BARs: zeroize top 32 bits; set enable bit */
+ 	mchbar_write32(GFXVTBAR + 4, GFXVT_BASE_ADDRESS >> 32);
+ 	mchbar_write32(GFXVTBAR + 0, GFXVT_BASE_ADDRESS | 1);
+-- 
+2.43.0
+

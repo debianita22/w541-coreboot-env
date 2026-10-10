@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:50:39 +0200
+Subject: [PATCH 26/35] nb/intel/haswell: Make the iGPU stolen memory
+ configurable with NRI
+
+The native RAM init always reserves 64 MiB of graphics stolen memory and
+writes GGC itself, over the value haswell_setup_igd() programmed. Add a
+gfx_uma_size option (32, 64, 96, 128, 256 or 512 MiB, default 64 MiB as
+before) that both use, through haswell_igd_gms(), so GGC and the memory
+map always agree. Values that are not in the list fall back to the
+default.
+
+MRC reserves a fixed 32 MiB whatever GGC says, so with MRC the option is
+not read and GGC keeps the 32 MiB it has today. The CFR objects reflect
+that: the option is suppressed with MRC, and a comment shows the fixed
+size instead.
+
+The GTT stays at 2 MiB. Only GMS values up to 512 MiB are offered, where
+the encoding is linear in 32 MiB units, which is how Linux computes the
+stolen memory size on Haswell. The size takes effect on the next boot;
+changing it between suspend and resume changes the memory map.
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/cfr.h           | 27 +++++++++++++++++++
+ src/northbridge/intel/haswell/early_init.c    | 23 +++++++++++++++-
+ src/northbridge/intel/haswell/haswell.h       | 16 +++++++++++
+ .../intel/haswell/native_raminit/memory_map.c |  4 +--
+ 4 files changed, 67 insertions(+), 3 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/cfr.h b/src/northbridge/intel/haswell/cfr.h
+index 7548a4560..3917ba1b7 100644
+--- a/src/northbridge/intel/haswell/cfr.h
++++ b/src/northbridge/intel/haswell/cfr.h
+@@ -24,4 +24,31 @@ static const struct sm_object gfx_aperture_size = SM_DECLARE_ENUM({
+ 				SM_ENUM_VALUE_END			},
+ });
+ 
++/* Graphics stolen memory: only the native RAM init can change it */
++static const struct sm_object gfx_uma_size = SM_DECLARE_ENUM({
++	.flags		= CONFIG(USE_NATIVE_RAMINIT) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "gfx_uma_size",
++	.ui_name	= "DVMT pre-allocated memory",
++	.ui_helptext	= "Memory reserved at boot for the integrated GPU (graphics\n"
++			  "stolen memory), taken from system RAM. Takes effect at the\n"
++			  "next boot.",
++	.default_value	= IGD_UMA_SIZE_64MB,
++	.values		= (const struct sm_enum_value[]) {
++				{ "32 MB",	IGD_UMA_SIZE_32MB	},
++				{ "64 MB",	IGD_UMA_SIZE_64MB	},
++				{ "96 MB",	IGD_UMA_SIZE_96MB	},
++				{ "128 MB",	IGD_UMA_SIZE_128MB	},
++				{ "256 MB",	IGD_UMA_SIZE_256MB	},
++				{ "512 MB",	IGD_UMA_SIZE_512MB	},
++				SM_ENUM_VALUE_END			},
++});
++
++/* What MRC reserves instead, shown in place of gfx_uma_size */
++static const struct sm_object gfx_uma_size_mrc = SM_DECLARE_COMMENT({
++	.flags		= CONFIG(USE_NATIVE_RAMINIT) ? CFR_OPTFLAG_SUPPRESS : 0,
++	.ui_name	= "DVMT pre-allocated memory: 32 MB (set by mrc.bin)",
++	.ui_helptext	= "MRC reserves a fixed amount of graphics stolen memory.\n"
++			  "The build with the native RAM init makes it configurable.",
++});
++
+ #endif /* NB_INTEL_HASWELL_CFR_H */
+diff --git a/src/northbridge/intel/haswell/early_init.c b/src/northbridge/intel/haswell/early_init.c
+index 4b0e4acae..37742a523 100644
+--- a/src/northbridge/intel/haswell/early_init.c
++++ b/src/northbridge/intel/haswell/early_init.c
+@@ -36,6 +36,27 @@ static void haswell_setup_bars(void)
+ 	printk(BIOS_DEBUG, " done.\n");
+ }
+ 
++u8 haswell_igd_gms(void)
++{
++	/* MRC reserves a fixed 32 MiB whatever GGC says: keep GGC consistent */
++	if (!CONFIG(USE_NATIVE_RAMINIT))
++		return IGD_UMA_SIZE_32MB;
++
++	const unsigned int gms = get_uint_option("gfx_uma_size", IGD_UMA_SIZE_64MB);
++	switch (gms) {
++	case IGD_UMA_SIZE_32MB:
++	case IGD_UMA_SIZE_64MB:
++	case IGD_UMA_SIZE_96MB:
++	case IGD_UMA_SIZE_128MB:
++	case IGD_UMA_SIZE_256MB:
++	case IGD_UMA_SIZE_512MB:
++		return gms;
++	default:
++		printk(BIOS_WARNING, "IGD: invalid gfx_uma_size %u, using 64 MiB\n", gms);
++		return IGD_UMA_SIZE_64MB;
++	}
++}
++
+ static void haswell_setup_igd(void)
+ {
+ 	bool igd_enabled;
+@@ -48,7 +69,7 @@ static void haswell_setup_igd(void)
+ 	ggc = pci_read_config16(HOST_BRIDGE, GGC);
+ 	ggc &= ~0x3f8;
+ 	if (igd_enabled) {
+-		ggc |= GGC_GTT_2MB | GGC_IGD_MEM_IN_32MB_UNITS(1);
++		ggc |= GGC_GTT_2MB | GGC_IGD_MEM_IN_32MB_UNITS(haswell_igd_gms());
+ 		ggc &= ~GGC_DISABLE_VGA_IO_DECODE;
+ 	} else {
+ 		ggc |= GGC_GTT_0MB | GGC_IGD_MEM_IN_32MB_UNITS(0) | GGC_DISABLE_VGA_IO_DECODE;
+diff --git a/src/northbridge/intel/haswell/haswell.h b/src/northbridge/intel/haswell/haswell.h
+index 316ee2341..35d2f8dbc 100644
+--- a/src/northbridge/intel/haswell/haswell.h
++++ b/src/northbridge/intel/haswell/haswell.h
+@@ -36,6 +36,22 @@ enum igd_aperture_size {
+ /* Program MSAC with the gfx_aperture_size option and check that it sticks */
+ void haswell_igd_set_aperture(void);
+ 
++/* Values of the gfx_uma_size option: GGC[7:3] (GMS), in 32 MiB units */
++enum igd_uma_size {
++	IGD_UMA_SIZE_32MB  = 1,
++	IGD_UMA_SIZE_64MB  = 2,
++	IGD_UMA_SIZE_96MB  = 3,
++	IGD_UMA_SIZE_128MB = 4,
++	IGD_UMA_SIZE_256MB = 8,
++	IGD_UMA_SIZE_512MB = 16,
++};
++
++/*
++ * Graphics stolen memory in 32 MiB units: the gfx_uma_size option with the
++ * native RAM init, the fixed 32 MiB that MRC programs otherwise.
++ */
++u8 haswell_igd_gms(void);
++
+ #define ARCHDIS		0xff0	/* DMA Remap Engine Policy Control */
+ #define  DMAR_LCKDN	(1 << 31)
+ #define  SPCAPCTRL	(1 << 25)
+diff --git a/src/northbridge/intel/haswell/native_raminit/memory_map.c b/src/northbridge/intel/haswell/native_raminit/memory_map.c
+index e3aded2b3..af73b20e5 100644
+--- a/src/northbridge/intel/haswell/native_raminit/memory_map.c
++++ b/src/northbridge/intel/haswell/native_raminit/memory_map.c
+@@ -169,11 +169,11 @@ enum raminit_status configure_memory_map(struct sysinfo *ctrl)
+ 		.tseg_size      = CONFIG_SMM_TSEG_SIZE >> 20,
+ 		.me_stolen_size = intel_early_me_uma_size(),
+ 	};
+-	/** FIXME: MRC hardcodes iGPU parameters, but we should not **/
++	/* The GTT is fixed to 2 MiB, the stolen memory comes from the gfx_uma_size option */
+ 	const bool igpu_on = pci_read_config32(HOST_BRIDGE, DEVEN) & DEVEN_D2EN;
+ 	if (CONFIG(ONBOARD_VGA_IS_PRIMARY) || igpu_on) {
+ 		memory_map.gtt_size = 2;
+-		memory_map.gms_size = 64;
++		memory_map.gms_size = haswell_igd_gms() * 32;
+ 		pci_or_config32(HOST_BRIDGE, DEVEN, DEVEN_D2EN);
+ 	}
+ 	compute_memory_map(&memory_map);
+-- 
+2.43.0
+

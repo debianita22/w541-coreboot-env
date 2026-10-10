@@ -1,0 +1,478 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 00:05:32 +0200
+Subject: [PATCH 35/35] mb/lenovo/haswell: Group the setup menu into categories
+
+The setup menu has three mainboard forms (System, Processor, Graphics)
+followed by the four generic H8 forms, and the new CPU, VT-d and iGPU
+options are not in it yet. Group everything into five categories, one
+form each, split into cards with nested forms:
+
+- General: model, processor, memory, firmware and EC versions (read-only,
+  regenerated on every boot), sound, NMI
+- Energy Saver: battery, processor power management and power limits,
+  cooling policy, USB always-on, power after AC loss
+- Security: VT-x, VT-d, Intel ME
+- Keyboard: Fn/Ctrl swap, F1-F12 keys, sticky Fn, illumination,
+  TrackPoint, touchpad
+- Hardware: NVIDIA GPU, iGPU memory and aperture, ExpressCard and
+  Thunderbolt (W541), wireless devices
+
+coreboot appends its generic Console form (console log level) to every
+CFR menu, so it shows up as a sixth category after these five.
+
+This uses H8_CFR_MAINBOARD_FORMS to place the H8 options. The F1-F12
+setting is shown as a list instead of a switch; it uses the same
+variable, which holds 0 or 1 either way.
+
+The variables of the existing options do not change.
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init, and
+checked that the low 16 bits of the CFR object IDs, which EDK2 uses as
+question IDs, are unique.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig |   1 +
+ src/mainboard/lenovo/haswell/cfr.c   | 363 ++++++++++++++++++++++++---
+ 2 files changed, 325 insertions(+), 39 deletions(-)
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index a4d5e8d5d..ca8cf3c7d 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -8,6 +8,7 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 	select EC_LENOVO_H8
+ 	select EC_LENOVO_PMH7
+ 	select H8_ACTIVE_TRIP_FROM_GNVS
++	select H8_CFR_MAINBOARD_FORMS
+ 	select H8_HAS_BAT_THRESHOLDS_IMPL
+ 	select H8_HAS_BAT_INFO_EXTENDED
+ 	select H8_HAS_LEDLOGO
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 520fa6611..a71f96bac 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -1,13 +1,163 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
+ #include <boot/coreboot_tables.h>
++#include <build.h>
++#include <cbmem.h>
++#include <commonlib/helpers.h>
+ #include <cpu/intel/haswell/cfr.h>
++#include <cpu/x86/name.h>
+ #include <drivers/intel/oc_mailbox/cfr.h>
+ #include <drivers/option/cfr_frontend.h>
++#include <ec/lenovo/h8/cfr.h>
++#include <ec/lenovo/h8/h8.h>
++#include <memory_info.h>
++#include <northbridge/intel/haswell/cfr.h>
+ #include <southbridge/intel/lynxpoint/cfr.h>
++#include <stdio.h>
++#include <stdlib.h>
+ 
+ #include "setup_options.h"
+ 
++/*
++ * The setup menu, one form per category, each split into cards (nested
++ * forms): General, Energy Saver, Security, Keyboard and Hardware.
++ */
++
++/* General: what this machine is */
++
++static const struct sm_object info_model = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_model",
++	.ui_name	= "Model",
++	.default_value	= CONFIG_MAINBOARD_PART_NUMBER,
++});
++
++static void update_processor(struct sm_object *new)
++{
++	char *name = malloc(49);
++
++	if (!name)
++		return;
++	fill_processor_name(name);
++	new->sm_varchar.default_value = name;
++}
++
++static const struct sm_object info_processor = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_processor",
++	.ui_name	= "Processor",
++	.default_value	= "Unknown",
++}, WITH_CALLBACK(update_processor));
++
++static void update_memory(struct sm_object *new)
++{
++	const struct memory_info *info = cbmem_find(CBMEM_ID_MEMINFO);
++	unsigned int total_mib = 0, mts = 0;
++	char *text;
++
++	if (!info || !info->dimm_cnt)
++		return;
++
++	const size_t count = MIN(info->dimm_cnt, DIMM_INFO_TOTAL);
++	for (size_t i = 0; i < count; i++) {
++		total_mib += info->dimm[i].dimm_size;
++		mts = MAX(mts, (unsigned int)info->dimm[i].ddr_frequency);
++	}
++
++	text = malloc(48);
++	if (!text)
++		return;
++	snprintf(text, 48, "%u GiB DDR3-%u, %zu module%s", total_mib / 1024, mts,
++		 count, count == 1 ? "" : "s");
++	new->sm_varchar.default_value = text;
++}
++
++static const struct sm_object info_memory = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_memory",
++	.ui_name	= "Memory",
++	.default_value	= "Unknown",
++}, WITH_CALLBACK(update_memory));
++
++static const struct sm_object info_memory_profile = SM_DECLARE_COMMENT({
++	.ui_name	= "Memory profile: JEDEC (XMP is not supported)",
++	.ui_helptext	= "The memory runs at the JEDEC timings from its SPD, at\n"
++			  "1.35 V. Neither mrc.bin nor the native RAM init can use\n"
++			  "XMP profiles.",
++});
++
++static const struct sm_object info_firmware = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_firmware",
++	.ui_name	= "Firmware",
++	.default_value	= CONFIG_LOCALVERSION " (coreboot " COREBOOT_VERSION ")",
++});
++
++static void update_ec_firmware(struct sm_object *new)
++{
++	char *version = malloc(17);
++
++	if (!version)
++		return;
++	version[h8_build_id_and_function_spec_version(version, 16)] = '\0';
++	new->sm_varchar.default_value = version;
++}
++
++static const struct sm_object info_ec_firmware = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_ec_firmware",
++	.ui_name	= "EC firmware",
++	.default_value	= "Unknown",
++}, WITH_CALLBACK(update_ec_firmware));
++
++static const struct sm_object general_about = SM_DECLARE_FORM({
++	.ui_name	= "About this ThinkPad",
++	.obj_list	= (const struct sm_object *[]) {
++		&info_model,
++		&info_processor,
++		&info_memory,
++		&info_memory_profile,
++		&info_firmware,
++		&info_ec_firmware,
++		NULL
++	},
++});
++
++static const struct sm_object general_sound = SM_DECLARE_FORM({
++	.ui_name	= "Sound",
++	.obj_list	= (const struct sm_object *[]) {
++		&h8_cfr_pm_beeps,
++		&h8_cfr_battery_beep,
++		&h8_cfr_volume,
++		NULL
++	},
++});
++
++static const struct sm_object general_advanced = SM_DECLARE_FORM({
++	.ui_name	= "Advanced",
++	.obj_list	= (const struct sm_object *[]) {
++		&nmi,
++		NULL
++	},
++});
++
++/* Energy Saver */
++
++static const struct sm_object battery_charge_limit = SM_DECLARE_ENUM({
++	.opt_name	= "battery_charge_limit",
++	.ui_name	= "Battery charge thresholds",
++	.ui_helptext	= "Thresholds the EC gets at every boot. A lower limit makes the\n"
++			  "battery last longer when the laptop mostly runs on AC.\n"
++			  "OS controlled: keep what the OS sets (TLP, thinkpad_acpi).",
++	.default_value	= BATTERY_CHARGE_LIMIT_OS,
++	.values		= (const struct sm_enum_value[]) {
++				{ "OS controlled",		BATTERY_CHARGE_LIMIT_OS		},
++				{ "Full charge (100%)",		BATTERY_CHARGE_LIMIT_FULL	},
++				{ "Stop at 80% (start 75%)",	BATTERY_CHARGE_LIMIT_80		},
++				{ "Stop at 60% (start 50%)",	BATTERY_CHARGE_LIMIT_60		},
++				SM_ENUM_VALUE_END						},
++});
++
+ /*
+  * The upper bounds leave some headroom over the defaults of the fastest
+  * CPU offered in these systems (i7-4940MX: 57 W TDP, 71 W PL2).
+@@ -37,14 +187,6 @@ static const struct sm_object tdp_pl2_override = SM_DECLARE_NUMBER({
+ 	.display_flags	= 0,
+ });
+ 
+-static const struct sm_object enable_dual_graphics = SM_DECLARE_BOOL({
+-	.opt_name	= "enable_dual_graphics",
+-	.ui_name	= "NVIDIA discrete GPU",
+-	.ui_helptext	= "Power on and enable the NVIDIA GPU on models that have one.\n"
+-			  "When disabled, the GPU is powered off and hidden.",
+-	.default_value	= false,
+-});
+-
+ static const struct sm_object cooling_policy = SM_DECLARE_ENUM({
+ 	.opt_name	= "cooling_policy",
+ 	.ui_name	= "Cooling policy",
+@@ -60,19 +202,109 @@ static const struct sm_object cooling_policy = SM_DECLARE_ENUM({
+ 				SM_ENUM_VALUE_END			},
+ });
+ 
+-static const struct sm_object battery_charge_limit = SM_DECLARE_ENUM({
+-	.opt_name	= "battery_charge_limit",
+-	.ui_name	= "Battery charge thresholds",
+-	.ui_helptext	= "Thresholds the EC gets at every boot. A lower limit makes the\n"
+-			  "battery last longer when the laptop mostly runs on AC.\n"
+-			  "OS controlled: keep what the OS sets (TLP, thinkpad_acpi).",
+-	.default_value	= BATTERY_CHARGE_LIMIT_OS,
++static const struct sm_object energy_battery = SM_DECLARE_FORM({
++	.ui_name	= "Battery",
++	.obj_list	= (const struct sm_object *[]) {
++		&battery_charge_limit,
++		&h8_cfr_first_battery,
++		NULL
++	},
++});
++
++static const struct sm_object energy_processor = SM_DECLARE_FORM({
++	.ui_name	= "Processor",
++	.obj_list	= (const struct sm_object *[]) {
++		&eist,
++		&turbo_mode,
++		&c_states,
++		&tdp_pl1_override,
++		&tdp_pl2_override,
++		&cpu_power_limit_lock,
++		NULL
++	},
++});
++
++static const struct sm_object energy_thermal = SM_DECLARE_FORM({
++	.ui_name	= "Thermal",
++	.obj_list	= (const struct sm_object *[]) {
++		&cooling_policy,
++		NULL
++	},
++});
++
++static const struct sm_object energy_power = SM_DECLARE_FORM({
++	.ui_name	= "Power",
++	.obj_list	= (const struct sm_object *[]) {
++		&h8_cfr_usb_always_on,
++		&power_on_after_fail,
++		NULL
++	},
++});
++
++/* Security */
++
++static const struct sm_object security_virtualization = SM_DECLARE_FORM({
++	.ui_name	= "Virtualization",
++	.obj_list	= (const struct sm_object *[]) {
++		&vmx,
++		&vtd,
++		NULL
++	},
++});
++
++static const struct sm_object security_me = SM_DECLARE_FORM({
++	.ui_name	= "Intel Management Engine",
++	.obj_list	= (const struct sm_object *[]) {
++		&me_disable,
++		NULL
++	},
++});
++
++/* Keyboard */
++
++/* The H8 f1_to_f12_as_primary option as a list: the same variable, 0 or 1 */
++static const struct sm_object f1_to_f12_mode = SM_DECLARE_ENUM({
++	.flags		= CONFIG(H8_HAS_PRIMARY_FN_KEYS) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "f1_to_f12_as_primary",
++	.ui_name	= "F1-F12 keys",
++	.ui_helptext	= "Function keys: F1-F12 by default, the special functions\n"
++			  "(volume, brightness...) with Fn.\n"
++			  "Special keys: the other way around.",
++	.default_value	= 1,
+ 	.values		= (const struct sm_enum_value[]) {
+-				{ "OS controlled",		BATTERY_CHARGE_LIMIT_OS		},
+-				{ "Full charge (100%)",		BATTERY_CHARGE_LIMIT_FULL	},
+-				{ "Stop at 80% (start 75%)",	BATTERY_CHARGE_LIMIT_80		},
+-				{ "Stop at 60% (start 50%)",	BATTERY_CHARGE_LIMIT_60		},
+-				SM_ENUM_VALUE_END						},
++				{ "Function keys (F1-F12)",	1	},
++				{ "Special keys",		0	},
++				SM_ENUM_VALUE_END			},
++});
++
++static const struct sm_object keyboard_keys = SM_DECLARE_FORM({
++	.ui_name	= "Keyboard",
++	.obj_list	= (const struct sm_object *[]) {
++		&h8_cfr_fn_ctrl_swap,
++		&f1_to_f12_mode,
++		&h8_cfr_sticky_fn,
++		&h8_cfr_backlight,
++		NULL
++	},
++});
++
++static const struct sm_object keyboard_pointing = SM_DECLARE_FORM({
++	.ui_name	= "Pointing devices",
++	.obj_list	= (const struct sm_object *[]) {
++		&h8_cfr_trackpoint,
++		&h8_cfr_touchpad,
++		NULL
++	},
++});
++
++/* Hardware */
++
++static const struct sm_object enable_dual_graphics = SM_DECLARE_BOOL({
++	.opt_name	= "enable_dual_graphics",
++	.ui_name	= "NVIDIA discrete GPU",
++	.ui_helptext	= "Power on and enable the NVIDIA GPU on models that have one.\n"
++			  "When disabled, the GPU is powered off and hidden.",
++	.default_value	= false,
+ });
+ 
+ static const struct sm_object expresscard = SM_DECLARE_BOOL({
+@@ -95,45 +327,98 @@ static const struct sm_object thunderbolt = SM_DECLARE_BOOL({
+ 	.default_value	= true,
+ });
+ 
+-static struct sm_obj_form system = {
+-	.ui_name = "System",
+-	.obj_list = (const struct sm_object *[]) {
+-		&me_disable,
+-		&nmi,
+-		&power_on_after_fail,
+-		&battery_charge_limit,
++static const struct sm_object hardware_graphics = SM_DECLARE_FORM({
++	.ui_name	= "Graphics",
++	.obj_list	= (const struct sm_object *[]) {
++		&enable_dual_graphics,
++		&gfx_uma_size,
++		&gfx_uma_size_mrc,
++		&gfx_aperture_size,
++		NULL
++	},
++});
++
++static const struct sm_object hardware_ports = SM_DECLARE_FORM({
++	.flags		= CONFIG(BOARD_LENOVO_THINKPAD_W541) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.ui_name	= "Expansion ports",
++	.obj_list	= (const struct sm_object *[]) {
+ 		&expresscard,
+ 		&thunderbolt,
+ 		NULL
+ 	},
++});
++
++static const struct sm_object hardware_wireless = SM_DECLARE_FORM({
++	.ui_name	= "Wireless",
++	.obj_list	= (const struct sm_object *[]) {
++		&h8_cfr_wlan,
++		&h8_cfr_bluetooth,
++		&h8_cfr_wwan,
++		&h8_cfr_uwb,
++		NULL
++	},
++});
++
++/* The categories */
++
++static struct sm_obj_form general = {
++	.ui_name = "General",
++	.obj_list = (const struct sm_object *[]) {
++		&general_about,
++		&general_sound,
++		&general_advanced,
++		NULL
++	},
+ };
+ 
+-static struct sm_obj_form processor = {
+-	.ui_name = "Processor",
++static struct sm_obj_form energy_saver = {
++	.ui_name = "Energy Saver",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&tdp_pl1_override,
+-		&tdp_pl2_override,
+-		&cpu_power_limit_lock,
+-		&cooling_policy,
++		&energy_battery,
++		&energy_processor,
++		&energy_thermal,
++		&energy_power,
+ 		NULL
+ 	},
+ };
+ 
+-static struct sm_obj_form graphics = {
+-	.ui_name = "Graphics",
++static struct sm_obj_form security = {
++	.ui_name = "Security",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&enable_dual_graphics,
++		&security_virtualization,
++		&security_me,
++		NULL
++	},
++};
++
++static struct sm_obj_form keyboard = {
++	.ui_name = "Keyboard",
++	.obj_list = (const struct sm_object *[]) {
++		&keyboard_keys,
++		&keyboard_pointing,
++		NULL
++	},
++};
++
++static struct sm_obj_form hardware = {
++	.ui_name = "Hardware",
++	.obj_list = (const struct sm_object *[]) {
++		&hardware_graphics,
++		&hardware_ports,
++		&hardware_wireless,
+ 		NULL
+ 	},
+ };
+ 
+ static struct sm_obj_form *sm_root[] = {
+-	&system,
+-	&processor,
++	&general,
++	&energy_saver,
++	&security,
++	&keyboard,
++	&hardware,
+ #if CONFIG(INTEL_OC_MAILBOX_ENABLE_UNDERVOLTING)
+ 	&cpu_voltage,
+ #endif
+-	&graphics,
+ 	NULL
+ };
+ 
+-- 
+2.43.0
+

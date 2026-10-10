@@ -22,3 +22,14 @@
 0022-nb-intel-haswell-Set-Mini-HD-BCLK-dividers-from-CDCL.patch
 0023-payloads-edk2-Only-select-the-serial-console-with-a-.patch
 0024-device-Kconfig-Allow-a-dGPU-VBIOS-without-an-iGPU-VB.patch
+0025-nb-intel-haswell-Add-an-option-for-the-graphics-aper.patch
+0026-nb-intel-haswell-Make-the-iGPU-stolen-memory-configu.patch
+0027-cpu-intel-haswell-Add-options-for-SpeedStep-Turbo-Bo.patch
+0028-cpu-intel-haswell-Add-an-option-for-VT-x.patch
+0029-nb-intel-haswell-Add-an-option-for-VT-d.patch
+0030-ec-lenovo-h8-Allow-mainboards-to-set-the-active-trip.patch
+0031-mb-lenovo-haswell-Add-a-cooling-policy-option.patch
+0032-mb-lenovo-haswell-Add-battery-charge-threshold-prese.patch
+0033-mb-lenovo-haswell-Add-switches-for-the-W541-ExpressC.patch
+0034-ec-lenovo-h8-Let-mainboards-put-the-H8-options-in-th.patch
+0035-mb-lenovo-haswell-Group-the-setup-menu-into-categori.patch

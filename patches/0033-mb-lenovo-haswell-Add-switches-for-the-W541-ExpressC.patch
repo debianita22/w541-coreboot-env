@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:59:50 +0200
+Subject: [PATCH 33/35] mb/lenovo/haswell: Add switches for the W541
+ ExpressCard and Thunderbolt
+
+On the W541, PCIe root port 3 goes to the ExpressCard/34 slot and root
+port 5 (x4) to the Intel DSL4410 Thunderbolt controller. Both are
+hot-plug ports that DMA-capable devices can be attached to, which the
+OEM firmware lets the user turn off.
+
+Add expresscard and thunderbolt options, enabled by default. When one is
+disabled, mainboard_enable() marks the root port as disabled before
+enumeration, so the Lynx Point PCIe code hides it and powers it down,
+like a port that is off in the devicetree.
+
+The port assignment comes from lspci dumps of W541s and W540s running the
+OEM firmware: ExpressCard adapters show up behind 1c.2, the Thunderbolt
+controller behind 1c.4.
+
+TEST=Built lenovo/w541.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/cfr.c       | 22 ++++++++++++++++++++++
+ src/mainboard/lenovo/haswell/mainboard.c | 20 ++++++++++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 9200dae61..520fa6611 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -75,6 +75,26 @@ static const struct sm_object battery_charge_limit = SM_DECLARE_ENUM({
+ 				SM_ENUM_VALUE_END						},
+ });
+ 
++static const struct sm_object expresscard = SM_DECLARE_BOOL({
++	.flags		= CONFIG(BOARD_LENOVO_THINKPAD_W541) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "expresscard",
++	.ui_name	= "ExpressCard slot",
++	.ui_helptext	= "PCIe link of the ExpressCard/34 slot (root port 3).\n"
++			  "Disabled: the port is hidden and powered down, which also\n"
++			  "closes a hot-plug path for DMA-capable devices.",
++	.default_value	= true,
++});
++
++static const struct sm_object thunderbolt = SM_DECLARE_BOOL({
++	.flags		= CONFIG(BOARD_LENOVO_THINKPAD_W541) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "thunderbolt",
++	.ui_name	= "Thunderbolt",
++	.ui_helptext	= "PCIe link of the Thunderbolt controller (root port 5).\n"
++			  "Disabled: the port is hidden and powered down, which also\n"
++			  "closes a hot-plug path for DMA-capable devices.",
++	.default_value	= true,
++});
++
+ static struct sm_obj_form system = {
+ 	.ui_name = "System",
+ 	.obj_list = (const struct sm_object *[]) {
+@@ -82,6 +102,8 @@ static struct sm_obj_form system = {
+ 		&nmi,
+ 		&power_on_after_fail,
+ 		&battery_charge_limit,
++		&expresscard,
++		&thunderbolt,
+ 		NULL
+ 	},
+ };
+diff --git a/src/mainboard/lenovo/haswell/mainboard.c b/src/mainboard/lenovo/haswell/mainboard.c
+index c84f75183..c411a0368 100644
+--- a/src/mainboard/lenovo/haswell/mainboard.c
++++ b/src/mainboard/lenovo/haswell/mainboard.c
+@@ -27,11 +27,31 @@ const char *smbios_mainboard_bios_version(void)
+ 	return "CBET4000 " COREBOOT_VERSION;
+ }
+ 
++/* Before enumeration: the PCH code then hides and powers down the port */
++static void disable_root_port(unsigned int func, const char *what)
++{
++	struct device *rp = pcidev_on_root(0x1c, func);
++
++	if (!rp || !rp->enabled)
++		return;
++
++	printk(BIOS_INFO, "%s: disabling %s\n", what, dev_path(rp));
++	rp->enabled = 0;
++}
++
+ static void mainboard_enable(struct device *dev)
+ {
+ 	install_intel_vga_int15_handler(GMA_INT15_ACTIVE_LFP_EDP,
+ 					GMA_INT15_PANEL_FIT_DEFAULT,
+ 					GMA_INT15_BOOT_DISPLAY_DEFAULT, 0);
++
++	/* W541: ExpressCard/34 slot on root port 3, Thunderbolt controller on 5 */
++	if (CONFIG(BOARD_LENOVO_THINKPAD_W541)) {
++		if (!get_uint_option("expresscard", 1))
++			disable_root_port(2, "ExpressCard");
++		if (!get_uint_option("thunderbolt", 1))
++			disable_root_port(4, "Thunderbolt");
++	}
+ }
+ 
+ /* The same writes as the BCCS/BCSS methods that the OS uses */
+-- 
+2.43.0
+

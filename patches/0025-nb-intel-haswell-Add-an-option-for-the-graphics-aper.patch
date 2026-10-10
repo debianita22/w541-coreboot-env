@@ -1,0 +1,193 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:49:25 +0200
+Subject: [PATCH 25/35] nb/intel/haswell: Add an option for the graphics
+ aperture size
+
+The IGD aperture (GMADR BAR) is fixed to 256 MiB. Add a gfx_aperture_size
+option for 128, 256 or 512 MiB and a CFR object that mainboards can put in
+their setup menu.
+
+MSAC is programmed in haswell_setup_igd() as before. MRC programs its own
+value during raminit, so program it again right after raminit whenever
+the MRC raminit runs (USE_NATIVE_RAMINIT unset; HAVE_MRC only says
+whether the build adds the blob to CBFS). MSAC has no lock bit. The
+native RAM init does not touch it. The GMADR BAR is sized by the resource
+allocator in ramstage from what the hardware reports, so the memory map
+does not depend on it, and if the write does not stick the BAR keeps the
+size MRC set. The value is read back and logged either way.
+
+Resizing GMADR changes the range that a BAR programmed by MRC decodes, so
+memory decoding of the IGD is turned off before MSAC is changed. The
+resource allocator turns it back on in ramstage.
+
+The configured size only takes effect on the next boot. Changing it
+between suspend and resume changes the BAR size the OS saw.
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/cfr.h        | 27 +++++++++++
+ src/northbridge/intel/haswell/early_init.c | 52 +++++++++++++++++++++-
+ src/northbridge/intel/haswell/haswell.h    | 11 +++++
+ src/northbridge/intel/haswell/romstage.c   |  9 ++++
+ 4 files changed, 97 insertions(+), 2 deletions(-)
+ create mode 100644 src/northbridge/intel/haswell/cfr.h
+
+diff --git a/src/northbridge/intel/haswell/cfr.h b/src/northbridge/intel/haswell/cfr.h
+new file mode 100644
+index 000000000..7548a4560
+--- /dev/null
++++ b/src/northbridge/intel/haswell/cfr.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++/*
++ * CFR objects for nb/intel/haswell
++ */
++
++#ifndef NB_INTEL_HASWELL_CFR_H
++#define NB_INTEL_HASWELL_CFR_H
++
++#include <drivers/option/cfr_frontend.h>
++#include <northbridge/intel/haswell/haswell.h>
++
++/* Graphics aperture (GMADR) size */
++static const struct sm_object gfx_aperture_size = SM_DECLARE_ENUM({
++	.opt_name	= "gfx_aperture_size",
++	.ui_name	= "Graphics aperture size",
++	.ui_helptext	= "Size of the integrated GPU aperture (GMADR BAR), the CPU\n"
++			  "window into graphics memory. Takes effect at the next boot.",
++	.default_value	= IGD_APERTURE_256MB,
++	.values		= (const struct sm_enum_value[]) {
++				{ "128 MB",	IGD_APERTURE_128MB	},
++				{ "256 MB",	IGD_APERTURE_256MB	},
++				{ "512 MB",	IGD_APERTURE_512MB	},
++				SM_ENUM_VALUE_END			},
++});
++
++#endif /* NB_INTEL_HASWELL_CFR_H */
+diff --git a/src/northbridge/intel/haswell/early_init.c b/src/northbridge/intel/haswell/early_init.c
+index 6a5ce53a4..4b0e4acae 100644
+--- a/src/northbridge/intel/haswell/early_init.c
++++ b/src/northbridge/intel/haswell/early_init.c
+@@ -5,6 +5,7 @@
+ #include <device/mmio.h>
+ #include <device/pci_def.h>
+ #include <device/pci_ops.h>
++#include <option.h>
+ #include <types.h>
+ 
+ #include "haswell.h"
+@@ -59,8 +60,55 @@ static void haswell_setup_igd(void)
+ 		return;
+ 	}
+ 
+-	/* Enable 256MB aperture */
+-	pci_update_config8(PCI_DEV(0, 2, 0), MSAC, ~0x06, 0x02);
++	haswell_igd_set_aperture();
++}
++
++static unsigned int igd_aperture_mib(enum igd_aperture_size size)
++{
++	switch (size) {
++	case IGD_APERTURE_128MB:
++		return 128;
++	case IGD_APERTURE_512MB:
++		return 512;
++	default:
++		return 256;
++	}
++}
++
++/*
++ * MSAC selects the size of the GMADR BAR, which the resource allocator reads
++ * back in ramstage. MRC programs its own value, so this also runs again after
++ * raminit; if the value does not stick, the BAR just keeps the size MRC set.
++ */
++void haswell_igd_set_aperture(void)
++{
++	const pci_devfn_t igd = PCI_DEV(0, 2, 0);
++	unsigned int size = get_uint_option("gfx_aperture_size", IGD_APERTURE_256MB);
++
++	if (size != IGD_APERTURE_128MB && size != IGD_APERTURE_256MB &&
++	    size != IGD_APERTURE_512MB) {
++		printk(BIOS_WARNING, "IGD: invalid gfx_aperture_size %u, using 256 MiB\n", size);
++		size = IGD_APERTURE_256MB;
++	}
++
++	const u8 old = pci_read_config8(igd, MSAC);
++	if (((old & MSAC_APERTURE_MASK) >> 1) != size) {
++		/*
++		 * Resizing GMADR changes the range a BAR programmed by MRC
++		 * decodes. Keep memory decoding off until the resource
++		 * allocator places the BARs again in ramstage.
++		 */
++		pci_and_config16(igd, PCI_COMMAND, (u16)~PCI_COMMAND_MEMORY);
++		pci_write_config8(igd, MSAC, (old & ~MSAC_APERTURE_MASK) | (size << 1));
++	}
++
++	const u8 msac = pci_read_config8(igd, MSAC);
++	if (((msac & MSAC_APERTURE_MASK) >> 1) != size)
++		printk(BIOS_WARNING, "IGD: MSAC is 0x%02x, %u MiB aperture not applied\n",
++		       msac, igd_aperture_mib(size));
++	else
++		printk(BIOS_DEBUG, "IGD: MSAC 0x%02x, %u MiB aperture\n",
++		       msac, igd_aperture_mib(size));
+ }
+ 
+ static void haswell_setup_misc(void)
+diff --git a/src/northbridge/intel/haswell/haswell.h b/src/northbridge/intel/haswell/haswell.h
+index 0c669c442..316ee2341 100644
+--- a/src/northbridge/intel/haswell/haswell.h
++++ b/src/northbridge/intel/haswell/haswell.h
+@@ -24,6 +24,17 @@
+ /* Device 0:2.0 PCI configuration space (Graphics Device) */
+ 
+ #define MSAC		0x62	/* Multi Size Aperture Control */
++#define  MSAC_APERTURE_MASK	(3 << 1)
++
++/* Values of the gfx_aperture_size option: MSAC[2:1] */
++enum igd_aperture_size {
++	IGD_APERTURE_128MB = 0,
++	IGD_APERTURE_256MB = 1,
++	IGD_APERTURE_512MB = 3,
++};
++
++/* Program MSAC with the gfx_aperture_size option and check that it sticks */
++void haswell_igd_set_aperture(void);
+ 
+ #define ARCHDIS		0xff0	/* DMA Remap Engine Policy Control */
+ #define  DMAR_LCKDN	(1 << 31)
+diff --git a/src/northbridge/intel/haswell/romstage.c b/src/northbridge/intel/haswell/romstage.c
+index a6726f7f0..719fb027d 100644
+--- a/src/northbridge/intel/haswell/romstage.c
++++ b/src/northbridge/intel/haswell/romstage.c
+@@ -3,6 +3,7 @@
+ #include <arch/romstage.h>
+ #include <console/console.h>
+ #include <device/mmio.h>
++#include <device/pci_ops.h>
+ #include <elog.h>
+ #include <romstage_handoff.h>
+ #include <security/intel/txt/txt.h>
+@@ -44,6 +45,14 @@ void mainboard_romstage_entry(void)
+ 
+ 	perform_raminit(s3resume);
+ 
++	/*
++	 * MRC programs its own aperture size on every boot path, S3 resume
++	 * included. MSAC has no lock bit, so program the configured one again.
++	 * HAVE_MRC only says whether the build adds the blob to CBFS.
++	 */
++	if (!CONFIG(USE_NATIVE_RAMINIT) && (pci_read_config32(HOST_BRIDGE, DEVEN) & DEVEN_D2EN))
++		haswell_igd_set_aperture();
++
+ 	if (CONFIG(INTEL_TXT)) {
+ 		printk(BIOS_DEBUG, "Check TXT_ERROR register after MRC\n");
+ 
+-- 
+2.43.0
+

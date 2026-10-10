@@ -1,0 +1,292 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:54:40 +0200
+Subject: [PATCH 27/35] cpu/intel/haswell: Add options for SpeedStep, Turbo
+ Boost and C-states
+
+Add eist, turbo_mode and c_states options, with CFR objects that
+mainboards can put in their setup menu. All three default to enabled,
+which is what the code does today.
+
+eist: when disabled, every thread requests the base ratio in
+IA32_PERF_CTL while the SpeedStep enable bit in IA32_MISC_ENABLE is still
+set. That bit is package scoped, so the BSP clears it in post_mp_init(),
+once all threads are done and none of them sets it again. The processor
+objects get no P-state tables, and PSSS in ctdp.asl returns 0 when there
+is no _PSS. Turbo Boost needs P-states, so it is disabled as well. The
+help text only describes what the firmware does: whether an OS driver
+that writes IA32_PERF_CTL directly (Linux intel_pstate) still changes the
+frequency with the enable bit clear is up to the processor.
+
+turbo_mode: disable_turbo() instead of enable_turbo(). The _PSS turbo
+entry and the ratio set by set_max_ratio() already follow the turbo
+state.
+
+c_states: when disabled, the package C-state limit is set to C0/C1
+before MSR_PKG_CST_CONFIG_CONTROL is locked, C1E is disabled, and _CST
+only lists C1. The Linux intel_idle driver does not use _CST on Haswell
+and still enters core C-states; the help text says so.
+
+The options are read once on the BSP in pre_mp_init(), before the APs
+run cpu_core_init().
+
+TEST=Built lenovo/w541 with mrc.bin and with the native RAM init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/cpu/intel/haswell/acpi.c                | 13 ++-
+ src/cpu/intel/haswell/cfr.h                 | 28 ++++++
+ src/cpu/intel/haswell/haswell.h             |  4 +
+ src/cpu/intel/haswell/haswell_init.c        | 95 ++++++++++++++++++++-
+ src/northbridge/intel/haswell/acpi/ctdp.asl |  5 ++
+ 5 files changed, 139 insertions(+), 6 deletions(-)
+
+diff --git a/src/cpu/intel/haswell/acpi.c b/src/cpu/intel/haswell/acpi.c
+index c8f6a07a0..e946c9e47 100644
+--- a/src/cpu/intel/haswell/acpi.c
++++ b/src/cpu/intel/haswell/acpi.c
+@@ -179,6 +179,14 @@ static void generate_C_state_entries(const struct device *dev)
+ 
+ 	const int *acpi_cstates;
+ 
++	/* C-states disabled: C1 only (C1E is disabled as well) */
++	if (!haswell_c_states_enabled()) {
++		acpi_cstate_map[0] = cstate_map[C_STATE_C1];
++		acpi_cstate_map[0].ctype = 1;
++		acpigen_write_CST_package(acpi_cstate_map, 1);
++		return;
++	}
++
+ 	if (is_s0ix_enabled(dev))
+ 		acpi_cstates = cstate_set_s0ix;
+ 	else if (haswell_is_ult())
+@@ -330,8 +338,9 @@ static void generate_cpu_entry(const struct device *device, int cpu, int core, i
+ 	/* Generate Scope(\_SB) { Device(CPUx */
+ 	acpigen_write_processor_device(cpu * cores_per_package + core);
+ 
+-	/* Generate P-state tables */
+-	generate_P_state_entries(core, cores_per_package);
++	/* Generate P-state tables, unless SpeedStep is disabled */
++	if (haswell_eist_enabled())
++		generate_P_state_entries(core, cores_per_package);
+ 
+ 	/* Generate C-state tables */
+ 	generate_C_state_entries(device);
+diff --git a/src/cpu/intel/haswell/cfr.h b/src/cpu/intel/haswell/cfr.h
+index 2c92c1540..c00a05986 100644
+--- a/src/cpu/intel/haswell/cfr.h
++++ b/src/cpu/intel/haswell/cfr.h
+@@ -13,4 +13,32 @@ static const struct sm_object cpu_power_limit_lock = SM_DECLARE_BOOL({
+ 	.default_value	= false,
+ });
+ 
++static const struct sm_object eist = SM_DECLARE_BOOL({
++	.opt_name	= "eist",
++	.ui_name	= "Intel SpeedStep",
++	.ui_helptext	= "Enhanced Intel SpeedStep (P-states): the OS scales the CPU\n"
++			  "frequency and voltage with the load. When disabled, the\n"
++			  "firmware requests the base frequency, turns Turbo Boost off\n"
++			  "and gives the OS no P-state table.",
++	.default_value	= true,
++});
++
++static const struct sm_object turbo_mode = SM_DECLARE_BOOL({
++	.opt_name	= "turbo_mode",
++	.ui_name	= "Intel Turbo Boost",
++	.ui_helptext	= "Run above the base frequency while power and temperature\n"
++			  "allow. Needs Intel SpeedStep.",
++	.default_value	= true,
++}, WITH_DEP(&eist));
++
++static const struct sm_object c_states = SM_DECLARE_BOOL({
++	.opt_name	= "c_states",
++	.ui_name	= "CPU C-states",
++	.ui_helptext	= "Idle power states. When disabled, ACPI only reports C1, and\n"
++			  "package C-states and C1E are off: more power and heat at\n"
++			  "idle, lower wake-up latency. The Linux intel_idle driver\n"
++			  "still uses core C-states (intel_idle.max_cstate=0 stops it).",
++	.default_value	= true,
++});
++
+ #endif /* _CPU_INTEL_HASWELL_CFR_H_ */
+diff --git a/src/cpu/intel/haswell/haswell.h b/src/cpu/intel/haswell/haswell.h
+index 4b1e85cb2..8826904e4 100644
+--- a/src/cpu/intel/haswell/haswell.h
++++ b/src/cpu/intel/haswell/haswell.h
+@@ -168,6 +168,10 @@ enum {
+ void set_power_limits(u8 power_limit_1_time);
+ int cpu_config_tdp_levels(void);
+ 
++/* The eist and c_states options, for the ACPI processor objects */
++bool haswell_eist_enabled(void);
++bool haswell_c_states_enabled(void);
++
+ void set_max_freq(void);
+ 
+ /* pcode_mailbox.c */
+diff --git a/src/cpu/intel/haswell/haswell_init.c b/src/cpu/intel/haswell/haswell_init.c
+index 9cfd94f60..2ff08cdec 100644
+--- a/src/cpu/intel/haswell/haswell_init.c
++++ b/src/cpu/intel/haswell/haswell_init.c
+@@ -341,6 +341,58 @@ void set_power_limits(u8 power_limit_1_time)
+ 	}
+ }
+ 
++/*
++ * Setup options that every thread applies. They are read once on the BSP,
++ * before the APs run cpu_core_init().
++ */
++static struct {
++	bool valid;
++	bool eist;
++	bool turbo;
++	bool c_states;
++} cpu_options;
++
++static void read_cpu_options(void)
++{
++	if (cpu_options.valid)
++		return;
++
++	cpu_options.eist = get_uint_option("eist", 1);
++	/* Turbo Boost needs P-states */
++	cpu_options.turbo = cpu_options.eist && get_uint_option("turbo_mode", 1);
++	cpu_options.c_states = get_uint_option("c_states", 1);
++	cpu_options.valid = true;
++
++	printk(BIOS_DEBUG, "CPU: SpeedStep %s, Turbo Boost %s, C-states %s\n",
++	       cpu_options.eist ? "on" : "off", cpu_options.turbo ? "on" : "off",
++	       cpu_options.c_states ? "on" : "off");
++}
++
++bool haswell_eist_enabled(void)
++{
++	read_cpu_options();
++	return cpu_options.eist;
++}
++
++bool haswell_c_states_enabled(void)
++{
++	read_cpu_options();
++	return cpu_options.c_states;
++}
++
++static unsigned int max_non_turbo_ratio(void)
++{
++	msr_t msr;
++
++	if (cpu_config_tdp_levels()) {
++		msr = rdmsr(MSR_CONFIG_TDP_NOMINAL);
++		return msr.lo & 0xff;
++	}
++
++	msr = rdmsr(MSR_PLATFORM_INFO);
++	return (msr.lo >> 8) & 0xff;
++}
++
+ static void configure_c_states(void)
+ {
+ 	msr_t msr = rdmsr(MSR_PLATFORM_INFO);
+@@ -360,7 +412,12 @@ static void configure_c_states(void)
+ 	if (timed_mwait_capable)
+ 		msr.lo |= (1 << 31);	// Timed MWAIT Enable
+ 
+-	/* The deepest package c-state defaults to factory-configured value. */
++	/*
++	 * The deepest package c-state defaults to factory-configured value.
++	 * With C-states disabled, limit the package to C0/C1.
++	 */
++	if (!cpu_options.c_states)
++		msr.lo &= ~0xf;
+ 	wrmsr(MSR_PKG_CST_CONFIG_CONTROL, msr);
+ 
+ 	msr = rdmsr(MSR_MISC_PWR_MGMT);
+@@ -369,7 +426,10 @@ static void configure_c_states(void)
+ 
+ 	msr = rdmsr(MSR_POWER_CTL);
+ 	msr.lo |= (1 << 18);	// Enable Energy Perf Bias MSR 0x1b0
+-	msr.lo |= (1 << 1);	// C1E Enable
++	if (cpu_options.c_states)
++		msr.lo |= (1 << 1);	// C1E Enable
++	else
++		msr.lo &= ~(1 << 1);
+ 	msr.lo |= (1 << 0);	// Bi-directional PROCHOT#
+ 	wrmsr(MSR_POWER_CTL, msr);
+ 
+@@ -434,6 +494,16 @@ static void configure_misc(void)
+ 	msr.lo |= (1 << 16);	  /* Enhanced SpeedStep Enable */
+ 	wrmsr(IA32_MISC_ENABLE, msr);
+ 
++	/*
++	 * With SpeedStep disabled, request the base ratio while SpeedStep is
++	 * still enabled. post_mp_init() disables it once all threads did so.
++	 */
++	if (!cpu_options.eist) {
++		msr.lo = max_non_turbo_ratio() << 8;
++		msr.hi = 0;
++		wrmsr(IA32_PERF_CTL, msr);
++	}
++
+ 	/* Disable Thermal interrupts */
+ 	msr.lo = 0;
+ 	msr.hi = 0;
+@@ -515,13 +585,19 @@ static void cpu_core_init(struct device *cpu)
+ 	/* Set energy policy */
+ 	set_energy_perf_bias(ENERGY_POLICY_NORMAL);
+ 
+-	/* Enable Turbo */
+-	enable_turbo();
++	/* Enable or disable Turbo */
++	if (cpu_options.turbo)
++		enable_turbo();
++	else
++		disable_turbo();
+ }
+ 
+ /* MP initialization support. */
+ static void pre_mp_init(void)
+ {
++	/* Before the APs start: they only use the cached values */
++	read_cpu_options();
++
+ 	/* Setup MTRRs based on physical address size. */
+ 	x86_setup_mtrrs_with_detect();
+ 	x86_mtrr_check();
+@@ -575,6 +651,17 @@ static void post_mp_init(void)
+ 	/* Set Max Ratio */
+ 	set_max_ratio();
+ 
++	/*
++	 * The SpeedStep enable bit is package scoped. Clear it here, after all
++	 * threads have set it and requested the base ratio in configure_misc(),
++	 * so that no thread sets it again afterwards.
++	 */
++	if (!cpu_options.eist) {
++		msr_t msr = rdmsr(IA32_MISC_ENABLE);
++		msr.lo &= ~(1 << 16);
++		wrmsr(IA32_MISC_ENABLE, msr);
++	}
++
+ 	/* Now that all APs have been relocated as well as the BSP let SMIs
+ 	 * start flowing. */
+ 	global_smi_enable();
+diff --git a/src/northbridge/intel/haswell/acpi/ctdp.asl b/src/northbridge/intel/haswell/acpi/ctdp.asl
+index 89669b366..b03470219 100644
+--- a/src/northbridge/intel/haswell/acpi/ctdp.asl
++++ b/src/northbridge/intel/haswell/acpi/ctdp.asl
+@@ -61,6 +61,11 @@ Scope (\_SB.PCI0.MCHC)
+ 	External (\_SB.CP00._PSS)
+ 	Method (PSSS, 1, NotSerialized)
+ 	{
++		/* There is no _PSS when SpeedStep is disabled */
++		If (!CondRefOf (\_SB.CP00._PSS)) {
++			Return (0)
++		}
++
+ 		Local0 = 1 /* Start at P1 */
+ 		Local1 = SizeOf (\_SB.CP00._PSS)
+ 
+-- 
+2.43.0
+

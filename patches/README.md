@@ -13,6 +13,9 @@ for upstream review (one change each, with the reasoning in the message).
 | 0011-0012 | wake from S3 on lid open and Fn |
 | 0013-0022 | PCIe interrupt routing, ACPI backlight, Bluetooth and WWAN state on resume, Fn hotkeys, xHCI MaxPorts, USB over-current mapping, AES-NI lock, battery `_UID`, Mini-HD audio clock dividers |
 | 0023-0024 | Kconfig fixes this configuration needs: EDK2 serial console only with a UART driver, NVIDIA VBIOS without an Intel VBIOS |
+| 0025-0029 | options for the Haswell CPU and northbridge: graphics aperture (also with `mrc.bin`, reprogrammed after raminit), graphics stolen memory (native RAM init), SpeedStep, Turbo Boost, C-states, VT-x (a change applies through a full reset), VT-d |
+| 0030-0033 | options for the Haswell ThinkPads: cooling policy (active trip point from GNVS), battery charge threshold presets, ExpressCard and Thunderbolt ports on the W541 |
+| 0034-0035 | the setup menu in categories (General, Energy Saver, Security, Keyboard, Hardware), with the H8 options placed by the mainboard |
 
 ## Optional patches
 

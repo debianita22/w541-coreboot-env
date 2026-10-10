@@ -1,0 +1,306 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 00:00:34 +0200
+Subject: [PATCH 34/35] ec/lenovo/h8: Let mainboards put the H8 options in
+ their own forms
+
+The H8 setup options are always in four generic forms (Power, Devices,
+Keyboard/Mouse, Other), which come after the forms of the mainboard. A
+mainboard that groups its setup menu differently, for example keyboard
+options next to its own, has no way to use them.
+
+Make the option objects global, with an h8_cfr_ prefix and declared in
+ec/lenovo/h8/cfr.h, and add H8_CFR_MAINBOARD_FORMS: when a mainboard
+selects it, the generic forms are left out and the mainboard lists the
+objects in its own forms. Nothing selects it yet, so the menu does not
+change.
+
+TEST=Built lenovo/w541.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/Kconfig |  7 +++++
+ src/ec/lenovo/h8/cfr.c   | 68 +++++++++++++++++++++-------------------
+ src/ec/lenovo/h8/cfr.h   | 29 +++++++++++++++++
+ 3 files changed, 72 insertions(+), 32 deletions(-)
+ create mode 100644 src/ec/lenovo/h8/cfr.h
+
+diff --git a/src/ec/lenovo/h8/Kconfig b/src/ec/lenovo/h8/Kconfig
+index a1e34e3a8..49fad627d 100644
+--- a/src/ec/lenovo/h8/Kconfig
++++ b/src/ec/lenovo/h8/Kconfig
+@@ -96,6 +96,13 @@ config H8_HAS_2ND_THERMAL_ZONE
+ 	bool
+ 	default n
+ 
++config H8_CFR_MAINBOARD_FORMS
++	bool
++	default n
++	help
++	  The mainboard puts the H8 setup options (ec/lenovo/h8/cfr.h) in the
++	  forms of its own setup menu, instead of the generic H8 forms.
++
+ config H8_ACTIVE_TRIP_FROM_GNVS
+ 	bool
+ 	default n
+diff --git a/src/ec/lenovo/h8/cfr.c b/src/ec/lenovo/h8/cfr.c
+index 21cc117e9..a315c34bd 100644
+--- a/src/ec/lenovo/h8/cfr.c
++++ b/src/ec/lenovo/h8/cfr.c
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
+ #include <drivers/option/cfr_frontend.h>
++#include "cfr.h"
+ #include "h8.h"
+ #include "chip.h"
+ 
+@@ -15,7 +16,7 @@ static void update_version(struct sm_object *new)
+ 	new->sm_varchar.default_value = ecfw;
+ }
+ 
+-static const struct sm_object fw_version = SM_DECLARE_VARCHAR({
++const struct sm_object h8_cfr_fw_version = SM_DECLARE_VARCHAR({
+ 	.opt_name	= "ec_version",
+ 	.ui_name	= "Version",
+ 	.ui_helptext	= "The EC firmware version",
+@@ -29,7 +30,7 @@ static void update_bluetooth(struct sm_object *new)
+ 		new->sm_bool.flags = CFR_OPTFLAG_SUPPRESS;
+ }
+ 
+-static const struct sm_object bluetooth = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_bluetooth = SM_DECLARE_BOOL({
+ 	.opt_name	= "bluetooth",
+ 	.ui_name	= "Bluetooth",
+ 	.ui_helptext	= "Enable or disable the bluetooth module",
+@@ -81,7 +82,7 @@ static void update_backlight(struct sm_object *new)
+ }
+ 
+ /* Illumination Control (ThinkLight and/or keyboard backlight) */
+-static const struct sm_object backlight = SM_DECLARE_ENUM({
++const struct sm_object h8_cfr_backlight = SM_DECLARE_ENUM({
+ 	.opt_name	= "backlight",
+ 	.ui_name	= "Illumination Control",
+ 	.ui_helptext	= "Select illumination device(s)",
+@@ -89,7 +90,7 @@ static const struct sm_object backlight = SM_DECLARE_ENUM({
+ }, WITH_CALLBACK(update_backlight));
+ 
+ /* USB Always-On */
+-static const struct sm_object usb_always_on = SM_DECLARE_ENUM({
++const struct sm_object h8_cfr_usb_always_on = SM_DECLARE_ENUM({
+ 	.opt_name	= "usb_always_on",
+ 	.ui_name	= "USB Always-on",
+ 	.ui_helptext	= "Always keep USB ports powered",
+@@ -108,7 +109,7 @@ static void update_uwb(struct sm_object *new)
+ 		new->sm_bool.flags = CFR_OPTFLAG_SUPPRESS;
+ }
+ 
+-static const struct sm_object uwb = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_uwb = SM_DECLARE_BOOL({
+ 	.opt_name	= "uwb",
+ 	.ui_name	= "Ultrawideband",
+ 	.ui_helptext	= "TBD",
+@@ -121,7 +122,7 @@ enum {
+ };
+ 
+ /* Battery charge priority */
+-static const struct sm_object first_battery = SM_DECLARE_ENUM({
++const struct sm_object h8_cfr_first_battery = SM_DECLARE_ENUM({
+ 	.opt_name	= "first_battery",
+ 	.ui_name	= "Battery Charge Priority",
+ 	.ui_helptext	= "Select which battery to charge first.",
+@@ -133,7 +134,7 @@ static const struct sm_object first_battery = SM_DECLARE_ENUM({
+ });
+ 
+ /* Volume control */
+-static const struct sm_object volume = SM_DECLARE_NUMBER({
++const struct sm_object h8_cfr_volume = SM_DECLARE_NUMBER({
+ 	.opt_name	= "volume",
+ 	.ui_name	= "Volume",
+ 	.ui_helptext	= "EC volume register value to restore at boot.",
+@@ -145,7 +146,7 @@ static const struct sm_object volume = SM_DECLARE_NUMBER({
+ });
+ 
+ /* WLAN */
+-static const struct sm_object wlan = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_wlan = SM_DECLARE_BOOL({
+ 	.opt_name	= "wlan",
+ 	.ui_name	= "WLAN",
+ 	.ui_helptext	= "Enable or disable the WLAN module",
+@@ -159,7 +160,7 @@ static void update_wwan(struct sm_object *new)
+ 		new->sm_bool.flags = CFR_OPTFLAG_SUPPRESS;
+ }
+ 
+-static const struct sm_object wwan = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_wwan = SM_DECLARE_BOOL({
+ 	.opt_name	= "wwan",
+ 	.ui_name	= "WWAN",
+ 	.ui_helptext	= "Enable or disable the WWAN module",
+@@ -173,7 +174,7 @@ static void update_beep(struct sm_object *new)
+ 		new->sm_bool.flags = CFR_OPTFLAG_SUPPRESS;
+ }
+ 
+-static const struct sm_object pm_beeps = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_pm_beeps = SM_DECLARE_BOOL({
+ 	.opt_name	= "power_management_beeps",
+ 	.ui_name	= "Power Management Beeps",
+ 	.ui_helptext	= "Enable or disable power management beeps",
+@@ -181,7 +182,7 @@ static const struct sm_object pm_beeps = SM_DECLARE_BOOL({
+ }, WITH_CALLBACK(update_beep));
+ 
+ /* Low Battery Beep */
+-static const struct sm_object battery_beep = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_battery_beep = SM_DECLARE_BOOL({
+ 	.opt_name	= "low_battery_beep",
+ 	.ui_name	= "Low Battery Beep",
+ 	.ui_helptext	= "Enable or disable low battery beep",
+@@ -189,7 +190,7 @@ static const struct sm_object battery_beep = SM_DECLARE_BOOL({
+ }, WITH_CALLBACK(update_beep));
+ 
+ /* Fn-CTRL Swap */
+-static const struct sm_object fn_ctrl_swap = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_fn_ctrl_swap = SM_DECLARE_BOOL({
+ 	.opt_name	= "fn_ctrl_swap",
+ 	.ui_name	= "Swap Fn and CTRL",
+ 	.ui_helptext	= "Swap the left Fn and CTRL keys",
+@@ -197,7 +198,7 @@ static const struct sm_object fn_ctrl_swap = SM_DECLARE_BOOL({
+ });
+ 
+ /* Fn Lock */
+-static const struct sm_object sticky_fn = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_sticky_fn = SM_DECLARE_BOOL({
+ 	.opt_name	= "sticky_fn",
+ 	.ui_name	= "Sticky Fn key",
+ 	.ui_helptext	= "Function key acts as a toggle",
+@@ -205,7 +206,7 @@ static const struct sm_object sticky_fn = SM_DECLARE_BOOL({
+ });
+ 
+ /* Function keys primary */
+-static const struct sm_object f1_to_f12_as_primary = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_f1_to_f12_as_primary = SM_DECLARE_BOOL({
+ 	.opt_name	= "f1_to_f12_as_primary",
+ 	.ui_name	= "Primary Function keys",
+ 	.ui_helptext	= "F1-F12 default act as function keys",
+@@ -214,7 +215,7 @@ static const struct sm_object f1_to_f12_as_primary = SM_DECLARE_BOOL({
+ });
+ 
+ /* Touchpad - Controlled by PMH7 */
+-static const struct sm_object touchpad = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_touchpad = SM_DECLARE_BOOL({
+ 	.opt_name	= "touchpad",
+ 	.ui_name	= "Touchpad",
+ 	.ui_helptext	= "Enable or disable the touchpad",
+@@ -223,7 +224,7 @@ static const struct sm_object touchpad = SM_DECLARE_BOOL({
+ });
+ 
+ /* Trackpoint - Controlled by PMH7 */
+-static const struct sm_object trackpoint = SM_DECLARE_BOOL({
++const struct sm_object h8_cfr_trackpoint = SM_DECLARE_BOOL({
+ 	.opt_name	= "trackpoint",
+ 	.ui_name	= "Trackpoint",
+ 	.ui_helptext	= "Enable or disable the trackpoint",
+@@ -231,11 +232,13 @@ static const struct sm_object trackpoint = SM_DECLARE_BOOL({
+ 	.flags		= CONFIG(EC_LENOVO_PMH7) ? 0 : CFR_OPTFLAG_SUPPRESS,
+ });
+ 
++/* Generic forms, unless the mainboard puts the options in its own */
++#if !CONFIG(H8_CFR_MAINBOARD_FORMS)
+ __cfr_form static const struct sm_obj_form cfr_power = {
+ 	.ui_name = "Power",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&first_battery,
+-		&usb_always_on,
++		&h8_cfr_first_battery,
++		&h8_cfr_usb_always_on,
+ 		NULL
+ 	},
+ };
+@@ -243,11 +246,11 @@ __cfr_form static const struct sm_obj_form cfr_power = {
+ __cfr_form static const struct sm_obj_form cfr_devices = {
+ 	.ui_name = "Devices",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&fw_version,
+-		&bluetooth,
+-		&wlan,
+-		&wwan,
+-		&uwb,
++		&h8_cfr_fw_version,
++		&h8_cfr_bluetooth,
++		&h8_cfr_wlan,
++		&h8_cfr_wwan,
++		&h8_cfr_uwb,
+ 		NULL
+ 	},
+ };
+@@ -255,12 +258,12 @@ __cfr_form static const struct sm_obj_form cfr_devices = {
+ __cfr_form static const struct sm_obj_form cfr_hid = {
+ 	.ui_name = "Keyboard/Mouse",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&backlight,
+-		&fn_ctrl_swap,
+-		&sticky_fn,
+-		&f1_to_f12_as_primary,
+-		&touchpad,
+-		&trackpoint,
++		&h8_cfr_backlight,
++		&h8_cfr_fn_ctrl_swap,
++		&h8_cfr_sticky_fn,
++		&h8_cfr_f1_to_f12_as_primary,
++		&h8_cfr_touchpad,
++		&h8_cfr_trackpoint,
+ 		NULL
+ 	},
+ };
+@@ -268,9 +271,10 @@ __cfr_form static const struct sm_obj_form cfr_hid = {
+ __cfr_form static const struct sm_obj_form cfr_misc = {
+ 	.ui_name = "Other",
+ 	.obj_list = (const struct sm_object *[]) {
+-		&volume,
+-		&pm_beeps,
+-		&battery_beep,
++		&h8_cfr_volume,
++		&h8_cfr_pm_beeps,
++		&h8_cfr_battery_beep,
+ 		NULL
+ 	},
+ };
++#endif
+diff --git a/src/ec/lenovo/h8/cfr.h b/src/ec/lenovo/h8/cfr.h
+new file mode 100644
+index 000000000..b67c97ef4
+--- /dev/null
++++ b/src/ec/lenovo/h8/cfr.h
+@@ -0,0 +1,29 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++#ifndef EC_LENOVO_H8_CFR_H
++#define EC_LENOVO_H8_CFR_H
++
++#include <drivers/option/cfr_frontend.h>
++
++/*
++ * The H8 setup options. They go in the generic H8 forms, or with
++ * H8_CFR_MAINBOARD_FORMS in the forms of the mainboard setup menu.
++ */
++extern const struct sm_object h8_cfr_fw_version;
++extern const struct sm_object h8_cfr_bluetooth;
++extern const struct sm_object h8_cfr_backlight;
++extern const struct sm_object h8_cfr_usb_always_on;
++extern const struct sm_object h8_cfr_uwb;
++extern const struct sm_object h8_cfr_first_battery;
++extern const struct sm_object h8_cfr_volume;
++extern const struct sm_object h8_cfr_wlan;
++extern const struct sm_object h8_cfr_wwan;
++extern const struct sm_object h8_cfr_pm_beeps;
++extern const struct sm_object h8_cfr_battery_beep;
++extern const struct sm_object h8_cfr_fn_ctrl_swap;
++extern const struct sm_object h8_cfr_sticky_fn;
++extern const struct sm_object h8_cfr_f1_to_f12_as_primary;
++extern const struct sm_object h8_cfr_touchpad;
++extern const struct sm_object h8_cfr_trackpoint;
++
++#endif /* EC_LENOVO_H8_CFR_H */
+-- 
+2.43.0
+

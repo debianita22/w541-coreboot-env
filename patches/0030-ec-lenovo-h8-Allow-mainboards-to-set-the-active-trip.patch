@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:56:40 +0200
+Subject: [PATCH 30/35] ec/lenovo/h8: Allow mainboards to set the active trip
+ point
+
+The active trip point of THM0, where the OS turns on the fan power
+resource and the EC runs the fan at full speed, is always 10 degrees
+below the passive one. So the fan is always forced to full speed before
+the CPU is throttled.
+
+Add H8_ACTIVE_TRIP_FROM_GNVS: when selected, _AC0 uses the F0ON field of
+GNVS when the mainboard sets it, and the current formula otherwise. With
+F0ON above the passive trip point, the OS throttles first and only
+forces the fan to full speed later; below that, the EC keeps running the
+fan on its own curve.
+
+Select it for the Haswell ThinkPads, whose GNVS has F0ON. Nothing sets
+it yet, so _AC0 does not change.
+
+TEST=Built lenovo/w541; the disassembled DSDT has the new _AC0.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/Kconfig             | 9 +++++++++
+ src/ec/lenovo/h8/acpi/thermal.asl    | 9 +++++++++
+ src/mainboard/lenovo/haswell/Kconfig | 1 +
+ 3 files changed, 19 insertions(+)
+
+diff --git a/src/ec/lenovo/h8/Kconfig b/src/ec/lenovo/h8/Kconfig
+index 7f6d45be3..a1e34e3a8 100644
+--- a/src/ec/lenovo/h8/Kconfig
++++ b/src/ec/lenovo/h8/Kconfig
+@@ -96,4 +96,13 @@ config H8_HAS_2ND_THERMAL_ZONE
+ 	bool
+ 	default n
+ 
++config H8_ACTIVE_TRIP_FROM_GNVS
++	bool
++	default n
++	help
++	  The thermal zone takes its active trip point, where the OS runs the
++	  fan at full speed, from the F0ON field of GNVS when it is not zero,
++	  instead of 10 degrees below the passive trip point. The southbridge
++	  GNVS must have F0ON.
++
+ endif # EC_LENOVO_H8
+diff --git a/src/ec/lenovo/h8/acpi/thermal.asl b/src/ec/lenovo/h8/acpi/thermal.asl
+index 54f4f922b..5494f085a 100644
+--- a/src/ec/lenovo/h8/acpi/thermal.asl
++++ b/src/ec/lenovo/h8/acpi/thermal.asl
+@@ -75,10 +75,19 @@ External (\PPKG, MethodObj)
+ 		}
+ 
+ 		Method (_AC0) {
++#if CONFIG(H8_ACTIVE_TRIP_FROM_GNVS)
++			/* Active trip point from the mainboard, if it sets one */
++			Local0 = \F0ON
++			If (Local0 == 0) {
++				/* Active fan 10 degree below passive threshold */
++				Local0 = GPSV () - 10
++			}
++#else
+ 			Local0 = GPSV ()
+ 
+ 			/* Active fan 10 degree below passive threshold */
+ 			Local0 -= 10
++#endif
+ 
+ 			If (\FLVL) {
+ 				/* Turn of 5 degree below trip point */
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 02a427b7e..a4d5e8d5d 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -7,6 +7,7 @@ config BOARD_LENOVO_HASWELL_COMMON
+ 	select DRIVERS_OPTION_CFR_ENABLED if PAYLOAD_EDK2 && SMMSTORE
+ 	select EC_LENOVO_H8
+ 	select EC_LENOVO_PMH7
++	select H8_ACTIVE_TRIP_FROM_GNVS
+ 	select H8_HAS_BAT_THRESHOLDS_IMPL
+ 	select H8_HAS_BAT_INFO_EXTENDED
+ 	select H8_HAS_LEDLOGO
+-- 
+2.43.0
+
