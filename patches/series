@@ -40,3 +40,4 @@
 0040-nb-intel-haswell-Add-POST-codes-to-the-romstage-step.patch
 0041-nb-intel-haswell-haswell_mrc-Keep-the-mrc.bin-progre.patch
 0042-lib-prog_loaders-Add-POST-codes-around-loading-ramst.patch
+0043-cpu-intel-car-non-evict-Keep-the-code-uncached-while.patch

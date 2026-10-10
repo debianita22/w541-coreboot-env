@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 15:16:31 +0200
+Subject: [PATCH] cpu/intel/car/non-evict: Keep the code uncached while filling
+ CAR
+
+Since commit 97dbfd309 (cpu/intel/car/non-evict: Improve CAR setup) the
+CAR region is filled with the ROM MTRR enabled and CR0.CD clear, so the
+code that runs the fill loop is cached too. On a CPU whose CAR region
+is as large as the cache that holds it, that code line takes the way of
+a CAR line in the same set, and that CAR line is lost: writes to it go
+nowhere and reads return garbage. Haswell is such a CPU: the CAR region
+is 256 KiB (DCACHE_RAM_SIZE plus DCACHE_RAM_MRC_VAR_SIZE, or 256 KiB of
+DCACHE_RAM_SIZE with the native RAM init), the size of its L2 cache.
+Which line is lost depends on where the fill loop happens to be in the
+bootblock; whether it matters depends on who uses that line.
+
+On a ThinkPad W541 with mrc.bin the fill loop sits in L2 set 471, and
+the S3 resume hangs inside mrc.bin at "Initializing Memory", with the
+same mrc.bin, the same pei_data and the same ME state with which the
+resume worked before that commit. Cold boots are fine: the lost line is
+only used on the S3 path.
+
+Fill the region as before that commit: disable the ROM MTRR, so that the
+code is fetched uncached, zero the region with rep stosl, enter the "no
+eviction run" state and enable the ROM MTRR again, as the BWG describes.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/cpu/intel/car/non-evict/cache_as_ram.S | 67 ++++++++++++----------
+ 1 file changed, 37 insertions(+), 30 deletions(-)
+
+diff --git a/src/cpu/intel/car/non-evict/cache_as_ram.S b/src/cpu/intel/car/non-evict/cache_as_ram.S
+index 91035dabb..53a05e194 100644
+--- a/src/cpu/intel/car/non-evict/cache_as_ram.S
++++ b/src/cpu/intel/car/non-evict/cache_as_ram.S
+@@ -159,7 +159,20 @@ end_microcode_update:
+ 
+ 	invd
+ 
++	/*
++	 * Keep the code out of the cache while the CAR region is filled:
++	 * clear the mask valid bit to disable the ROM MTRR. On a CPU whose
++	 * CAR region is as large as the cache that holds it (Haswell: 256
++	 * KiB, the size of the L2), a cached code line takes the way of a
++	 * CAR line of the same set, and that CAR line is lost.
++	 */
++	movl	$MTRR_PHYS_MASK(1), %ecx
++	rdmsr
++	andl	$(~MTRR_PHYS_MASK_VALID), %eax
++	wrmsr
++
+ 	/* Enable caching */
++	movl	%cr0, %eax
+ 	andl	$(~(CR0_CacheDisable | CR0_NoWriteThrough)), %eax
+ 	movl	%eax, %cr0
+ 
+@@ -170,30 +183,16 @@ end_microcode_update:
+ 	andl	$~2, %eax
+ 	wrmsr
+ 
+-	/* Fill up the cache next. */
+-	movl	$_car_mtrr_start, %edi
+-
+-	/* Number of loops. */
+-	movl	$_car_mtrr_size, %ecx
+-	shr	$6, %ecx
+-	xorl	%ebx, %ebx
+-	mov	$64, %bl
+-
+-1:
+ 	/*
+-	 * BWG: *One* location in each 64-byte cache line must be written
+-	 * to set all cached values to modified state.
+-	 *
+-	 * Value of %eax doesn't matter here. CAR is zeroed later.
+-	 *
+-	 * Zeroing the whole cache here *not* work when CR0.CD = 0.
+-	 * Zeroing the whole cache here *does* work when CR0.CD = 1,
+-	 * but will be a couple of times slower (4 times on Sandy Bridge).
++	 * Clear the CAR region. This fills up the cache: with the code
++	 * uncached, every line of the region gets a way of its own.
+ 	 */
+-	movl	%eax, (%edi)
+-	addl	%ebx, %edi
+-
+-	loop	1b
++	cld
++	xorl	%eax, %eax
++	movl	$_car_mtrr_start, %edi
++	movl	$_car_mtrr_size, %ecx
++	shr	$2, %ecx
++	rep	stosl
+ 
+ 	/* enable the 'no eviction run' state. */
+ 	movl	$NoEvictMod_MSR, %ecx
+@@ -201,15 +200,23 @@ end_microcode_update:
+ 	or	$3, %al
+ 	wrmsr
+ 
+-	post_code(POSTCODE_SOC_ENABLE_CACHE)
++	post_code(POSTCODE_SOC_DISABLE_CACHE)
++	/* Disable caching to change the MTRR. */
++	movl	%cr0, %eax
++	orl	$CR0_CacheDisable, %eax
++	movl	%eax, %cr0
+ 
+-	/* Now that CAR is enabled clear it. */
+-	movl	$_car_mtrr_start, %edi
+-	movl	$_car_mtrr_size, %ecx
+-	cld
+-	xorl	%eax, %eax
+-	shr	$2, %ecx
+-	rep	stosl
++	/* Enable the ROM MTRR again: the code is cacheable from now on. */
++	movl	$MTRR_PHYS_MASK(1), %ecx
++	rdmsr
++	orl	$MTRR_PHYS_MASK_VALID, %eax
++	wrmsr
++
++	post_code(POSTCODE_SOC_ENABLE_CACHE)
++	/* Enable caching. */
++	movl	%cr0, %eax
++	andl	$(~(CR0_CacheDisable | CR0_NoWriteThrough)), %eax
++	movl	%eax, %cr0
+ 
+ 	/* Setup the stack. */
+ 	mov	$_ecar_stack, %esp
+-- 
+2.43.0
+

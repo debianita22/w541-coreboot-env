@@ -20,6 +20,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0037 | no "Null dereference" error when the DRAM clearing at boot writes the first page, which starts at address zero |
 | 0038 | no S3 resume attempt after a power button override, which leaves the S3 sleep type behind |
 | 0039-0042 | where a boot or an S3 resume stopped, with `CMOS_POST`: a POST code as soon as the CMOS bank of a boot is chosen, one after each romstage step, the number of lines `mrc.bin` has printed, codes around loading ramstage |
+| 0043 | S3 resume: the cache-as-RAM region is filled with the code uncached again, as before coreboot commit `97dbfd309`; with the code cached, one 64-byte line of the 256 KiB region (the size of the Haswell L2) is lost, and `mrc.bin` hung on it while restoring the memory on resume |
 
 ## EDK2 and LvglPkg
 

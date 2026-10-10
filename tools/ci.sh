@@ -231,11 +231,11 @@ pick it once with *Boot From File* in the boot manager (Esc at power-on).
 The NVIDIA GPU is **off by default**, as in upstream coreboot: turn it on in
 the setup menu (Esc at power-on), *Hardware* → *NVIDIA discrete GPU*.
 
-**Suspend to RAM (S3)**: the \`mrc\` images up to v1.0.5 did not resume, because
-their \`mrc.bin\` (the 4.22 build) hangs while restoring the memory on resume.
-From v1.0.6 the image carries the \`mrc.bin\` of the 24.08 image that resumed on
-this laptop; the \`nri\` image never used it. If a resume still stops, the event
-log has its last POST code: [diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang);
+**Suspend to RAM (S3)**: the images up to v1.0.6 did not resume: coreboot's
+cache-as-RAM setup lost one line of the region on Haswell, and \`mrc.bin\` hung
+on it while restoring the memory. Patch 0043 (from v1.0.7) fills the region as
+before. If a resume still stops, the event log has its last POST code:
+[diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang);
 suspend-to-idle (\`mem_sleep_default=s2idle\`) works meanwhile.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))

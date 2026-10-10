@@ -131,13 +131,16 @@ same way.
   a few seconds of black screen before the boot splash. It happens again
   after every flash, since the cache is empty in the image. Suspend (S3)
   needs that saved training: test it after the second boot.
-- Suspend to RAM (S3): the `mrc` images up to v1.0.5 carried the
-  `mrc.bin` of the 4.22 image, which hangs while restoring the memory on
-  resume (the laptop sleeps, does not come back, and a long press of the
-  power button turns it off; the next boot logs POST code `0x3a` with
-  `mrc.bin` ten lines into its log). From v1.0.6 the image carries the
-  `mrc.bin` of the 24.08 image that resumed on this laptop. If a resume
-  still stops, [Diagnosing a hang](#diagnosing-a-hang) tells where, and
+- Suspend to RAM (S3): with the images up to v1.0.6 the laptop sleeps,
+  does not come back, and a long press of the power button turns it off;
+  the next boot logs POST code `0x3a` with `mrc.bin` ten lines into its
+  log, that is a hang while restoring the memory on resume. The cause is
+  in coreboot's cache-as-RAM setup since commit `97dbfd309`: the region
+  is filled with the code cached, and on Haswell, where the region is as
+  large as the L2 cache, one 64-byte line of it is lost; `mrc.bin` uses
+  that line on the S3 path only. Patch 0043, from v1.0.7, fills the
+  region with the code uncached, as before. If a resume still stops,
+  [Diagnosing a hang](#diagnosing-a-hang) tells where, and
   suspend-to-idle, where the firmware takes no part, works meanwhile:
   `echo s2idle | sudo tee /sys/power/mem_sleep` for the running system,
   `mem_sleep_default=s2idle` on the kernel command line to keep it.

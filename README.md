@@ -107,11 +107,11 @@ Inside coreboot:
 > on in the setup menu: *Hardware* → *NVIDIA discrete GPU*.
 
 > [!WARNING]
-> Suspend to RAM (S3): with the `mrc` images up to v1.0.5 the laptop sleeps
-> and does not come back, because that `mrc.bin` build hangs while
-> restoring the memory on resume (POST code `0x3a`, ten lines into its
-> log). From v1.0.6 the `mrc` image carries the `mrc.bin` of the 24.08
-> image that resumed on this laptop. If a resume still stops,
+> Suspend to RAM (S3): with the images up to v1.0.6 the laptop sleeps and
+> does not come back: a change in coreboot's cache-as-RAM setup loses one
+> line of the region on Haswell, and `mrc.bin` hung on it while restoring
+> the memory on resume (POST code `0x3a`, ten lines into its log). Patch
+> 0043, from v1.0.7, fills the region as before. If a resume still stops,
 > [docs/flashing.md](docs/flashing.md#diagnosing-a-hang) shows how to find
 > where, and suspend-to-idle (`mem_sleep_default=s2idle`) works meanwhile.
 
