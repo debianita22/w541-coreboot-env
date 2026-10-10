@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 00:23:39 +0200
-Subject: [PATCH 1/5] MdeModulePkg/UiApp: List the forms of formsets that ask
+Subject: [PATCH 1/6] MdeModulePkg/UiApp: List the forms of formsets that ask
  for it
 
 The front page has one entry per formset with the front page class GUID.
@@ -12,18 +12,21 @@ Add the EDKII_IFR_FRONT_PAGE_FORMS_GUID formset class GUID: the front page
 lists each form of such a formset, except the first one, as an entry of
 its own, with the form title as prompt. Forms with an empty title are
 left out, so a formset can declare spare forms and only use some of
-them. The entries come first, followed by an empty line.
+them. A package list with several formsets gets the forms of those
+with the class GUID, each pointing to its own formset. The entries come
+first, followed by an empty line.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
  .../Application/UiApp/FrontPageCustomizedUi.c |   8 +
- .../UiApp/FrontPageCustomizedUiSupport.c      | 148 ++++++++++++++++++
- .../UiApp/FrontPageCustomizedUiSupport.h      |  19 +++
+ .../UiApp/FrontPageCustomizedUiSupport.c      | 201 ++++++++++++++++++
+ .../UiApp/FrontPageCustomizedUiSupport.h      |  19 ++
  MdeModulePkg/Application/UiApp/UiApp.inf      |   1 +
  MdeModulePkg/Include/Guid/HiiFrontPageForms.h |  15 ++
  MdeModulePkg/MdeModulePkg.dec                 |   4 +
- 6 files changed, 195 insertions(+)
+ 6 files changed, 248 insertions(+)
  create mode 100644 MdeModulePkg/Include/Guid/HiiFrontPageForms.h
 
 diff --git a/MdeModulePkg/Application/UiApp/FrontPageCustomizedUi.c b/MdeModulePkg/Application/UiApp/FrontPageCustomizedUi.c
@@ -53,7 +56,7 @@ index cd5e3e0b98..139b16addf 100644
    // Create "Continue" menu.
    //
 diff --git a/MdeModulePkg/Application/UiApp/FrontPageCustomizedUiSupport.c b/MdeModulePkg/Application/UiApp/FrontPageCustomizedUiSupport.c
-index 36cbc75ef6..71eea6c03d 100644
+index 36cbc75ef6..fc9e3e47c6 100644
 --- a/MdeModulePkg/Application/UiApp/FrontPageCustomizedUiSupport.c
 +++ b/MdeModulePkg/Application/UiApp/FrontPageCustomizedUiSupport.c
 @@ -36,6 +36,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
@@ -64,10 +67,47 @@ index 36cbc75ef6..71eea6c03d 100644
  
  typedef struct {
    EFI_STRING_ID    PromptId;
-@@ -408,3 +409,150 @@ UiListThirdPartyDrivers (
+@@ -408,3 +409,203 @@ UiListThirdPartyDrivers (
  
    return EFI_SUCCESS;
  }
++
++/**
++  Whether a formset has ClassGuid among its class GUIDs.
++
++  @param    FormSet             The formset opcode.
++  @param    ClassGuid           The class guid to look for.
++
++  @retval   TRUE                It does.
++  @retval   FALSE               It does not.
++
++**/
++STATIC
++BOOLEAN
++FormSetHasClassGuid (
++  IN EFI_IFR_FORM_SET  *FormSet,
++  IN EFI_GUID          *ClassGuid
++  )
++{
++  UINT8     ClassGuidNum;
++  EFI_GUID  *Guid;
++
++  if (FormSet->Header.Length <= OFFSET_OF (EFI_IFR_FORM_SET, Flags)) {
++    return FALSE;
++  }
++
++  ClassGuidNum = (UINT8)(FormSet->Flags & 0x3);
++  Guid         = (EFI_GUID *)(VOID *)((UINT8 *)FormSet + sizeof (EFI_IFR_FORM_SET));
++  while (ClassGuidNum-- > 0) {
++    if (CompareGuid (ClassGuid, Guid)) {
++      return TRUE;
++    }
++
++    Guid++;
++  }
++
++  return FALSE;
++}
 +
 +/**
 +  Add a front page entry for each form, except the first one, of the formsets
@@ -104,6 +144,7 @@ index 36cbc75ef6..71eea6c03d 100644
 +  EFI_IFR_OP_HEADER            *OpCode;
 +  EFI_IFR_FORM                 *Form;
 +  BOOLEAN                      FirstForm;
++  BOOLEAN                      ListForms;
 +  EFI_STRING                   String;
 +  EFI_STRING_ID                PromptId;
 +  EFI_STRING_ID                DevicePathId;
@@ -146,9 +187,11 @@ index 36cbc75ef6..71eea6c03d 100644
 +    }
 +
 +    //
-+    // Every form opcode in the forms packages, but the first form
++    // Every form opcode of the formsets that ask for it, but the first form
++    // of each
 +    //
 +    FirstForm         = TRUE;
++    ListForms         = FALSE;
 +    Offset            = sizeof (EFI_HII_PACKAGE_LIST_HEADER);
 +    PackageListLength = ReadUnaligned32 (&PackageList->PackageLength);
 +    while (Offset < PackageListLength) {
@@ -171,7 +214,20 @@ index 36cbc75ef6..71eea6c03d 100644
 +        }
 +
 +        Offset2 += OpCode->Length;
-+        if (OpCode->OpCode != EFI_IFR_FORM_OP) {
++        if (OpCode->OpCode == EFI_IFR_FORM_SET_OP) {
++          //
++          // The forms that follow are of this formset: entries point to it
++          //
++          ListForms = FormSetHasClassGuid ((EFI_IFR_FORM_SET *)OpCode, ClassGuid);
++          if (ListForms) {
++            CopyMem (&FormSetGuid, &((EFI_IFR_FORM_SET *)OpCode)->Guid, sizeof (EFI_GUID));
++            FirstForm = TRUE;
++          }
++
++          continue;
++        }
++
++        if ((OpCode->OpCode != EFI_IFR_FORM_OP) || !ListForms) {
 +          continue;
 +        }
 +

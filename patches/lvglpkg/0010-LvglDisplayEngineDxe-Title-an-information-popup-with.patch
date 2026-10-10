@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 08:56:06 +0200
+Subject: [PATCH 10/10] LvglDisplayEngineDxe: Title an information popup with
+ only OK as such
+
+A popup of EFI_HII_POPUP_PROTOCOL with the information style is titled
+"Confirm", which fits a question with Yes and No, not a message with just
+OK, such as a driver reporting that a password was set. Title the latter
+"Information".
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index ba24553..0f89438 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -6037,7 +6037,10 @@ LvglHiiCreatePopup (
+       Title = "Warning";
+       break;
+     default:
+-      Title = "Confirm";
++      //
++      // An information popup with just OK tells, it does not ask.
++      //
++      Title = (PopupType == EfiHiiPopupTypeOk) ? "Information" : "Confirm";
+       break;
+   }
+ 
+-- 
+2.43.0
+

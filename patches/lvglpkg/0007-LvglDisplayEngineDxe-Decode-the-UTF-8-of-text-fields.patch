@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 08:39:31 +0200
+Subject: [PATCH 07/10] LvglDisplayEngineDxe: Decode the UTF-8 of text fields
+ into UCS-2
+
+The keypad driver hands LVGL the UnicodeChar of every key, and LVGL
+stores it in the field as UTF-8. The string and password fields were
+read back a byte at a time, widened to CHAR16: a character outside
+ASCII became two wrong characters, and a password set in the dialogs
+with one in it did not match what the text prompt of
+UserAuthenticationDxe reads before the setup menu opens.
+
+Decode the UTF-8 into code points instead, counting characters, not
+bytes. A string field now stores MaxSize characters, as the text display
+engine does; it kept one less, and the field did not limit the typing
+either, so it is capped at MaxSize too.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 78 ++++++++++++++++++-------
+ 1 file changed, 56 insertions(+), 22 deletions(-)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index 3cff9a8..03adce6 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -332,6 +332,43 @@ Ucs2ToUtf8 (
+   return Utf8;
+ }
+ 
++/**
++  Decode the UTF-8 text of a field into UCS-2: LVGL stores the code point
++  of every key as UTF-8, so a byte is not a character.
++
++  @param[in]  Utf8      Text of the field (may be NULL).
++  @param[out] Ucs2      Buffer of MaxChars + 1 characters.
++  @param[in]  MaxChars  Characters to keep at most.
++
++  @return The number of characters stored, without the terminator.
++**/
++STATIC
++UINTN
++Utf8ToUcs2 (
++  IN  CONST CHAR8  *Utf8,
++  OUT CHAR16       *Ucs2,
++  IN  UINTN        MaxChars
++  )
++{
++  uint32_t  Idx;
++  uint32_t  CodePoint;
++  UINTN     Count;
++
++  Idx   = 0;
++  Count = 0;
++  while ((Utf8 != NULL) && (Count < MaxChars)) {
++    CodePoint = lv_text_encoded_next (Utf8, &Idx);
++    if (CodePoint == 0) {
++      break;
++    }
++
++    Ucs2[Count++] = (CodePoint <= 0xFFFF) ? (CHAR16)CodePoint : L'?';
++  }
++
++  Ucs2[Count] = L'\0';
++  return Count;
++}
++
+ /**
+   Get prompt text for a statement as UTF-8. Caller must FreePool().
+ **/
+@@ -2207,11 +2244,9 @@ StageStringUserInput (
+   CONST CHAR8     *Utf8Text;
+   CHAR16          *Str16;
+   CHAR16          *PoolBuf;
+-  UINTN           SrcLen;
+   UINTN           BufBytes;
+   UINTN           MaxChars;
+   UINTN           CopyChars;
+-  UINTN           Idx;
+   EFI_IFR_STRING  *StringOp;
+   EFI_STRING_ID   NewStringId;
+   lv_obj_t        *Ta;
+@@ -2232,23 +2267,14 @@ StageStringUserInput (
+     Utf8Text = "";
+   }
+ 
+-  SrcLen = AsciiStrLen (Utf8Text);
+-
+   if (!Force && !IsStringTextDirty (Ctx, Utf8Text)) {
+     return FALSE;
+   }
+ 
+-  Str16 = AllocateZeroPool ((SrcLen + 1) * sizeof (CHAR16));
+-  if (Str16 == NULL) {
+-    return FALSE;
+-  }
+-
+-  for (Idx = 0; Idx < SrcLen; Idx++) {
+-    Str16[Idx] = (CHAR16)(UINT8)Utf8Text[Idx];
+-  }
+-
+-  Str16[SrcLen] = L'\0';
+-
++  //
++  // The buffer holds MaxSize characters and no terminator: the browser adds
++  // one, as with the text display engine.
++  //
+   BufBytes = Ctx->Statement->CurrentValue.BufferLen;
+   if (BufBytes == 0) {
+     StringOp = (EFI_IFR_STRING *)Ctx->Statement->OpCode;
+@@ -2256,18 +2282,23 @@ StageStringUserInput (
+   }
+ 
+   if (BufBytes < sizeof (CHAR16)) {
+-    FreePool (Str16);
+     return FALSE;
+   }
+ 
++  MaxChars = BufBytes / sizeof (CHAR16);
++  Str16    = AllocateZeroPool ((MaxChars + 1) * sizeof (CHAR16));
++  if (Str16 == NULL) {
++    return FALSE;
++  }
++
++  CopyChars = Utf8ToUcs2 (Utf8Text, Str16, MaxChars);
++
+   PoolBuf = AllocateZeroPool (BufBytes);
+   if (PoolBuf == NULL) {
+     FreePool (Str16);
+     return FALSE;
+   }
+ 
+-  MaxChars  = (BufBytes / sizeof (CHAR16)) - 1;
+-  CopyChars = (SrcLen < MaxChars) ? SrcLen : MaxChars;
+   CopyMem (PoolBuf, Str16, CopyChars * sizeof (CHAR16));
+ 
+   NewStringId = HiiSetString (mSession.FormData->HiiHandle, 0, Str16, NULL);
+@@ -4555,6 +4586,12 @@ CreateStringWidget (
+ 
+   Ta = lv_textarea_create (Row);
+   lv_textarea_set_one_line (Ta, true);
++  if (Statement->OpCode->OpCode == EFI_IFR_STRING_OP) {
++    //
++    // What the question stores: MaxSize characters.
++    //
++    lv_textarea_set_max_length (Ta, ((EFI_IFR_STRING *)Statement->OpCode)->MaxSize);
++  }
+ 
+   //
+   // For string fields the current value is stored as an HII string token
+@@ -6046,7 +6083,6 @@ ReadPasswordDialog (
+   lv_obj_t           *Field;
+   lv_obj_t           *Btn;
+   CONST CHAR8        *Text;
+-  UINTN              Idx;
+   UINTN              Len;
+   extern BOOLEAN     mTickSupport;
+ 
+@@ -6104,9 +6140,7 @@ ReadPasswordDialog (
+   Text = lv_textarea_get_text (Field);
+   Len  = (Text != NULL) ? AsciiStrLen (Text) : 0;
+   if (mPasswordDialogResult == LVGL_DIALOG_OK) {
+-    for (Idx = 0; (Idx < Len) && (Idx < MaxChars); Idx++) {
+-      Password[Idx] = (CHAR16)(UINT8)Text[Idx];
+-    }
++    Utf8ToUcs2 (Text, Password, MaxChars);
+   }
+ 
+   if (Len > 0) {
+-- 
+2.43.0
+

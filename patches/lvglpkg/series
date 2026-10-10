@@ -4,3 +4,7 @@
 0004-LvglDisplayEngineDxe-Redesign-the-setup-UI-as-System.patch
 0005-LvglDisplayEngineDxe-Change-passwords-in-dialogs.patch
 0006-LvglLib-Move-the-cursor-with-relative-pointers.patch
+0007-LvglDisplayEngineDxe-Decode-the-UTF-8-of-text-fields.patch
+0008-LvglDisplayEngineDxe-Keep-the-form-out-of-the-keys-w.patch
+0009-LvglDisplayEngineDxe-Delete-the-previous-screen-when.patch
+0010-LvglDisplayEngineDxe-Title-an-information-popup-with.patch

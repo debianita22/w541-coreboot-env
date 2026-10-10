@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 08:40:41 +0200
+Subject: [PATCH 08/10] LvglDisplayEngineDxe: Keep the form out of the keys
+ while an HII popup is up
+
+The handlers of the form check mPopupOverlay, which the F9/F10 popups and
+the password dialogs set, to leave the keys to the popup. A popup of
+EFI_HII_POPUP_PROTOCOL sets mHiiPopupOverlay instead, so while one is up
+(the alerts of the password dialogs, or one raised by a driver) the arrow
+keys still move the focus of the form behind it, commit the field being
+left and can make the form exit once the popup closes; on the front page
+they move between the tiles, and F9/F10 open a second popup whose buttons
+the keypad cannot reach.
+
+Check both overlays, through IsModalOpen(), wherever the form handlers
+checked mPopupOverlay.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 29 +++++++++++++++++++------
+ 1 file changed, 22 insertions(+), 7 deletions(-)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index 03adce6..c3e1964 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -226,6 +226,20 @@ STATIC INT32       mHiiPopupNoSel  = LVGL_HII_POPUP_PENDING;
+ STATIC INT32       mHiiPopupEscSel = LVGL_HII_POPUP_PENDING;
+ STATIC lv_group_t  *mHiiPopupGroup = NULL;
+ 
++/**
++  Whether a modal dialog is up: the F9/F10 popups and the password dialogs
++  (mPopupOverlay) or an EFI_HII_POPUP_PROTOCOL popup (mHiiPopupOverlay).
++  The handlers of the form behind it ignore keys and clicks meanwhile.
++**/
++STATIC
++BOOLEAN
++IsModalOpen (
++  VOID
++  )
++{
++  return (BOOLEAN)((mPopupOverlay != NULL) || (mHiiPopupOverlay != NULL));
++}
++
+ //
+ // Password questions: a click asks for the passwords in dialogs, which run
+ // from the event loop of the form (RunPasswordDialogs) -- LVGL does not
+@@ -1610,7 +1624,7 @@ HandleFunctionKey (
+       // For other actions (Reset, Exit) execute immediately.
+       //
+       if ((HotKey->Action & (BROWSER_ACTION_SUBMIT | BROWSER_ACTION_DEFAULT)) != 0) {
+-        if (mPopupOverlay == NULL) {
++        if (!IsModalOpen ()) {
+           CONST CHAR8  *Title = ((HotKey->Action & BROWSER_ACTION_DEFAULT) != 0)
+                                   ? "Load Defaults?" : "Save Changes?";
+           CONST CHAR8  *Label = ((HotKey->Action & BROWSER_ACTION_DEFAULT) != 0)
+@@ -1827,9 +1841,10 @@ OnIndevFallbackKey (
+   Key   = lv_indev_get_key (Indev);
+ 
+   //
+-  // Popup is open -- OnPopupKey handles all keys for popup buttons.
++  // A popup is open: its own handlers take the keys, and the form keeps its
++  // focus and its fields as they are until it closes.
+   //
+-  if (mPopupOverlay != NULL) {
++  if (IsModalOpen ()) {
+     return;
+   }
+ 
+@@ -2629,9 +2644,9 @@ OnNavKey (
+   Ctx     = (LVGL_STATEMENT_CONTEXT *)lv_event_get_user_data (Event);
+ 
+   //
+-  // Defer all key handling to OnPopupKey when a popup is visible.
++  // Defer all key handling to the popup when one is visible.
+   //
+-  if (mPopupOverlay != NULL) {
++  if (IsModalOpen ()) {
+     return;
+   }
+ 
+@@ -4657,7 +4672,7 @@ OnPasswordClicked (
+   LVGL_STATEMENT_CONTEXT  *Ctx;
+ 
+   Ctx = (LVGL_STATEMENT_CONTEXT *)lv_event_get_user_data (Event);
+-  if ((Ctx == NULL) || (mPopupOverlay != NULL) || !IsStatementInCurrentForm (Ctx->Statement)) {
++  if ((Ctx == NULL) || IsModalOpen () || !IsStatementInCurrentForm (Ctx->Statement)) {
+     return;
+   }
+ 
+@@ -5262,7 +5277,7 @@ OnBackClicked (
+ {
+   (VOID)Event;
+ 
+-  if ((mPopupOverlay == NULL) && !IsFrontPageForm ()) {
++  if (!IsModalOpen () && !IsFrontPageForm ()) {
+     RequestUserExit (BROWSER_ACTION_FORM_EXIT, 0, NULL);
+   }
+ }
+-- 
+2.43.0
+

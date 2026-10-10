@@ -3,3 +3,4 @@
 0003-UefiPayloadPkg-CfrSetupMenuDxe-Link-the-setup-passwo.patch
 0004-OvmfPkg-SioBusDxe-Add-the-PS-2-mouse.patch
 0005-UefiPayloadPkg-Name-the-graphical-setup-System-Prefe.patch
+0006-UefiPayloadPkg-UserAuthenticationDxe-Show-the-messag.patch

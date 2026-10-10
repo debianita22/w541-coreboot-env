@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 01:22:44 +0200
-Subject: [PATCH 5/5] UefiPayloadPkg: Name the graphical setup System
+Subject: [PATCH 5/6] UefiPayloadPkg: Name the graphical setup System
  Preferences
 
 The menu bar of the LVGL setup UI shows PcdLvglAptioHeaderTitle,

@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 08:46:23 +0200
+Subject: [PATCH 09/10] LvglDisplayEngineDxe: Delete the previous screen when a
+ form is drawn
+
+Every call of FormDisplay() builds the form on a new screen and a new
+group, and only the last pair is deleted, at ExitDisplay(). The browser
+calls FormDisplay() again after every change of a question, so a setup
+session leaks a whole window (cards, tiles, dock) per interaction:
+LVGL keeps a loaded screen until it is deleted.
+
+Delete the previous screen and its group once the new ones are in place.
+The group goes first, so that its objects are detached before the screen
+is deleted and no focus moves around in the old form.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index c3e1964..ba24553 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -5401,6 +5401,8 @@ LvglRenderForm (
+ {
+   EFI_STATUS  Status;
+   lv_obj_t    *ContentPanel;
++  lv_obj_t    *PrevScreen;
++  lv_group_t  *PrevGroup;
+   extern BOOLEAN mTickSupport;
+ 
+   ASSERT (FormData != NULL);
+@@ -5431,6 +5433,13 @@ LvglRenderForm (
+   //
+   AptioChromeTeardown ();
+ 
++  //
++  // The screen and the group of the previous form go once the new ones are
++  // in place: LVGL keeps a loaded screen until it is deleted.
++  //
++  PrevScreen = mSession.Screen;
++  PrevGroup  = mSession.Group;
++
+   //
+   // Set up session state.
+   //
+@@ -5543,9 +5552,18 @@ LvglRenderForm (
+   //
+ 
+   //
+-  // Load the screen.
++  // Load the screen, then delete the previous one and its group. The group
++  // first: it detaches its objects, so that deleting the screen moves no
++  // focus around.
+   //
+   lv_screen_load (mSession.Screen);
++  if (PrevGroup != NULL) {
++    lv_group_delete (PrevGroup);
++  }
++
++  if ((PrevScreen != NULL) && (PrevScreen != mSession.Screen)) {
++    lv_obj_delete (PrevScreen);
++  }
+ 
+   //
+   // Restore keyboard focus. Prefer the destination field after a nav-time
+-- 
+2.43.0
+

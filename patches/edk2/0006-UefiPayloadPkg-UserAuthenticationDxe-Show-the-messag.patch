@@ -1,0 +1,229 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 08:46:23 +0200
+Subject: [PATCH 6/6] UefiPayloadPkg/UserAuthenticationDxe: Show the messages
+ as HII popups
+
+The driver reports a wrong password, a new password set, a short one and
+the retry limit with CreatePopUp(): blue text boxes drawn on the console,
+over the graphical setup UI when a display engine such as
+LvglDisplayEngineDxe is drawing it.
+
+Show them through EFI_HII_POPUP_PROTOCOL when a display engine offers
+it and is ready, so that they look like the rest of the setup UI; the
+messages become strings of the driver. Before the setup UI is up, as for
+the password asked at the entry of the front page, or without the
+protocol, the text boxes stay.
+
+The help of the password question said 8 to 32 characters: the formset
+and the driver accept 64.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../UserAuthenticationDxe.c                   | 79 ++++++++++++++++++-
+ .../UserAuthenticationDxe.h                   |  1 +
+ .../UserAuthenticationDxe.inf                 |  1 +
+ .../UserAuthenticationDxeStrings.uni          | 18 ++++-
+ 4 files changed, 93 insertions(+), 6 deletions(-)
+
+diff --git a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.c b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.c
+index 7ac2f8b3e3..a7d7872d50 100644
+--- a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.c
++++ b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.c
+@@ -118,18 +118,69 @@ GetUserInput (
+   return EFI_SUCCESS;
+ }
+ 
++/**
++  Show a message through EFI_HII_POPUP_PROTOCOL, when a display engine
++  offers one and is ready: the message then looks like the rest of the
++  setup UI. Before the setup UI is up, or without the protocol, the caller
++  falls back to a text pop-up.
++
++  @param[in] Style     The style of the popup.
++  @param[in] Message   The string of the message, in the HII package of
++                       this driver.
++
++  @retval TRUE   The message was shown and dismissed.
++  @retval FALSE  The protocol is missing or not ready.
++**/
++BOOLEAN
++HiiPopupMessage (
++  IN EFI_HII_POPUP_STYLE  Style,
++  IN EFI_STRING_ID        Message
++  )
++{
++  EFI_STATUS               Status;
++  EFI_HII_POPUP_PROTOCOL   *HiiPopup;
++  EFI_HII_POPUP_SELECTION  Selection;
++
++  if (mUserAuthenticationData == NULL) {
++    return FALSE;
++  }
++
++  Status = gBS->LocateProtocol (&gEfiHiiPopupProtocolGuid, NULL, (VOID **)&HiiPopup);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  Status = HiiPopup->CreatePopup (
++                       HiiPopup,
++                       Style,
++                       EfiHiiPopupTypeOk,
++                       mUserAuthenticationData->HiiHandle,
++                       Message,
++                       &Selection
++                       );
++  return (BOOLEAN)!EFI_ERROR (Status);
++}
++
+ /**
+   Display a message box to end user.
+ 
++  @param[in] Style           The style of the message for EFI_HII_POPUP_PROTOCOL.
++  @param[in] Message         The string of the message for EFI_HII_POPUP_PROTOCOL.
+   @param[in] DisplayString   The string in message box.
+ **/
+ VOID
+ MessageBox (
+-  IN CHAR16  *DisplayString
++  IN EFI_HII_POPUP_STYLE  Style,
++  IN EFI_STRING_ID        Message,
++  IN CHAR16               *DisplayString
+   )
+ {
+   EFI_INPUT_KEY  Key;
+ 
++  if (HiiPopupMessage (Style, Message)) {
++    return;
++  }
++
+   do {
+     CreatePopUp (
+       EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE,
+@@ -151,7 +202,11 @@ ForceSystemReset (
+   VOID
+   )
+ {
+-  MessageBox (L"Password retry count reach, reset system!");
++  MessageBox (
++    EfiHiiPopupStyleError,
++    STRING_TOKEN (STR_MSG_RETRY_COUNT),
++    L"Password retry count reach, reset system!"
++    );
+   gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
+   CpuDeadLoop();
+ }
+@@ -172,6 +227,10 @@ PrintSetPasswordStatus (
+   EFI_INPUT_KEY  Key;
+ 
+   if (ReturnStatus == EFI_UNSUPPORTED) {
++    if (HiiPopupMessage (EfiHiiPopupStyleError, STRING_TOKEN (STR_MSG_WEAK))) {
++      return;
++    }
++
+     DisplayString  = L"New password is not strong enough!";
+     DisplayString2 = L"Password must be at least 8 chars";
+ 
+@@ -189,10 +248,22 @@ PrintSetPasswordStatus (
+     } while (Key.UnicodeChar != CHAR_CARRIAGE_RETURN);
+   } else {
+     if (ReturnStatus == EFI_SUCCESS) {
++      if (HiiPopupMessage (EfiHiiPopupStyleInfo, STRING_TOKEN (STR_MSG_UPDATED))) {
++        return;
++      }
++
+       DisplayString = L"New password is updated successfully!";
+     } else if (ReturnStatus == EFI_ALREADY_STARTED) {
++      if (HiiPopupMessage (EfiHiiPopupStyleError, STRING_TOKEN (STR_MSG_HISTORY))) {
++        return;
++      }
++
+       DisplayString = L"New password is found in the history passwords!";
+     } else {
++      if (HiiPopupMessage (EfiHiiPopupStyleError, STRING_TOKEN (STR_MSG_FAILED))) {
++        return;
++      }
++
+       DisplayString = L"New password update fails!";
+     }
+ 
+@@ -257,7 +328,7 @@ RequireUserPassword (
+       //
+       ForceSystemReset ();
+     }
+-    MessageBox (L"Incorrect password!");
++    MessageBox (EfiHiiPopupStyleError, STRING_TOKEN (STR_MSG_INCORRECT), L"Incorrect password!");
+   }
+ 
+   ZeroMem(UserInputPw, sizeof(UserInputPw));
+@@ -295,7 +366,7 @@ SetUserPassword (
+     gST->ConOut->ClearScreen(gST->ConOut);
+     GetUserInput (PopUpString2, TmpPassword, PASSWORD_MAX_SIZE - 1);
+     if (StrCmp (TmpPassword, UserInputPw) != 0) {
+-      MessageBox (L"Password are not the same!");
++      MessageBox (EfiHiiPopupStyleError, STRING_TOKEN (STR_MSG_MISMATCH), L"Password are not the same!");
+       continue;
+     }
+ 
+diff --git a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.h b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.h
+index 86694ad15c..acaca1de0b 100644
+--- a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.h
++++ b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.h
+@@ -12,6 +12,7 @@
+ 
+ #include <Protocol/ReportStatusCodeHandler.h>
+ #include <Protocol/HiiConfigAccess.h>
++#include <Protocol/HiiPopup.h>
+ 
+ #include <Guid/MdeModuleHii.h>
+ #include <Guid/HiiPlatformSetupFormset.h>
+diff --git a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.inf b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.inf
+index 2abacc51b7..b0f395a3e4 100644
+--- a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.inf
++++ b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxe.inf
+@@ -57,6 +57,7 @@
+   gEfiRscHandlerProtocolGuid                    ## CONSUMES
+   gEfiDevicePathProtocolGuid                    ## PRODUCES
+   gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
++  gEfiHiiPopupProtocolGuid                      ## SOMETIMES_CONSUMES
+ 
+ [Depex]
+   gEfiSimpleTextOutProtocolGuid      AND
+diff --git a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxeStrings.uni b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxeStrings.uni
+index 84807eb0b1..09d46865ed 100644
+--- a/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxeStrings.uni
++++ b/UefiPayloadPkg/UserAuthPkg/UserAuthenticationDxe/UserAuthenticationDxeStrings.uni
+@@ -19,8 +19,8 @@
+                                        #language fr-FR "Password Management"
+ #string STR_ADMIN_PASSWORD_PROMPT      #language en-US "Change Admin Password"
+                                        #language fr-FR "Change Admin Password"
+-#string STR_ADMIN_PASSWORD_HELP        #language en-US "Input old admin password if it was set, then you can change the password to a new one. After the change action, you may need input the new password when you enter UI. The new password must be between 8 and 32 chars. Input an empty password can clean old admin password, then no need input password to enter UI."
+-                                       #language fr-FR "Input old admin password if it was set, then you can change the password to a new one. After the change action, you may need input the new password when you enter UI. The new password must be between 8 and 32 chars. Input an empty password can clean old admin password, then no need input password to enter UI."
++#string STR_ADMIN_PASSWORD_HELP        #language en-US "Input old admin password if it was set, then you can change the password to a new one. After the change action, you may need input the new password when you enter UI. The new password must be between 8 and 64 chars. Input an empty password can clean old admin password, then no need input password to enter UI."
++                                       #language fr-FR "Input old admin password if it was set, then you can change the password to a new one. After the change action, you may need input the new password when you enter UI. The new password must be between 8 and 64 chars. Input an empty password can clean old admin password, then no need input password to enter UI."
+ #string STR_ADMIN_PASSWORD_STS_HELP    #language en-US "Current Admin Password status: Installed or Not Installed."
+                                        #language fr-FR "Current Admin Password status: Installed or Not Installed."
+ #string STR_ADMIN_PASSWORD_STS_PROMPT  #language en-US "Admin Password Status"
+@@ -29,3 +29,17 @@
+                                        #language fr-FR ""
+ #string STR_EMPTY_STRING               #language en-US ""
+                                        #language fr-FR ""
++#string STR_MSG_INCORRECT              #language en-US "Incorrect password."
++                                       #language fr-FR "Incorrect password."
++#string STR_MSG_MISMATCH               #language en-US "The passwords are not the same."
++                                       #language fr-FR "The passwords are not the same."
++#string STR_MSG_RETRY_COUNT            #language en-US "Too many wrong passwords: the system resets."
++                                       #language fr-FR "Too many wrong passwords: the system resets."
++#string STR_MSG_WEAK                   #language en-US "The new password is too short: at least 8 characters."
++                                       #language fr-FR "The new password is too short: at least 8 characters."
++#string STR_MSG_UPDATED                #language en-US "The new password is set."
++                                       #language fr-FR "The new password is set."
++#string STR_MSG_HISTORY                #language en-US "The new password was used before: choose another one."
++                                       #language fr-FR "The new password was used before: choose another one."
++#string STR_MSG_FAILED                 #language en-US "The password could not be changed."
++                                       #language fr-FR "The password could not be changed."
+-- 
+2.43.0
+
