@@ -116,7 +116,8 @@ Inside coreboot:
 > does not come back: a change in coreboot's cache-as-RAM setup loses one
 > line of the region on Haswell, and `mrc.bin` hung on it while restoring
 > the memory on resume (POST code `0x3a`, ten lines into its log). Patch
-> 0043, from v1.0.7, fills the region as before. If a resume still stops,
+> 0043, from v1.0.7, fills the region as before: resume works (tested on
+> v1.0.9 with RTC, power button and lid wake). If a resume still stops,
 > [docs/flashing.md](docs/flashing.md#diagnosing-a-hang) shows how to find
 > where, and suspend-to-idle (`mem_sleep_default=s2idle`) works meanwhile.
 

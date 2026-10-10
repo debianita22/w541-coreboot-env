@@ -171,7 +171,8 @@ same way.
   is filled with the code cached, and on Haswell, where the region is as
   large as the L2 cache, one 64-byte line of it is lost; `mrc.bin` uses
   that line on the S3 path only. Patch 0043, from v1.0.7, fills the
-  region with the code uncached, as before. If a resume still stops,
+  region with the code uncached, as before, and resume works (tested on
+  v1.0.9: RTC, power button and lid wake). If a resume still stops,
   [Diagnosing a hang](#diagnosing-a-hang) tells where, and
   suspend-to-idle, where the firmware takes no part, works meanwhile:
   `echo s2idle | sudo tee /sys/power/mem_sleep` for the running system,
