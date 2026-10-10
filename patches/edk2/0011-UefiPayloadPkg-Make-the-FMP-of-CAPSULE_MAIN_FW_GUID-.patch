@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 23:58:48 +0200
+Subject: [PATCH] UefiPayloadPkg: Make the FMP of CAPSULE_MAIN_FW_GUID the
+ system firmware
+
+EsrtDxe reports a firmware as the system firmware of the ESRT only when
+its GUID is in PcdSystemFmpCapsuleImageTypeIdGuid; otherwise it is a
+device firmware, which is how the firmware of FmpDxe, the firmware of
+the platform, appeared to the OS and to fwupd.
+
+Set the PCD to CAPSULE_MAIN_FW_GUID when capsules are supported. As a
+patchable PCD: the DSC parser evaluates a fixed value before replacing
+the macros in it, and GUID() of the macro name fails.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/UefiPayloadPkg.dsc | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 3f4de29969..6cfa73653b 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -942,6 +942,13 @@
+   gEfiMdeModulePkgTokenSpaceGuid.PcdSerialRegisterStride|1
+ 
+ [PcdsPatchableInModule.common]
++!if $(CAPSULE_SUPPORT) == TRUE
++  ## The firmware of FmpDxe is the system firmware of the ESRT (FwType 1),
++  #  not a device: that is what fwupd expects of a platform firmware.
++  #  Patchable, not fixed: the parser replaces a macro in a fixed value only
++  #  after trying to evaluate it, and GUID() of the macro name fails first.
++  gEfiMdeModulePkgTokenSpaceGuid.PcdSystemFmpCapsuleImageTypeIdGuid|{GUID("$(CAPSULE_MAIN_FW_GUID)")}|VOID*|0x10
++!endif
+   gEfiMdeModulePkgTokenSpaceGuid.PcdBootManagerMenuFile|{ 0x21, 0xaa, 0x2c, 0x46, 0x14, 0x76, 0x03, 0x45, 0x83, 0x6e, 0x8a, 0xb6, 0xf4, 0x66, 0x23, 0x31 }
+   gEfiMdePkgTokenSpaceGuid.PcdReportStatusCodePropertyMask|0x7
+   gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x8000004F
+-- 
+2.43.0
+

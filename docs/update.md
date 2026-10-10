@@ -96,8 +96,10 @@ for that boot only, and the payload, before anything else runs:
 
 A capsule that fails a check writes nothing: the laptop restarts on the old
 firmware, and `update.py status` shows why (*firma non valida*: signature,
-*versione non accettata*: version). If there is no capsule to apply, the
-firmware gives the write access back and boots on.
+*versione non accettata*: version, *immagine non valida*: no region
+manifest or the wrong size, *mappa del flash diversa*: a capsule for
+another flash layout). If there is no capsule to apply, the firmware gives
+the write access back and boots on.
 
 ## Versions, variants, downgrades
 
@@ -135,9 +137,13 @@ Any tool that delivers capsules on disk works the same way:
 - *Battery too low, firmware update postponed*: connect the AC adapter, then
   `sudo python3 update.py stage FILE.cap` (or `--latest`) and reboot again.
 - *Firmware update failed (Security Violation)*: the capsule is not signed by
-  the key of the project. *(Aborted)*: version below the lowest supported,
-  or a capsule for another flash layout. *(Not Ready)*: a capsule for the
-  other variant.
+  the key of the project. *(Aborted)*: version below the lowest supported, a
+  capsule without the region manifest, or one for another flash layout.
+  *(Not Ready)*: a capsule for the other variant.
+- *Firmware update requested, but the flash is not writable in this boot*:
+  the request was set in a way coreboot did not see (for instance an
+  `OsIndications` variable left half-written by a crash); the laptop boots
+  on, stage the capsule again.
 - *No firmware update found*: the bit was set but there was no file on an
   ESP; the laptop boots on.
 - Power lost while writing: the 4 MiB chip may be incomplete and the laptop
@@ -155,25 +161,32 @@ The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 
 - coreboot (`DRIVERS_EFI_FW_INFO`) tells the payload the GUID and the version
   of the firmware, which the EDK2 payload publishes in the ESRT through
-  FmpDxe; Linux shows it in `/sys/firmware/efi/esrt`.
+  FmpDxe, as the system firmware (`fw_type` 1, patch `edk2/0011`); Linux
+  shows it in `/sys/firmware/efi/esrt`.
 - `OsIndicationsSupported` announces capsules on disk. When `OsIndications`
   asks for them, coreboot (`DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT`) switches
   its SMMSTORE handler to the whole flash for that boot only.
-- The payload (patches `edk2/0008-0010`) applies the capsules on disk before
+- The payload (patches `edk2/0008-0011`) applies the capsules on disk before
   EndOfDxe, the point after which FmpDxe refuses to write: the payload has no
   PEI phase that could load them on a later boot. FmpDxe checks the PKCS#7
   signature against the certificate built into the ROM
   (`keys/capsule-signing.pem`) and the version against the lowest supported
   one; `FmpDeviceSmmLib` writes the regions listed by the manifest appended
   to the image (`RW_MRC_CACHE COREBOOT`, `CAPSULE_REGIONS` in
-  `tools/build.sh`), only if the flash layout is the same, through the
-  SMMSTORE handler.
+  `tools/build.sh`), through the SMMSTORE handler. An image without a
+  manifest, or whose regions are not where the running firmware's flash map
+  has them, is refused: upstream, such an image rewrites the whole BIOS
+  region, settings and VPD included.
 - After writing, the payload restarts. Without anything to write, it gives
   the whole-flash access back to coreboot (patch 0050) before Driver####
   options, option ROMs or the OS run, or restarts if that fails. It asks the
   SMMSTORE handler whether the flash is writable rather than trusting
   `OsIndications`, so that a variable store crafted to look different to
-  coreboot and to the payload cannot leave it writable for the OS.
+  coreboot and to the payload cannot leave it writable for the OS. coreboot
+  also closes the decision on S3 resume (patch 0052): upstream, the SMM
+  handler is reloaded on resume with the decision pending, the payload
+  never runs, and the OS could take it and write the flash past the BIOS
+  lock.
 - Capsules in memory (`UpdateCapsule()` at runtime, then a warm reset) go
   through the same checks; with `Clear memory at power-on`, coreboot keeps
   them out of the clearing (patch 0048). Whether the memory survives the

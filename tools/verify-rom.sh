@@ -293,7 +293,8 @@ if extract config "${TMP}/config"; then
 	never CONFIG_BOOTMEDIA_SMM_BWP=y "flash scrivibile solo da SMM: flashrom -p internal non aggiornerebbe piu'"
 	# aggiornamento con capsula (docs/update.md)
 	want CONFIG_DRIVERS_EFI_FW_INFO=y
-	want "$(grep '^CONFIG_DRIVERS_EFI_MAIN_FW_GUID=' "${O}/configs/w541-${VARIANT}.defconfig")"
+	guid="$(grep '^CONFIG_DRIVERS_EFI_MAIN_FW_GUID=' "${O}/configs/w541-${VARIANT}.defconfig" || true)"
+	if [ -n "${guid}" ]; then want "${guid}"; else bad "config: w541-${VARIANT}.defconfig senza CONFIG_DRIVERS_EFI_MAIN_FW_GUID"; fi
 	want CONFIG_DRIVERS_EFI_UPDATE_CAPSULES=y
 	want CONFIG_DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT=y
 	want 'CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT="../../../../../w541/capsule-signing.pem"'

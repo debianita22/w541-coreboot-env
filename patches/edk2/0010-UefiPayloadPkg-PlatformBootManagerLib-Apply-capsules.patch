@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
-Date: Sat, 10 Oct 2026 22:11:22 +0200
+Date: Sat, 10 Oct 2026 23:58:48 +0200
 Subject: [PATCH] UefiPayloadPkg/PlatformBootManagerLib: Apply capsules on
  disk, keep the flash safe
 
@@ -43,8 +43,8 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  .../PlatformBootManager.c                     |  45 +-
  .../PlatformBootManager.h                     |  13 +
  .../PlatformBootManagerLib.inf                |   7 +
- .../PlatformBootManagerLib/PlatformCapsule.c  | 538 ++++++++++++++++++
- 4 files changed, 561 insertions(+), 42 deletions(-)
+ .../PlatformBootManagerLib/PlatformCapsule.c  | 546 ++++++++++++++++++
+ 4 files changed, 569 insertions(+), 42 deletions(-)
  create mode 100644 UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
 
 diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
@@ -187,10 +187,10 @@ index d1a15df444..8ce7235057 100644
    gUefiPayloadPkgTokenSpaceGuid.PcdiPXEOptionName
 diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
 new file mode 100644
-index 0000000000..2712914663
+index 0000000000..7f0ac10d4e
 --- /dev/null
 +++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,546 @@
 +/** @file
 +  Update capsules of a boot: in memory, from coreboot, or on disk.
 +
@@ -670,7 +670,15 @@ index 0000000000..2712914663
 +  }
 +
 +  if ((InMemory || OnDisk) && !Writable) {
-+    DEBUG ((DEBUG_ERROR, "Capsules: the flash is not writable in this boot, nothing applied\n"));
++    //
++    // coreboot read the request differently, or didn't see it: say so, the
++    // user is waiting for an update that doesn't happen.
++    //
++    PlatformConsoleInit ();
++    BootSplashApply ();
++    Console = TRUE;
++    CapsuleMessage (L"Firmware update requested, but the flash is not writable in this boot");
++    gBS->Stall (CAPSULE_MESSAGE_DELAY);
 +  } else if (InMemory || OnDisk) {
 +    PlatformConsoleInit ();
 +    BootSplashApply ();

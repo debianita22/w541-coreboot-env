@@ -72,7 +72,8 @@ FS_IOC_GETFLAGS = 0x80086601
 FS_IOC_SETFLAGS = 0x40086602
 FS_IMMUTABLE_FL = 0x10
 
-# LastAttemptStatus dell'ESRT (UEFI 2.10, 23.4)
+# LastAttemptStatus dell'ESRT (UEFI 2.10, 23.4), e i codici di
+# FmpDeviceSmmLib del payload (patch edk2 0008), da 0x1800
 ATTEMPT = {
     0: "riuscito",
     1: "non riuscito",
@@ -83,6 +84,9 @@ ATTEMPT = {
     6: "alimentatore",
     7: "batteria",
     8: "dipendenze non soddisfatte",
+    0x1800: "immagine non valida (senza manifest delle regioni, o di un'altra dimensione)",
+    0x1801: "mappa del flash diversa da quella del firmware che gira",
+    0x1802: "scrittura del flash fallita",
 }
 
 
@@ -98,8 +102,10 @@ def version_str(v):
 def attempt_str(status):
     if status in ATTEMPT:
         return ATTEMPT[status]
-    if 0x1000 <= status <= 0x4000:
-        return "errore 0x%x (FmpDxe o FmpDeviceSmmLib)" % status
+    if 0x1000 <= status <= 0x17FF:
+        return "errore 0x%x di FmpDxe" % status
+    if 0x1800 <= status <= 0x1FFF:
+        return "errore 0x%x di FmpDeviceSmmLib" % status
     return "errore 0x%x" % status
 
 
@@ -343,7 +349,9 @@ def write_os_indications(value):
         # efivarfs vuole attributi e dati in una sola write()
         fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o644)
         try:
-            os.write(fd, struct.pack("<IQ", attrs, value))
+            data = struct.pack("<IQ", attrs, value)
+            if os.write(fd, data) != len(data):
+                raise Error("OsIndications: scrittura incompleta")
         finally:
             os.close(fd)
     finally:
@@ -482,7 +490,7 @@ def download_latest(variant, pre, dest):
 
 def need_root():
     if os.geteuid() != 0:
-        raise Error("serve root (sudo): si leggono e scrivono variabili UEFI e l'ESP")
+        raise Error("serve root (sudo): si scrivono variabili UEFI e l'ESP")
 
 
 def need_firmware():
@@ -531,7 +539,6 @@ def cmd_info(args):
 
 
 def cmd_status(args):
-    need_root()
     fw = esrt_entry()
     bios = read_text(BIOS_VERSION)
     if fw is None:
@@ -547,10 +554,13 @@ def cmd_status(args):
     armed = bool(os_indications() & FILE_CAPSULE_DELIVERY)
     try:
         esp = find_esp(args.esp)
+        files = staged_files(esp)
     except Error as e:
         print("ESP:       %s" % e)
         return 0
-    files = staged_files(esp)
+    except PermissionError:
+        print("ESP:       non leggibile senza root (sudo)")
+        return 0
     for f in files:
         try:
             _, cap = load_capsule(f)
@@ -606,6 +616,7 @@ def cmd_stage(args):
             f.flush()
             os.fsync(f.fileno())
         os.replace(part, dst)
+        os.sync()
         with open(dst, "rb") as f:
             if hashlib.sha256(f.read()).digest() != hashlib.sha256(data).digest():
                 raise Error("%s: la copia nell'ESP non e' uguale" % dst)

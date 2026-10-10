@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 23:58:04 +0200
+Subject: [PATCH] drivers/smmstore: Don't leave the full flash decision to the
+ OS on S3 resume
+
+The SMI handler serves the whole flash once the firmware has asked for
+it with SMMSTORE_CMD_USE_FULL_FLASH, and the firmware asks, for or
+against, when it boots the payload. The handler is loaded again on every
+boot, S3 resume included, with the decision pending; on S3 resume the
+payload never runs and nobody decides, so the first caller to send the
+command decides, and that is the OS: a process with ring 0 can enable
+the full flash writes of the SMMSTORE handler after a resume, and write
+the BIOS region past the BIOS lock.
+
+Decide on S3 resume as well, before jumping to the OS, and in the
+handler take any other command that arrives before the decision as the
+decision against: the firmware always decides first, so such a command
+is from the payload or the OS.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Documentation/drivers/smmstore.md | 16 +++++++++------
+ src/drivers/efi/capsules.c        |  2 ++
+ src/drivers/smmstore/store.c      | 33 +++++++++++++++++++++++--------
+ 3 files changed, 37 insertions(+), 14 deletions(-)
+
+diff --git a/Documentation/drivers/smmstore.md b/Documentation/drivers/smmstore.md
+index 63dde2249..7e4c54845 100644
+--- a/Documentation/drivers/smmstore.md
++++ b/Documentation/drivers/smmstore.md
+@@ -242,12 +242,16 @@ with highest bit set can be used.
+ ### - SMMSTORE_CMD_USE_FULL_FLASH = 0x80
+ 
+ This command is executed by the firmware, which decides whether the boot
+-gets full flash access. It takes one additional parameter that, contrary
+-to other commands, isn't a pointer. Instead, `%ebx` indicates requested
+-state of full flash access. If it equals 0, commands for accessing full
+-flash are permanently disabled, otherwise they are enabled until the next
+-boot. Once they are enabled, calling it again with 0 disables them until
+-the next boot; any other later call has no effect.
++gets full flash access, before the payload runs and on S3 resume, before
++the OS runs. It takes one additional parameter that, contrary to other
++commands, isn't a pointer. Instead, `%ebx` indicates requested state of
++full flash access. If it equals 0, commands for accessing full flash are
++permanently disabled, otherwise they are enabled until the next boot. Once
++they are enabled, calling it again with 0 disables them until the next
++boot; any other later call has no effect. Any other command that arrives
++before this one also decides, against full flash access: the firmware
++always decides first, so such a command can only come from the payload or
++the OS.
+ 
+ The assumption is that if capsule updates are enabled at build time and
+ whole flash access is enabled at runtime, a UEFI payload (highly likely
+diff --git a/src/drivers/efi/capsules.c b/src/drivers/efi/capsules.c
+index 1984d5fbb..8b02b636e 100644
+--- a/src/drivers/efi/capsules.c
++++ b/src/drivers/efi/capsules.c
+@@ -858,3 +858,5 @@ static void enable_capsule_smi(void *unused)
+ }
+ 
+ BOOT_STATE_INIT_ENTRY(BS_PAYLOAD_BOOT, BS_ON_ENTRY, enable_capsule_smi, NULL);
++/* On S3 resume the payload doesn't run: decide here, before the OS could */
++BOOT_STATE_INIT_ENTRY(BS_OS_RESUME, BS_ON_ENTRY, enable_capsule_smi, NULL);
+diff --git a/src/drivers/smmstore/store.c b/src/drivers/smmstore/store.c
+index b5715200a..9ecb31a93 100644
+--- a/src/drivers/smmstore/store.c
++++ b/src/drivers/smmstore/store.c
+@@ -28,8 +28,12 @@ static int has_capsules = -1;
+ 
+ int smmstore_preprocess_cmd(uint8_t *cmd, void *param)
+ {
+-	if (CONFIG(DRIVERS_EFI_UPDATE_CAPSULES)) {
+-		if (has_capsules == -1 && *cmd == SMMSTORE_CMD_USE_FULL_FLASH) {
++	if (!CONFIG(DRIVERS_EFI_UPDATE_CAPSULES))
++		return 0;
++
++	if (*cmd == SMMSTORE_CMD_USE_FULL_FLASH) {
++		if (has_capsules == -1) {
++			/* The decision of the firmware, before the payload runs */
+ 			has_capsules = !!(uintptr_t)param;
+ 			/*
+ 			 * If we have capsules, return success, otherwise let smmstore_exec()
+@@ -37,17 +41,30 @@ int smmstore_preprocess_cmd(uint8_t *cmd, void *param)
+ 			 * the caller whether capsule handling was enabled or not.
+ 			 */
+ 			return has_capsules;
+-		} else if (has_capsules == 1 && *cmd == SMMSTORE_CMD_USE_FULL_FLASH && !param) {
++		}
++		if (has_capsules == 1 && !param) {
+ 			/* The payload is done with the capsules: no full flash until reboot */
+ 			has_capsules = 0;
+ 			smmstore_use_full_flash = 0;
+ 			return 1;
+-		} else if (has_capsules == 1 && *cmd & SMMSTORE_CMD_USE_FULL_FLASH) {
+-			smmstore_use_full_flash = 1;
+-			*cmd &= ~SMMSTORE_CMD_USE_FULL_FLASH;
+-		} else {
+-			smmstore_use_full_flash = 0;
+ 		}
++		/* Decided already: nothing turns the full flash on again */
++		smmstore_use_full_flash = 0;
++		return 0;
++	}
++
++	/*
++	 * Any other command before the decision seals it: the firmware decides
++	 * before the payload and the OS run, so this one is theirs.
++	 */
++	if (has_capsules == -1)
++		has_capsules = 0;
++
++	if (has_capsules == 1 && *cmd & SMMSTORE_CMD_USE_FULL_FLASH) {
++		smmstore_use_full_flash = 1;
++		*cmd &= ~SMMSTORE_CMD_USE_FULL_FLASH;
++	} else {
++		smmstore_use_full_flash = 0;
+ 	}
+ 
+ 	return 0;
+-- 
+2.43.0
+

@@ -49,3 +49,4 @@
 0049-payloads-external-edk2-Pass-PcdCapsuleOnDiskConnectB.patch
 0050-drivers-smmstore-Let-the-payload-end-the-full-flash-.patch
 0051-payloads-external-edk2-Write-the-capsule-certificate.patch
+0052-drivers-smmstore-Don-t-leave-the-full-flash-decision.patch
