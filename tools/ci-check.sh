@@ -11,7 +11,8 @@
 #   4. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
 #      patch elencata c'e', ogni .patch della cartella e' elencata, ognuna e'
 #      una mail di git format-patch
-#   5. niente chiave Optimus NVIDIA nel repository (opvk.inc: solo locale)
+#   5. niente chiave Optimus NVIDIA nel repository (opvk.inc: solo locale),
+#      ne' come file ne' come byte dentro un altro file
 #   6. i due defconfig: diversi solo nella RAM init (cosi' mrc e nri
 #      differiscono solo li'), con IFD, ME e GbE (immagine completa), EDK2
 #      pinnato a un commit, i file in w541/ che tools/build.sh copia davvero;
@@ -115,6 +116,19 @@ if grep -q '^+++ b/.*opvk\.inc' patches/optional/*.patch patches/*.patch patches
 else
 	ok "nessuna patch crea opvk.inc"
 fi
+# e il contenuto, come byte in esadecimale, sotto qualsiasi nome: "NVIDIA
+# Certified" e' nel testo della chiave (la sequenza si costruisce qui, cosi'
+# non compare in questo file)
+sig="$(printf 'NVIDIA Certified' | od -An -tx1 | tr -s ' \n' ' ' | sed -e 's/^ //' -e 's/ $//' -e 's/ /,0x/g' -e 's/^/0x/')"
+k=""
+while IFS= read -r f; do
+	[ -f "${f}" ] || continue
+	grep -Iq . "${f}" 2>/dev/null || continue
+	if tr -d ' \t\r\n+' < "${f}" | grep -qiF "${sig}"; then
+		k+=" ${f}"
+	fi
+done < <(files)
+if [ -n "${k}" ]; then bad "byte della chiave in:${k}"; else ok "nessun file con i byte della chiave"; fi
 
 step "defconfig"
 ram='^CONFIG_(HAVE_MRC|MRC_FILE|HASWELL_HIDE_PEG_FROM_MRC|USE_NATIVE_RAMINIT)='
