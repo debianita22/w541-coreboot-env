@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 12:25:02 +0200
+Subject: [PATCH 39/42] drivers/pc80/rtc: Start each boot's CMOS POST bank with
+ a POST code
+
+With CMOS_POST, cmos_post_init() switches to the other of two CMOS
+banks at every boot, and the next boot reports the last POST code and
+extra log of that bank when they do not end a boot normally. Until the
+first POST code of the boot is written, the bank still holds the codes
+of the boot before the previous one. A boot that stops before its first
+POST code, for example an S3 resume that hangs in the bootblock or
+early in romstage, is then reported with the codes of an older boot,
+usually ones that end a boot normally, and the hang goes unnoticed.
+
+Write POSTCODE_BOOTBLOCK_CAR and clear the extra log as soon as the
+bank is selected.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/pc80/rtc/post.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/drivers/pc80/rtc/post.c b/src/drivers/pc80/rtc/post.c
+index 8150fbad8..ca5300534 100644
+--- a/src/drivers/pc80/rtc/post.c
++++ b/src/drivers/pc80/rtc/post.c
+@@ -92,6 +92,14 @@ void cmos_post_init(void)
+ 	}
+ 
+ 	cmos_write(magic, CMOS_POST_BANK_OFFSET);
++
++	/*
++	 * The bank still holds the codes of the boot before the previous one.
++	 * Replace them now: a boot that stops before its first POST code must
++	 * not be reported with the codes of an older boot.
++	 */
++	cmos_post_code(POSTCODE_BOOTBLOCK_CAR);
++	cmos_post_extra(0);
+ }
+ 
+ void cmos_post_code(u8 value)
+-- 
+2.43.0
+

@@ -91,9 +91,11 @@ Inside coreboot:
   Settings live in UEFI variables in the `SMMSTORE` flash region and apply
   at the next boot. XMP memory profiles are not supported: the memory runs
   at its JEDEC timings;
-- an event log in the `RW_ELOG` flash region (boots, wake sources, power
-  failures, watchdog resets), read with coreboot's `elogtool`
-  ([docs/flashing.md](docs/flashing.md#first-boot-and-settings));
+- an event log in the `RW_ELOG` flash region (boots, wake sources, entries
+  into S3 and S5, power failures, watchdog resets), read with
+  `tools/elog.py` or coreboot's `elogtool`, and POST codes kept in CMOS, so
+  that the boot after a hang logs where it stopped
+  ([docs/flashing.md](docs/flashing.md#diagnosing-a-hang));
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -103,6 +105,12 @@ Inside coreboot:
 > [!NOTE]
 > The NVIDIA GPU is **disabled by default**, as in upstream coreboot. Turn it
 > on in the setup menu: *Hardware* → *NVIDIA discrete GPU*.
+
+> [!WARNING]
+> Suspend to RAM (S3) does not resume yet: the laptop sleeps and does not
+> come back. Use suspend-to-idle meanwhile (`mem_sleep_default=s2idle` on
+> the kernel command line); [docs/flashing.md](docs/flashing.md#diagnosing-a-hang)
+> shows how to find where a resume stops.
 
 ## Flashing
 
@@ -171,7 +179,7 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | `assets/` | the EDK2 boot splash |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts |
+| `tools/` | build, verification, CI and upstream-check scripts, and `elog.py`, which reads the event log from a flash dump |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md) |
 

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 12:24:42 +0200
+Subject: [PATCH 38/42] sb/intel/common: Do not resume from S3 after a power
+ button override
+
+A power button override puts the system in S5 whatever state it was
+in, and DRAM loses its contents. When the power button is held down
+while the system is in S3, the press first wakes the system, which sets
+WAK_STS, and the override then turns it off. SLP_TYP is only reset by
+RTCRST#, so at the next power on PM1_STS still has WAK_STS, PM1_CNT
+still has the S3 sleep type, and romstage takes the S3 resume path. The
+resume can only fail: on Haswell with mrc.bin, CBMEM is not found after
+the RAM init and the board resets.
+
+The same happens when a resume hangs before romstage clears SLP_TYP and
+the user turns the system off with the power button.
+
+Boot normally when PRBTNOR_STS is set, and still clear SLP_TYP.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/common/pmclib.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/southbridge/intel/common/pmclib.c b/src/southbridge/intel/common/pmclib.c
+index 34a449b2b..638203af6 100644
+--- a/src/southbridge/intel/common/pmclib.c
++++ b/src/southbridge/intel/common/pmclib.c
+@@ -19,6 +19,19 @@ int southbridge_detect_s3_resume(void)
+ {
+ 	if (platform_is_resuming()) {
+ 		clear_power_state();
++
++		/*
++		 * A power button override puts the system in S5, so DRAM has
++		 * lost its contents. Holding the power button down in S3
++		 * first wakes the system, which sets WAK_STS, and only
++		 * RTCRST# resets SLP_TYP: the next power on looks like an S3
++		 * resume.
++		 */
++		if (read_pmbase16(PM1_STS) & PRBTNOR_STS) {
++			printk(BIOS_DEBUG, "SB: Power button override after S3, not resuming.\n");
++			return 0;
++		}
++
+ 		if (!acpi_s3_resume_allowed()) {
+ 			printk(BIOS_DEBUG, "SB: Resume from S3 detected, but disabled.\n");
+ 			return 0;
+-- 
+2.43.0
+

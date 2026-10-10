@@ -18,6 +18,8 @@ for upstream review (one change each, with the reasoning in the message).
 | 0034-0035 | the setup menu in categories (General, Energy Saver, Security, Keyboard, Hardware), with the H8 options placed by the mainboard |
 | 0036 | the NVIDIA Optimus key for the Windows driver (NVOP function 0x10), included in the DSDT from `blobs/opvk.inc`, which `tools/build.sh` copies into the tree |
 | 0037 | no "Null dereference" error when the DRAM clearing at boot writes the first page, which starts at address zero |
+| 0038 | no S3 resume attempt after a power button override, which leaves the S3 sleep type behind |
+| 0039-0042 | where a boot or an S3 resume stopped, with `CMOS_POST`: a POST code as soon as the CMOS bank of a boot is chosen, one after each romstage step, the number of lines `mrc.bin` has printed, codes around loading ramstage |
 
 ## EDK2 and LvglPkg
 

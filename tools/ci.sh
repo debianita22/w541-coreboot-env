@@ -229,9 +229,12 @@ boot loader at that path too (Debian: \`sudo grub-install --removable\`), or
 pick it once with *Boot From File* in the boot manager (Esc at power-on).
 
 The NVIDIA GPU is **off by default**, as in upstream coreboot: turn it on in
-the setup menu (Esc at power-on), *Hardware* → *NVIDIA discrete GPU*. Suspend
-(S3) needs the RAM training saved at the first boot: test it from the second
-boot on.
+the setup menu (Esc at power-on), *Hardware* → *NVIDIA discrete GPU*.
+
+**Suspend to RAM (S3) does not resume yet**: the laptop sleeps and does not
+come back. Use suspend-to-idle meanwhile (\`mem_sleep_default=s2idle\` on the
+kernel command line). The event log records each entry into S3 and, after a
+resume that stopped, its last POST code: [diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang).
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload

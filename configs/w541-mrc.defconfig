@@ -41,8 +41,18 @@ CONFIG_PCIEXP_HOTPLUG=y
 
 # Registro degli eventi nel flash (RW_ELOG di configs/w541.fmd): avvii,
 # sorgenti di wake, cadute di alimentazione, reset del watchdog. Si legge
-# con elogtool (util/cbfstool di coreboot).
+# con elogtool (util/cbfstool di coreboot) o con tools/elog.py.
 CONFIG_ELOG=y
+# Anche l'entrata in S3 e S5, scritta dal gestore SMI prima di SLP_EN
+CONFIG_ELOG_GSMI=y
+# I codici POST anche in CMOS (byte 0x70-0x7A: senza tabella delle opzioni
+# CMOS sono liberi). Se un avvio o una ripresa da S3 si ferma, l'avvio dopo
+# mette nel registro l'ultimo codice e dove era arrivato (un dispositivo, o
+# le righe del log di mrc.bin): patch 0039-0042. Le board con l'EC H8 di
+# default non hanno codici POST.
+# CONFIG_NO_POST is not set
+CONFIG_CMOS_POST=y
+CONFIG_CMOS_POST_OFFSET=0x70
 
 # Numero di serie e versione SMBIOS da VPD, come la 4.22
 CONFIG_VPD=y

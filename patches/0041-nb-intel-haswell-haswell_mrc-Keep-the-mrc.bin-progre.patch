@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 12:26:34 +0200
+Subject: [PATCH 41/42] nb/intel/haswell/haswell_mrc: Keep the mrc.bin progress
+ for CMOS_POST
+
+mrc.bin posts its POST codes to port 80h only, so with CMOS_POST a hang
+inside it is reported with the last code of coreboot, 0x3a, whatever
+step mrc.bin was in. It prints its progress through pei_data->tx_byte
+though, one line per step:
+
+  System Agent: Starting up...
+  System Agent: Initializing PCH
+  ...
+  System Agent: Initializing PCH (Me UMA)
+  System Agent: Initializing Memory
+  System Agent: Done.
+
+Wrap do_putchar() and keep the number of lines printed so far in the
+CMOS POST extra log, as 0x4d5243nn ('M', 'R', 'C', number of lines), and
+clear it once the memory controller has acknowledged the RAM init. When
+mrc.bin hangs, or returns an error, the next boot reports how far it
+got.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../intel/haswell/haswell_mrc/raminit.c       | 26 ++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/northbridge/intel/haswell/haswell_mrc/raminit.c b/src/northbridge/intel/haswell/haswell_mrc/raminit.c
+index 9e4ef766a..00140bf3e 100644
+--- a/src/northbridge/intel/haswell/haswell_mrc/raminit.c
++++ b/src/northbridge/intel/haswell/haswell_mrc/raminit.c
+@@ -13,6 +13,7 @@
+ #include <northbridge/intel/haswell/chip.h>
+ #include <northbridge/intel/haswell/haswell.h>
+ #include <northbridge/intel/haswell/raminit.h>
++#include <post.h>
+ #include <smbios.h>
+ #include <spd.h>
+ #include <static.h>
+@@ -27,6 +28,23 @@
+ 
+ #define MRC_CACHE_VERSION 1
+ 
++/*
++ * mrc.bin posts its POST codes to port 80h only. With CMOS_POST, keep the
++ * number of lines it has printed in the CMOS POST extra log, after "MRC":
++ * if it hangs, the next boot shows how far it got.
++ */
++#define MRC_POST_EXTRA 0x4d524300
++
++static void mrc_tx_byte(unsigned char byte)
++{
++	static u8 lines;
++
++	do_putchar(byte);
++
++	if (CONFIG(CMOS_POST) && byte == '\n')
++		cmos_post_extra(MRC_POST_EXTRA | ++lines);
++}
++
+ static void save_mrc_data(struct pei_data *pei_data)
+ {
+ 	/* Save the MRC S3 restore data to cbmem */
+@@ -81,7 +99,7 @@ static void sdram_initialize(struct pei_data *pei_data)
+ 	}
+ 
+ 	/* Pass console handler in pei_data */
+-	pei_data->tx_byte = do_putchar;
++	pei_data->tx_byte = mrc_tx_byte;
+ 
+ 	/*
+ 	 * Locate and call UEFI System Agent binary. The binary needs to be at a fixed offset
+@@ -90,6 +108,9 @@ static void sdram_initialize(struct pei_data *pei_data)
+ 	 */
+ 	entry = cbfs_ro_map("mrc.bin", NULL);
+ 	if (entry) {
++		if (CONFIG(CMOS_POST))
++			cmos_post_extra(MRC_POST_EXTRA);
++
+ 		int rv = entry(pei_data);
+ 
+ 		/* The mrc.bin reconfigures USB, so usbdebug needs to be reinitialized */
+@@ -130,6 +151,9 @@ static void sdram_initialize(struct pei_data *pei_data)
+ 		die("MRC raminit failed\n");
+ 	}
+ 
++	/* mrc.bin is done: its line count no longer tells where a boot is */
++	post_log_clear();
++
+ 	report_memory_config();
+ }
+ 
+-- 
+2.43.0
+

@@ -18,6 +18,7 @@ Each release has the complete image and the two chip images.
 - [Serial number in VPD](#serial-number-in-vpd)
 - [Internal update](#internal-update)
 - [First boot and settings](#first-boot-and-settings)
+- [Diagnosing a hang](#diagnosing-a-hang)
 - [External programmer](#external-programmer)
 - [Recovery](#recovery)
 
@@ -130,6 +131,13 @@ same way.
   a few seconds of black screen before the boot splash. It happens again
   after every flash, since the cache is empty in the image. Suspend (S3)
   needs that saved training: test it after the second boot.
+- Suspend to RAM (S3) does not resume yet on the W541 this project is
+  tested on: the laptop goes to sleep and does not come back, and a long
+  press of the power button turns it off. Until that is fixed, use
+  suspend-to-idle, where the firmware takes no part:
+  `echo s2idle | sudo tee /sys/power/mem_sleep` for the running system,
+  `mem_sleep_default=s2idle` on the kernel command line to keep it. See
+  [Diagnosing a hang](#diagnosing-a-hang) to tell where a resume stops.
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
   fatal error (`H8_FLASH_LEDS_ON_DEATH`), for example a failed memory
   initialization: see [Recovery](#recovery).
@@ -143,14 +151,16 @@ same way.
   remapping: add `intel_iommu=on` to the kernel command line for device
   passthrough (`/sys/class/iommu/` then lists `dmar0` and `dmar1`).
 - Event log: coreboot records every boot, the wake source of a resume
-  (lid, Fn, a GPE), power failures, watchdog resets and the ME state in
-  the `RW_ELOG` region, which starts empty and is erased by a flash. Read
-  it with `elogtool` from coreboot's `util/cbfstool` (`make -C util/cbfstool
-  elogtool`, it needs libflashrom), or dump the region with flashrom:
+  (lid, Fn, a GPE), each entry into S3 and S5, power failures, watchdog
+  resets, the ME state and the last POST code of a boot that hung, in the
+  `RW_ELOG` region, which starts empty and is erased by a flash. Read it
+  with `tools/elog.py` from a dump of the flash, or with `elogtool` from
+  coreboot's `util/cbfstool` (`make -C util/cbfstool elogtool`, it needs
+  libflashrom):
 
   ```sh
+  sudo flashrom -p internal -r dump.rom && python3 tools/elog.py dump.rom
   sudo elogtool list                                            # reads RW_ELOG through flashrom
-  sudo flashrom -p internal --fmap -i RW_ELOG -r elog.bin && elogtool list -f elog.bin
   ```
 - Settings: Esc at power-on opens the setup menu, a grid of icons. Arrow
   keys, Enter and Esc, or the TrackPoint and touchpad, move around; F10
@@ -178,6 +188,34 @@ same way.
 
   Changes apply at the next boot. Graphics stolen memory and aperture
   change the memory map: do not change them between suspend and resume.
+
+## Diagnosing a hang
+
+coreboot also keeps its POST codes in CMOS (bytes `0x70`-`0x7A`), which
+survive a power button override. When a boot, or a resume from S3, stops
+on the way and the laptop is turned off with a long press of the power
+button, the next boot adds to the event log the last POST code of the
+stopped one (*Last post code*) and, when there is one, where it was (*POST
+extra*: the device being initialized, or how many lines `mrc.bin` had
+printed). Its console log says the same:
+
+```sh
+sudo cbmem -1 | grep -E 'POST|S3'
+sudo flashrom -p internal -r dump.rom && python3 tools/elog.py dump.rom
+```
+
+`tools/elog.py` prints what each code means. For a suspend that does not
+come back:
+
+1. `systemctl suspend` (or `sudo rtcwake -m mem -s 30`), wait until the
+   power LED pulses, then press the power button once.
+2. Wait a minute, and note whether the fan spins, whether every LED
+   blinks (coreboot stopped on a fatal error) and whether there was a long
+   beep.
+3. Hold the power button until the laptop turns off, turn it on, and read
+   the log as above. *ACPI enter S3* says the firmware put the laptop in
+   S3; no *Last post code* after it means that the firmware did not run
+   again after the wake.
 
 ## External programmer
 

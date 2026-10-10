@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 12:25:56 +0200
+Subject: [PATCH 40/42] nb/intel/haswell: Add POST codes to the romstage steps
+
+With CMOS_POST, a boot that hangs is reported at the next boot with its
+last POST code. In romstage only 0x3a, before the RAM init, and 0x3f, at
+the end, are posted, plus 0x3b after mrc.bin, so a hang anywhere between
+the start of romstage and the RAM init reads the same, and S3 resumes
+are not told from normal boots. Post a code after each step:
+
+  0x30  start
+  0x31  after early_pch_init()
+  0x32  after haswell_early_initialization()
+  0x33  normal boot detected
+  0x35  S3 resume detected
+  0x3a  before the RAM init (as before)
+  0x3c  after the RAM init, CBMEM recovered on S3 resume
+  0x3d  after romstage_handoff_init()
+  0x3f  end (as before)
+
+Also post POSTCODE_RESUME_FAILURE before the reset when CBMEM cannot be
+recovered on S3 resume, with the three RAM init implementations.
+
+TEST=Built for lenovo/w541 with mrc.bin and with the native RAM init.
+Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../intel/haswell/broadwell_mrc/raminit.c       |  1 +
+ .../intel/haswell/haswell_mrc/raminit.c         |  1 +
+ .../haswell/native_raminit/raminit_native.c     |  1 +
+ src/northbridge/intel/haswell/romstage.c        | 17 +++++++++++++++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/src/northbridge/intel/haswell/broadwell_mrc/raminit.c b/src/northbridge/intel/haswell/broadwell_mrc/raminit.c
+index 593e05aa0..cbf517aa3 100644
+--- a/src/northbridge/intel/haswell/broadwell_mrc/raminit.c
++++ b/src/northbridge/intel/haswell/broadwell_mrc/raminit.c
+@@ -266,6 +266,7 @@ void perform_raminit(const bool s3resume)
+ 	if (s3resume && !cbmem_was_initted) {
+ 		/* Failed S3 resume, reset to come up cleanly */
+ 		printk(BIOS_CRIT, "Failed to recover CBMEM in S3 resume.\n");
++		post_code(POSTCODE_RESUME_FAILURE);
+ 		system_reset();
+ 	}
+ 
+diff --git a/src/northbridge/intel/haswell/haswell_mrc/raminit.c b/src/northbridge/intel/haswell/haswell_mrc/raminit.c
+index 4f966369f..9e4ef766a 100644
+--- a/src/northbridge/intel/haswell/haswell_mrc/raminit.c
++++ b/src/northbridge/intel/haswell/haswell_mrc/raminit.c
+@@ -262,6 +262,7 @@ void perform_raminit(const bool s3resume)
+ 	if (s3resume && !cbmem_was_initted) {
+ 		/* Failed S3 resume, reset to come up cleanly */
+ 		printk(BIOS_CRIT, "Failed to recover CBMEM in S3 resume.\n");
++		post_code(POSTCODE_RESUME_FAILURE);
+ 		system_reset();
+ 	}
+ 
+diff --git a/src/northbridge/intel/haswell/native_raminit/raminit_native.c b/src/northbridge/intel/haswell/native_raminit/raminit_native.c
+index 9a0597408..af784fbc9 100644
+--- a/src/northbridge/intel/haswell/native_raminit/raminit_native.c
++++ b/src/northbridge/intel/haswell/native_raminit/raminit_native.c
+@@ -206,6 +206,7 @@ void perform_raminit(const bool s3resume)
+ 	if (s3resume && !cbmem_was_initted) {
+ 		/* Failed S3 resume, reset to come up cleanly */
+ 		printk(BIOS_CRIT, "Failed to recover CBMEM in S3 resume.\n");
++		post_code(POSTCODE_RESUME_FAILURE);
+ 		system_reset();
+ 	}
+ 
+diff --git a/src/northbridge/intel/haswell/romstage.c b/src/northbridge/intel/haswell/romstage.c
+index 229b7d6b2..1691d7989 100644
+--- a/src/northbridge/intel/haswell/romstage.c
++++ b/src/northbridge/intel/haswell/romstage.c
+@@ -21,16 +21,29 @@ void __weak mb_late_romstage_setup(void)
+ /* The romstage entry point for this platform is not mainboard-specific, hence the name */
+ void mainboard_romstage_entry(void)
+ {
++	/*
++	 * With CMOS_POST, the next boot reports the last code of a boot that
++	 * hangs: post one after each step.
++	 */
++	post_code(0x30);
++
+ 	early_pch_init();
+ 
++	post_code(0x31);
++
+ 	/* Perform some early chipset initialization required
+ 	 * before RAM initialization can work
+ 	 */
+ 	haswell_early_initialization();
+ 	printk(BIOS_DEBUG, "Back from haswell_early_initialization()\n");
+ 
++	post_code(0x32);
++
+ 	const bool s3resume = southbridge_detect_s3_resume();
+ 
++	/* An S3 resume is told from a normal boot by the code */
++	post_code(s3resume ? 0x35 : 0x33);
++
+ 	/* S3 resume always starts with IA32_FEATURE_CONTROL unlocked */
+ 	if (!s3resume)
+ 		haswell_check_vmx_option();
+@@ -50,6 +63,8 @@ void mainboard_romstage_entry(void)
+ 
+ 	perform_raminit(s3resume);
+ 
++	post_code(0x3c);
++
+ 	/*
+ 	 * MRC programs its own aperture size on every boot path, S3 resume
+ 	 * included. MSAC has no lock bit, so program the configured one again.
+@@ -75,6 +90,8 @@ void mainboard_romstage_entry(void)
+ 
+ 	romstage_handoff_init(s3resume);
+ 
++	post_code(0x3d);
++
+ 	mb_late_romstage_setup();
+ 
+ 	post_code(0x3f);
+-- 
+2.43.0
+

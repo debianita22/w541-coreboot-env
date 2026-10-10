@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 12:27:07 +0200
+Subject: [PATCH 42/42] lib/prog_loaders: Add POST codes around loading
+ ramstage
+
+POSTCODE_PREPARE_RAMSTAGE and POSTCODE_RAMSTAGE_IS_PREPARED are defined
+for the start and the end of loading ramstage, but nothing posts them.
+Post them in run_ramstage(), on S3 resume from the stage cache too, so
+that with CMOS_POST the next boot tells a hang in postcar, or while
+ramstage is loaded, from one in ramstage.
+
+Also post POSTCODE_RESUME_FAILURE before the reset when the cached
+postcar or ramstage is invalid on S3 resume.
+
+TEST=Built for lenovo/w541. Not tested on hardware yet.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/arch/x86/postcar_loader.c | 1 +
+ src/lib/prog_loaders.c        | 5 +++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/src/arch/x86/postcar_loader.c b/src/arch/x86/postcar_loader.c
+index d3d3dac4c..29881dcbb 100644
+--- a/src/arch/x86/postcar_loader.c
++++ b/src/arch/x86/postcar_loader.c
+@@ -138,6 +138,7 @@ void postcar_enable_tseg_cache(struct postcar_frame *pcf)
+ static void postcar_cache_invalid(void)
+ {
+ 	printk(BIOS_ERR, "postcar cache invalid.\n");
++	post_code(POSTCODE_RESUME_FAILURE);
+ 	board_reset();
+ }
+ 
+diff --git a/src/lib/prog_loaders.c b/src/lib/prog_loaders.c
+index eb307f015..c7bb2eb1a 100644
+--- a/src/lib/prog_loaders.c
++++ b/src/lib/prog_loaders.c
+@@ -66,10 +66,12 @@ static void run_ramstage_from_resume(struct prog *ramstage)
+ 
+ 	if (prog_entry(ramstage) != NULL) {
+ 		printk(BIOS_DEBUG, "Jumping to image.\n");
++		post_code(POSTCODE_RAMSTAGE_IS_PREPARED);
+ 		prog_run(ramstage);
+ 	}
+ 
+ 	printk(BIOS_ERR, "ramstage cache invalid.\n");
++	post_code(POSTCODE_RESUME_FAILURE);
+ 	board_reset();
+ }
+ 
+@@ -104,6 +106,8 @@ void __noreturn run_ramstage(void)
+ 
+ 	vboot_run_logic();
+ 
++	post_code(POSTCODE_PREPARE_RAMSTAGE);
++
+ 	/*
+ 	 * Only x86 systems using ramstage stage cache currently take the same
+ 	 * firmware path on resume.
+@@ -130,6 +134,7 @@ void __noreturn run_ramstage(void)
+ 	/* This overrides the arg fetched from the relocatable module */
+ 	prog_set_arg(&ramstage, (void *)cbmem_top());
+ 
++	post_code(POSTCODE_RAMSTAGE_IS_PREPARED);
+ 	prog_run(&ramstage);
+ 
+ fail:
+-- 
+2.43.0
+
