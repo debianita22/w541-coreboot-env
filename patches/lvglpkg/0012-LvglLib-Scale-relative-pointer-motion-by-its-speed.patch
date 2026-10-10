@@ -1,0 +1,260 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 16:03:36 +0200
+Subject: [PATCH 12/12] LvglLib: Scale relative pointer motion by its speed
+
+The motion of a relative pointer moved the cursor 8 pixels per mm, and
+twice as fast for the part of a read beyond 6 pixels. A read is 10 ms,
+so almost any move of a finger counted twice, and a report of 20 per
+second from the PS/2 driver arrived whole in one read: the cursor moved
+in big steps, and a slow, precise move was as coarse as a fast one.
+
+Scale the move by its speed instead: 12 pixels per mm up to 40 mm/s,
+three times as much from 260 mm/s, linear in between, the speed being
+the length of the move over the time since the previous read (capped at
+100 ms, so that the first read after a pause is a slow move). The same
+move then counts the same whether it comes in one read or in several. A
+read with more motion than a hand makes in 100 ms (40 mm) is a packet
+read out of step by the PS/2 driver and is dropped.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Library/LvglLib/lv_port_indev.c | 163 +++++++++++++++++++++++++++-----
+ 1 file changed, 138 insertions(+), 25 deletions(-)
+
+diff --git a/Library/LvglLib/lv_port_indev.c b/Library/LvglLib/lv_port_indev.c
+index e39dc60..79340e4 100644
+--- a/Library/LvglLib/lv_port_indev.c
++++ b/Library/LvglLib/lv_port_indev.c
+@@ -36,7 +36,10 @@
+  * touchpad of a laptop, through the ConSplitter) move the same cursor, read
+  * once per frame too. Their motion is in counts at the resolution of the
+  * protocol (counts per mm); it moves the cursor LVGL_POINTER_PX_PER_MM pixels
+- * per mm, twice as fast beyond LVGL_POINTER_ACCEL_PX pixels per read.
++ * per mm when slow, up to LVGL_POINTER_GAIN_MAX times as much when fast: the
++ * gain follows the speed of the motion, mm per second over the time since
++ * the previous read, so that the same move counts the same whether it
++ * arrives in one read or in several.
+  *
+  * --- Keyboard ---
+  * Custom keypad_read returns PRESSED while the EFI console buffer has a key and
+@@ -77,11 +80,18 @@ extern const lv_img_dsc_t mouse_cursor_icon;
+ #define LVGL_WHEEL_SCROLL_PIXELS      40
+ 
+ //
+-// Relative pointers: pixels per mm of motion, and the motion per read (in
+-// pixels) beyond which it counts twice.
++// Relative pointers: pixels per mm of slow motion; the speed (mm/s) up to
++// which that holds and the speed from which the gain is LVGL_POINTER_GAIN_MAX
++// (in 1/256), rising linearly in between; the longest time between reads
++// that counts as one move, and the most motion one read can carry (a packet
++// read out of step is garbage, not a move).
+ //
+-#define LVGL_POINTER_PX_PER_MM        8
+-#define LVGL_POINTER_ACCEL_PX         6
++#define LVGL_POINTER_PX_PER_MM        12
++#define LVGL_POINTER_SLOW_MM_S        40
++#define LVGL_POINTER_FAST_MM_S        260
++#define LVGL_POINTER_GAIN_MAX         (3 * 256)
++#define LVGL_POINTER_MAX_READ_MS      100
++#define LVGL_POINTER_MAX_MM_PER_READ  40
+ 
+ /**********************
+  *  STATIC VARIABLES
+@@ -107,6 +117,7 @@ STATIC BOOLEAN                        mLeftButton    = FALSE;
+ STATIC EFI_SIMPLE_POINTER_PROTOCOL    *mRelPointer   = NULL;
+ STATIC INT64                          mRelRestX      = 0;
+ STATIC INT64                          mRelRestY      = 0;
++STATIC UINT32                         mRelLastTick   = 0;
+ STATIC BOOLEAN                        mRelLeftButton = FALSE;
+ STATIC BOOLEAN                        mRelSeen       = FALSE;
+ 
+@@ -155,39 +166,110 @@ find_scrollable_at_point (
+ }
+ 
+ //
+-// Convert relative motion, in counts at Resolution counts per mm, to pixels.
+-// Rest carries the fraction of a pixel (in 1/256 px) over to the next read.
++// Motion in counts at Resolution counts per mm, as 1/256 mm.
+ //
+ STATIC
+-INT32
+-RelativeToPixels (
+-  IN     INT32   Motion,
+-  IN     UINT64  Resolution,
+-  IN OUT INT64   *Rest
++INT64
++RelativeToQ8Mm (
++  IN INT32   Motion,
++  IN UINT64  Resolution
+   )
+ {
+-  INT64  Q8;
+-  INT64  Limit;
+-  INT64  Pixels;
+-
+   if ((Motion == 0) || (Resolution == 0)) {
+     return 0;
+   }
+ 
+-  Q8    = ((INT64)Motion * LVGL_POINTER_PX_PER_MM * 256) / (INT64)Resolution;
+-  Limit = (INT64)LVGL_POINTER_ACCEL_PX * 256;
+-  if (Q8 > Limit) {
+-    Q8 += Q8 - Limit;
+-  } else if (Q8 < -Limit) {
+-    Q8 += Q8 + Limit;
++  return ((INT64)Motion * 256) / (INT64)Resolution;
++}
++
++//
++// The gain (in 1/256) for a move of Q8Mm (1/256 mm, the length of the
++// vector) in ElapsedMs: 1 up to LVGL_POINTER_SLOW_MM_S, LVGL_POINTER_GAIN_MAX
++// from LVGL_POINTER_FAST_MM_S, linear in between.
++//
++STATIC
++INT64
++RelativeGain (
++  IN INT64   Q8Mm,
++  IN UINT32  ElapsedMs
++  )
++{
++  INT64  Speed;
++
++  if (ElapsedMs == 0) {
++    ElapsedMs = 1;
++  }
++
++  //
++  // mm/s: Q8Mm / 256 mm in ElapsedMs / 1000 s
++  //
++  Speed = (Q8Mm * 1000) / (256 * (INT64)ElapsedMs);
++  if (Speed <= LVGL_POINTER_SLOW_MM_S) {
++    return 256;
+   }
+ 
+-  Q8    += *Rest;
++  if (Speed >= LVGL_POINTER_FAST_MM_S) {
++    return LVGL_POINTER_GAIN_MAX;
++  }
++
++  return 256 + ((LVGL_POINTER_GAIN_MAX - 256) * (Speed - LVGL_POINTER_SLOW_MM_S)) /
++         (LVGL_POINTER_FAST_MM_S - LVGL_POINTER_SLOW_MM_S);
++}
++
++//
++// Motion of one axis (in 1/256 mm) to pixels, with the gain of the move
++// (1/256). Rest carries the fraction of a pixel (in 1/256 px) over to the
++// next read.
++//
++STATIC
++INT32
++RelativeToPixels (
++  IN     INT64  Q8Mm,
++  IN     INT64  Gain,
++  IN OUT INT64  *Rest
++  )
++{
++  INT64  Q8;
++  INT64  Pixels;
++
++  Q8     = (Q8Mm * LVGL_POINTER_PX_PER_MM * Gain) / 256 + *Rest;
+   Pixels = Q8 / 256;
+   *Rest  = Q8 - Pixels * 256;
+   return (INT32)Pixels;
+ }
+ 
++//
++// Integer square root, for the length of a move.
++//
++STATIC
++INT64
++RelativeSqrt (
++  IN INT64  Value
++  )
++{
++  INT64  Root;
++  INT64  Bit;
++
++  Root = 0;
++  Bit  = (INT64)1 << 62;
++  while (Bit > Value) {
++    Bit >>= 2;
++  }
++
++  while (Bit != 0) {
++    if (Value >= Root + Bit) {
++      Value -= Root + Bit;
++      Root   = (Root >> 1) + Bit;
++    } else {
++      Root >>= 1;
++    }
++
++    Bit >>= 2;
++  }
++
++  return Root;
++}
++
+ //
+ // Read the relative pointer, if any, and move the cursor by its motion.
+ //
+@@ -205,6 +287,12 @@ relative_pointer_read (
+   EFI_SIMPLE_POINTER_STATE  RelState;
+   INT32                     Dx;
+   INT32                     Dy;
++  INT64                     Q8X;
++  INT64                     Q8Y;
++  INT64                     Q8Len;
++  INT64                     Gain;
++  UINT32                    Tick;
++  UINT32                    Elapsed;
+ 
+   if (mRelPointer == NULL) {
+     gBS->HandleProtocol (
+@@ -224,8 +312,30 @@ relative_pointer_read (
+     return mRelLeftButton;
+   }
+ 
+-  Dx = RelativeToPixels (RelState.RelativeMovementX, mRelPointer->Mode->ResolutionX, &mRelRestX);
+-  Dy = RelativeToPixels (RelState.RelativeMovementY, mRelPointer->Mode->ResolutionY, &mRelRestY);
++  //
++  // The move since the previous read: its length and the time it took give
++  // the gain. A read long after the previous one (the first, or after a
++  // pause) is a slow move; a read with more motion than a hand makes is a
++  // packet read out of step and is dropped, the next packets resync.
++  //
++  Q8X  = RelativeToQ8Mm (RelState.RelativeMovementX, mRelPointer->Mode->ResolutionX);
++  Q8Y  = RelativeToQ8Mm (RelState.RelativeMovementY, mRelPointer->Mode->ResolutionY);
++  Tick = lv_tick_get ();
++  Elapsed = Tick - mRelLastTick;
++  mRelLastTick = Tick;
++  if (Elapsed > LVGL_POINTER_MAX_READ_MS) {
++    Elapsed = LVGL_POINTER_MAX_READ_MS;
++  }
++
++  Q8Len = RelativeSqrt (Q8X * Q8X + Q8Y * Q8Y);
++  if (Q8Len > (INT64)LVGL_POINTER_MAX_MM_PER_READ * 256) {
++    mRelLeftButton = RelState.LeftButton;
++    return mRelLeftButton;
++  }
++
++  Gain = RelativeGain (Q8Len, Elapsed);
++  Dx   = RelativeToPixels (Q8X, Gain, &mRelRestX);
++  Dy   = RelativeToPixels (Q8Y, Gain, &mRelRestY);
+ 
+   mLastCursorX += Dx;
+   if (mLastCursorX > hor_res - 1) mLastCursorX = hor_res - 1;
+@@ -653,6 +763,9 @@ void lv_port_indev_close (void)
+ 
+   mAbsPointer  = NULL;
+   mRelPointer  = NULL;
++  mRelRestX    = 0;
++  mRelRestY    = 0;
++  mRelLastTick = 0;
+   mWheelDelta  = 0;
+   mLastAbsZ    = 0;
+   indev_mouse  = NULL;
+-- 
+2.43.0
+

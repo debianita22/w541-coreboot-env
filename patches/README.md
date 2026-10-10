@@ -38,10 +38,15 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `edk2/0003` | a link to the supervisor password (UserAuthenticationDxe) at the end of the *Security* category |
 | `edk2/0004` | the PS/2 mouse on the SIO bus, so that Ps2MouseDxe drives the TrackPoint and the touchpad |
 | `edk2/0005` | the setup UI named *System Preferences* |
+| `edk2/0006` | the messages of the password driver (UserAuthenticationDxe) as HII popups, so that the graphical UI draws them |
+| `edk2/0007` | Ps2MouseDxe at 100 reports per second and 8 counts/mm, every waiting packet taken at each poll, packets with the middle button pressed recognized |
 | `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
 | `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
 | `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |
 | `lvglpkg/0006` | the cursor moved by relative pointers (PS/2 TrackPoint and touchpad) |
+| `lvglpkg/0007-0010` | fixes from the review of the UI: UTF-8 text fields, keys kept from the form while a popup is up, the previous screen deleted, information popups titled as such |
+| `lvglpkg/0011` | a dynamic wallpaper (sky gradient and soft orbs of color, in a palette that follows the hour), the menu bar and the dock translucent and blurred over it, softer shadows |
+| `lvglpkg/0012` | the cursor moved by the speed of the pointer: 12 px/mm when slow, up to 3x when fast, the same move counted the same whether it arrives in one read or several |
 
 ## Optional patches
 

@@ -4,3 +4,4 @@
 0004-OvmfPkg-SioBusDxe-Add-the-PS-2-mouse.patch
 0005-UefiPayloadPkg-Name-the-graphical-setup-System-Prefe.patch
 0006-UefiPayloadPkg-UserAuthenticationDxe-Show-the-messag.patch
+0007-MdeModulePkg-Ps2MouseDxe-Report-at-100-Hz-and-8-coun.patch

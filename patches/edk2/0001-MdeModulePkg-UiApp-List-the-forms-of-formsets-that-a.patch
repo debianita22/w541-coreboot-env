@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 00:23:39 +0200
-Subject: [PATCH 1/6] MdeModulePkg/UiApp: List the forms of formsets that ask
+Subject: [PATCH 1/7] MdeModulePkg/UiApp: List the forms of formsets that ask
  for it
 
 The front page has one entry per formset with the front page class GUID.

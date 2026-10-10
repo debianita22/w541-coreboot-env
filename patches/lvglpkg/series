@@ -8,3 +8,5 @@
 0008-LvglDisplayEngineDxe-Keep-the-form-out-of-the-keys-w.patch
 0009-LvglDisplayEngineDxe-Delete-the-previous-screen-when.patch
 0010-LvglDisplayEngineDxe-Title-an-information-popup-with.patch
+0011-LvglDisplayEngineDxe-Draw-a-dynamic-wallpaper-blur-t.patch
+0012-LvglLib-Scale-relative-pointer-motion-by-its-speed.patch

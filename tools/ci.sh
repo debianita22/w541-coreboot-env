@@ -242,8 +242,9 @@ Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboo
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload
 (MrChromebox [\`${edk2:0:12}\`](https://github.com/mrchromebox/edk2/commit/${edk2})
 with [${nedk2} patches](https://github.com/${repo}/blob/${sha}/patches/README.md#edk2-and-lvglpkg)
-to EDK2 and LvglPkg: the setup menu laid out like System Preferences, mouse
-support for the TrackPoint and the touchpad),
+to EDK2 and LvglPkg: the setup menu laid out like System Preferences on a
+wallpaper that follows the hour of the day, the TrackPoint and the touchpad
+moving the cursor by their speed),
 libgfxinit for the Intel GPU, the NVIDIA Quadro K2100M VBIOS exposed to the OS
 through ACPI \`_ROM\` and the Optimus key the Windows NVIDIA driver asks for,
 CPU microcode from coreboot's intel-microcode. Built with the coreboot cross

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 00:23:39 +0200
-Subject: [PATCH 2/6] UefiPayloadPkg/CfrSetupMenuDxe: Give each category its
+Subject: [PATCH 2/7] UefiPayloadPkg/CfrSetupMenuDxe: Give each category its
  own form
 
 All CFR forms end up in a single HII form, one after the other under

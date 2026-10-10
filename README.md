@@ -75,10 +75,11 @@ Inside coreboot:
   the Windows NVIDIA driver asks for (`blobs/opvk.inc`);
 - CPU microcode from coreboot's `intel-microcode`, also referenced by the FIT;
 - a setup menu laid out like System Preferences (Esc at power-on): a grid
-  of icons on a dark desktop, one per category, then the boot entries; each
-  category opens a window of settings grouped on cards, with switches and
-  drop-down menus. The arrow keys, the TrackPoint and the touchpad move
-  around:
+  of icons on a dark desktop whose wallpaper follows the hour of the day
+  (night, dawn, day, dusk, evening), under a translucent menu bar and dock;
+  one icon per category, then the boot entries; each category opens a
+  window of settings grouped on cards, with switches and drop-down menus.
+  The arrow keys, the TrackPoint and the touchpad move around:
 
   | Category | Settings |
   |---|---|

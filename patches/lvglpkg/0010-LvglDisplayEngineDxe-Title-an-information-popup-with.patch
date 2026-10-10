@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 08:56:06 +0200
-Subject: [PATCH 10/10] LvglDisplayEngineDxe: Title an information popup with
+Subject: [PATCH 10/12] LvglDisplayEngineDxe: Title an information popup with
  only OK as such
 
 A popup of EFI_HII_POPUP_PROTOCOL with the information style is titled

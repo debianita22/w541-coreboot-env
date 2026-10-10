@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 01:22:44 +0200
-Subject: [PATCH 3/6] UefiPayloadPkg/CfrSetupMenuDxe: Link the setup password
+Subject: [PATCH 3/7] UefiPayloadPkg/CfrSetupMenuDxe: Link the setup password
  from a category
 
 The password asked for before the setup menu opens is set in its own

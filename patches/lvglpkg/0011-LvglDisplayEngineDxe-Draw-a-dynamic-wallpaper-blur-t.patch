@@ -1,0 +1,672 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 16:03:35 +0200
+Subject: [PATCH 11/12] LvglDisplayEngineDxe: Draw a dynamic wallpaper, blur
+ the bars over it
+
+The desktop was a flat #121212. Draw a wallpaper instead, like a dynamic
+desktop: a vertical sky gradient across the screen and three soft orbs
+of color over it, circles filled with a radial gradient that fades to
+transparent at the edge, in a palette that follows the hour of the RTC
+(night, dawn, day, dusk, evening). The clock timer of the menu bar
+switches the palette when the hour moves into another band; nothing is
+animated, and the orbs are only redrawn where the screen is invalidated.
+The radial gradients need LV_USE_DRAW_SW_COMPLEX_GRADIENTS, enabled in
+lv_conf.h; THEME_WALLPAPER 0 keeps the flat desktop.
+
+With a wallpaper to show through, the menu bar and the dock become
+translucent, with the backdrop blurred behind them and a faint light
+rim, as on macOS. The window gets a wider, softer shadow and a title bar
+shaded from top to bottom; the tiles of the front page and the key caps
+of the dock are lit from the top; the colored squares of the menu
+symbols darken towards the bottom, like app icons.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Include/LvglTheme.h                           |  75 ++++--
+ Library/LvglLib/lv_conf.h                     |   2 +-
+ LvglDisplayEngineDxe/LvglAptioChrome.c        |  31 ++-
+ LvglDisplayEngineDxe/LvglDesktop.c            | 244 ++++++++++++++++++
+ LvglDisplayEngineDxe/LvglDesktop.h            |  49 ++++
+ LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf |   2 +
+ LvglDisplayEngineDxe/LvglFormRenderer.c       |   7 +
+ 7 files changed, 376 insertions(+), 34 deletions(-)
+ create mode 100644 LvglDisplayEngineDxe/LvglDesktop.c
+ create mode 100644 LvglDisplayEngineDxe/LvglDesktop.h
+
+diff --git a/Include/LvglTheme.h b/Include/LvglTheme.h
+index fcf4eec..d13bfc6 100644
+--- a/Include/LvglTheme.h
++++ b/Include/LvglTheme.h
+@@ -106,17 +106,27 @@
+ #define THEME_OVERLAY_OPA         LV_OPA_50
+ 
+ //
+-// Desktop: the flat backdrop behind the windows and the icon grid.
++// Desktop: a dynamic wallpaper behind the windows and the icon grid, drawn
++// rather than stored: a sky gradient and three soft orbs of color over it,
++// in a palette that follows the hour of the day (night, dawn, day, dusk,
++// evening; the palettes are in LvglDesktop.c). THEME_COLOR_BACKDROP is the
++// flat color without the wallpaper (THEME_WALLPAPER 0).
+ //
++#define THEME_WALLPAPER               1
+ #define THEME_COLOR_BACKDROP          0x121212
++#define THEME_WALLPAPER_ORBS          3
+ 
+ //
+ // Menu bar across the top of the screen: badge, title and model on the
+-// left; Secure Boot, battery, date and time on the right.
++// left; Secure Boot, battery, date and time on the right. Translucent, the
++// wallpaper blurred behind it.
+ //
+ #define THEME_MENUBAR_HEIGHT          LvglThemePx(26)
+-#define THEME_COLOR_MENUBAR_BG        0x1E1E1E
+-#define THEME_COLOR_MENUBAR_BORDER    0x2A2A2A
++#define THEME_COLOR_MENUBAR_BG        0x1C1C1E
++#define THEME_MENUBAR_OPA             LV_OPA_70
++#define THEME_MENUBAR_BLUR            LvglThemePx(18)
++#define THEME_COLOR_MENUBAR_BORDER    0xFFFFFF
++#define THEME_MENUBAR_BORDER_OPA      LV_OPA_10
+ #define THEME_COLOR_HEADER_TEXT       0xFFFFFF
+ #define THEME_COLOR_HEADER_DIM        THEME_COLOR_TEXT_SECONDARY
+ #define THEME_HEADER_BADGE_SYMBOL     LV_SYMBOL_SETTINGS
+@@ -129,8 +139,10 @@
+ #define THEME_RADIUS_FRAME            LvglThemePx(12)
+ #define THEME_COLOR_FRAME_BG_TOP      THEME_COLOR_BG_SCREEN
+ #define THEME_COLOR_FRAME_BG_BOTTOM   THEME_COLOR_BG_SCREEN
+-#define THEME_COLOR_FRAME_BORDER      0x3A3A3C
+-#define THEME_FRAME_SHADOW_WIDTH      LvglThemePx(28)
++#define THEME_COLOR_FRAME_BORDER      0x48484A
++#define THEME_FRAME_SHADOW_WIDTH      LvglThemePx(48)
++#define THEME_FRAME_SHADOW_OFFSET_Y   LvglThemePx(14)
++#define THEME_FRAME_SHADOW_OPA        LV_OPA_60
+ #define THEME_FRAME_GAP               LvglThemePx(14)
+ 
+ //
+@@ -139,8 +151,9 @@
+ //
+ #define THEME_SUBTITLE_HEIGHT         LvglThemePx(44)
+ #define THEME_PAD_SUBTITLE_X          LvglThemePx(16)
+-#define THEME_COLOR_TITLEBAR_BG       0x3A3A3C
+-#define THEME_COLOR_TITLEBAR_BORDER   0x4A4A4C
++#define THEME_COLOR_TITLEBAR_BG       0x3E3E41
++#define THEME_COLOR_TITLEBAR_BG_BOTTOM 0x333335
++#define THEME_COLOR_TITLEBAR_BORDER   0x1F1F21
+ #define THEME_TRAFFIC_LIGHT_SIZE      LvglThemePx(12)
+ #define THEME_COLOR_LIGHT_CLOSE       0xFF5F57
+ #define THEME_COLOR_LIGHT_MINIMIZE    0xFEBC2E
+@@ -148,14 +161,19 @@
+ #define THEME_COLOR_LIGHT_DOT         0x4D0000
+ 
+ //
+-// Dock: the key hints, on a rounded bar floating above the bottom edge.
++// Dock: the key hints, on a rounded translucent bar floating above the
++// bottom edge, the wallpaper blurred behind it, with a faint light rim.
+ //
+-#define THEME_FOOTER_HEIGHT           LvglThemePx(38)
++#define THEME_FOOTER_HEIGHT           LvglThemePx(40)
+ #define THEME_DOCK_MARGIN             LvglThemePx(12)
+-#define THEME_RADIUS_DOCK             LvglThemePx(12)
+-#define THEME_COLOR_DOCK_BG           0x2C2C2C
+-#define THEME_COLOR_DOCK_BORDER       0x3A3A3C
+-#define THEME_DOCK_SHADOW_WIDTH       LvglThemePx(18)
++#define THEME_RADIUS_DOCK             LvglThemePx(16)
++#define THEME_COLOR_DOCK_BG           0x2A2A2D
++#define THEME_DOCK_OPA                LV_OPA_60
++#define THEME_DOCK_BLUR               LvglThemePx(24)
++#define THEME_COLOR_DOCK_BORDER       0xFFFFFF
++#define THEME_DOCK_BORDER_OPA         LV_OPA_20
++#define THEME_COLOR_DOCK_SEPARATOR    0x5A5A5E
++#define THEME_DOCK_SHADOW_WIDTH       LvglThemePx(24)
+ #define THEME_PAD_FOOTER_X            LvglThemePx(16)
+ #define THEME_PAD_FOOTER_Y            LvglThemePx(2)
+ #define THEME_PAD_FOOTER_COL_GAP      LvglThemePx(18)
+@@ -168,8 +186,9 @@
+ #define THEME_PAD_CHIP_Y              LvglThemePx(2)
+ #define THEME_PAD_CHIP_COL_GAP        LvglThemePx(8)
+ #define THEME_RADIUS_CHIP             LvglThemePx(6)
+-#define THEME_COLOR_KEYCAP_BG         0x3A3A3C
+-#define THEME_COLOR_KEYCAP_BORDER     0x4E4E52
++#define THEME_COLOR_KEYCAP_BG         0x4A4A4E
++#define THEME_COLOR_KEYCAP_BG_BOTTOM  0x38383B
++#define THEME_COLOR_KEYCAP_BORDER     0x5E5E63
+ #define THEME_COLOR_KEYCAP_TEXT       THEME_COLOR_TEXT_TITLE
+ 
+ //
+@@ -206,11 +225,13 @@
+ 
+ //
+ // Menu symbols: white symbol on a colored rounded square (larger on the
+-// front page, where the entries also show their help text).
++// front page, where the entries also show their help text). The square
++// darkens towards the bottom by THEME_ICON_SHADE, like an app icon.
+ //
+ #define THEME_ICON_SQUARE             LvglThemePx(22)
+ #define THEME_ICON_SQUARE_LARGE       LvglThemePx(32)
+ #define THEME_RADIUS_ICON             LvglThemePx(6)
++#define THEME_ICON_SHADE              LV_OPA_30
+ #define THEME_COLOR_ICON_BLUE         0x007AFF
+ #define THEME_COLOR_ICON_GREEN        0x34C759
+ #define THEME_COLOR_ICON_RED          0xFF3B30
+@@ -247,21 +268,23 @@
+ #define THEME_PAD_AREA_HEADER_GAP     LvglThemePx(6)
+ 
+ //
+-// Front page icon grid, on the desktop: a rounded #2C2C2C square with a
+-// light shadow and a colored symbol, the label below it. The keyboard
++// Front page icon grid, on the desktop: a rounded dark gray square, lit
++// from the top, with a soft shadow and a colored symbol, the label below it. The keyboard
+ // focus is a light-blue ring around the square. The categories of the
+ // setup menu and the other settings come first, then (after a divider) the
+ // boot entries and reboot; the focused entry's help is shown below.
+ //
+ #define THEME_TILE_SQUARE             LvglThemePx(72)
+ #define THEME_TILE_WIDTH              LvglThemePx(128)
+-#define THEME_RADIUS_TILE             LvglThemePx(12)
+-#define THEME_COLOR_TILE_BG           0x2C2C2C
+-#define THEME_COLOR_TILE_BG_HOVER     0x363638
+-#define THEME_COLOR_TILE_BG_PRESSED   0x404042
+-#define THEME_COLOR_TILE_BORDER       0x3A3A3C
+-#define THEME_TILE_SHADOW_WIDTH       LvglThemePx(14)
+-#define THEME_TILE_SHADOW_OFFSET_Y    LvglThemePx(3)
++#define THEME_RADIUS_TILE             LvglThemePx(16)
++#define THEME_COLOR_TILE_BG           0x3A3A3D
++#define THEME_COLOR_TILE_BG_BOTTOM    0x28282A
++#define THEME_COLOR_TILE_BG_HOVER     0x46464A
++#define THEME_COLOR_TILE_BG_PRESSED   0x505054
++#define THEME_COLOR_TILE_BORDER       0xFFFFFF
++#define THEME_TILE_BORDER_OPA         LV_OPA_10
++#define THEME_TILE_SHADOW_WIDTH       LvglThemePx(20)
++#define THEME_TILE_SHADOW_OFFSET_Y    LvglThemePx(6)
+ #define THEME_TILE_FOCUS_BORDER       LvglThemePx(3)
+ #define THEME_PAD_TILE_FOCUS_GAP      LvglThemePx(3)
+ #define THEME_COLOR_TILE_FOCUS        0x4DA3FF
+diff --git a/Library/LvglLib/lv_conf.h b/Library/LvglLib/lv_conf.h
+index 9cc9791..bca6df4 100644
+--- a/Library/LvglLib/lv_conf.h
++++ b/Library/LvglLib/lv_conf.h
+@@ -225,7 +225,7 @@
+     #endif
+ 
+     /** Enable drawing complex gradients in software: linear at an angle, radial or conical */
+-    #define LV_USE_DRAW_SW_COMPLEX_GRADIENTS    0
++    #define LV_USE_DRAW_SW_COMPLEX_GRADIENTS    1
+ 
+ #endif
+ 
+diff --git a/LvglDisplayEngineDxe/LvglAptioChrome.c b/LvglDisplayEngineDxe/LvglAptioChrome.c
+index 5aa9499..557739b 100644
+--- a/LvglDisplayEngineDxe/LvglAptioChrome.c
++++ b/LvglDisplayEngineDxe/LvglAptioChrome.c
+@@ -8,6 +8,7 @@
+ **/
+ 
+ #include "LvglAptioChrome.h"
++#include "LvglDesktop.h"
+ #include <LvglTheme.h>
+ #include <Library/BaseLib.h>
+ #include <Library/BaseMemoryLib.h>
+@@ -485,6 +486,7 @@ ClockTimerCb (
+         Time.Minute
+         );
+       ChromeSetLabelText (mClockLabel, Buf);
++      DesktopSetHour (Time.Hour);
+     }
+   }
+ 
+@@ -518,10 +520,13 @@ BuildMenuBar (
+   lv_obj_set_size (Bar, LV_PCT (100), THEME_MENUBAR_HEIGHT);
+   lv_obj_align (Bar, LV_ALIGN_TOP_MID, 0, 0);
+   lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_MENUBAR_BG), 0);
+-  lv_obj_set_style_bg_opa (Bar, LV_OPA_COVER, 0);
++  lv_obj_set_style_bg_opa (Bar, THEME_MENUBAR_OPA, 0);
++  lv_obj_set_style_blur_radius (Bar, THEME_MENUBAR_BLUR, 0);
++  lv_obj_set_style_blur_backdrop (Bar, true, 0);
+   lv_obj_set_style_border_side (Bar, LV_BORDER_SIDE_BOTTOM, 0);
+   lv_obj_set_style_border_width (Bar, THEME_BORDER_PANE, 0);
+   lv_obj_set_style_border_color (Bar, lv_color_hex (THEME_COLOR_MENUBAR_BORDER), 0);
++  lv_obj_set_style_border_opa (Bar, THEME_MENUBAR_BORDER_OPA, 0);
+   lv_obj_set_style_pad_left (Bar, THEME_PAD_HEADER_X, 0);
+   lv_obj_set_style_pad_right (Bar, THEME_PAD_HEADER_X, 0);
+   lv_obj_set_style_pad_column (Bar, THEME_PAD_HEADER_GAP, 0);
+@@ -693,12 +698,14 @@ BuildTitleBar (
+   lv_obj_set_size (Bar, LV_PCT (100), THEME_SUBTITLE_HEIGHT);
+   lv_obj_set_style_radius (Bar, Radius, 0);
+   lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_TITLEBAR_BG), 0);
++  lv_obj_set_style_bg_grad_color (Bar, lv_color_hex (THEME_COLOR_TITLEBAR_BG_BOTTOM), 0);
++  lv_obj_set_style_bg_grad_dir (Bar, LV_GRAD_DIR_VER, 0);
+   lv_obj_set_style_bg_opa (Bar, LV_OPA_COVER, 0);
+ 
+   Strip = ChromeBox (Bar);
+   lv_obj_set_size (Strip, LV_PCT (100), Radius);
+   lv_obj_align (Strip, LV_ALIGN_BOTTOM_MID, 0, 0);
+-  lv_obj_set_style_bg_color (Strip, lv_color_hex (THEME_COLOR_TITLEBAR_BG), 0);
++  lv_obj_set_style_bg_color (Strip, lv_color_hex (THEME_COLOR_TITLEBAR_BG_BOTTOM), 0);
+   lv_obj_set_style_bg_opa (Strip, LV_OPA_COVER, 0);
+ 
+   Strip = ChromeBox (Bar);
+@@ -832,6 +839,8 @@ AddHotKeyChip (
+     lv_obj_set_style_pad_bottom (Cap, THEME_PAD_CHIP_Y, 0);
+     lv_obj_set_style_radius (Cap, THEME_RADIUS_CHIP, 0);
+     lv_obj_set_style_bg_color (Cap, lv_color_hex (THEME_COLOR_KEYCAP_BG), 0);
++    lv_obj_set_style_bg_grad_color (Cap, lv_color_hex (THEME_COLOR_KEYCAP_BG_BOTTOM), 0);
++    lv_obj_set_style_bg_grad_dir (Cap, LV_GRAD_DIR_VER, 0);
+     lv_obj_set_style_bg_opa (Cap, LV_OPA_COVER, 0);
+     lv_obj_set_style_border_color (Cap, lv_color_hex (THEME_COLOR_KEYCAP_BORDER), 0);
+     lv_obj_set_style_border_width (Cap, THEME_BORDER_PANE, 0);
+@@ -885,7 +894,7 @@ AddDockSeparator (
+ 
+   Sep = ChromeBox (Dock);
+   lv_obj_set_size (Sep, THEME_BORDER_PANE, LV_PCT (50));
+-  lv_obj_set_style_bg_color (Sep, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++  lv_obj_set_style_bg_color (Sep, lv_color_hex (THEME_COLOR_DOCK_SEPARATOR), 0);
+   lv_obj_set_style_bg_opa (Sep, LV_OPA_COVER, 0);
+ }
+ 
+@@ -917,8 +926,11 @@ BuildDock (
+   lv_obj_align (Dock, LV_ALIGN_BOTTOM_MID, 0, -(int32_t)THEME_DOCK_MARGIN);
+   lv_obj_set_style_radius (Dock, THEME_RADIUS_DOCK, 0);
+   lv_obj_set_style_bg_color (Dock, lv_color_hex (THEME_COLOR_DOCK_BG), 0);
+-  lv_obj_set_style_bg_opa (Dock, LV_OPA_COVER, 0);
++  lv_obj_set_style_bg_opa (Dock, THEME_DOCK_OPA, 0);
++  lv_obj_set_style_blur_radius (Dock, THEME_DOCK_BLUR, 0);
++  lv_obj_set_style_blur_backdrop (Dock, true, 0);
+   lv_obj_set_style_border_color (Dock, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++  lv_obj_set_style_border_opa (Dock, THEME_DOCK_BORDER_OPA, 0);
+   lv_obj_set_style_border_width (Dock, THEME_BORDER_PANE, 0);
+   lv_obj_set_style_shadow_width (Dock, THEME_DOCK_SHADOW_WIDTH, 0);
+   lv_obj_set_style_shadow_offset_y (Dock, LvglThemePx (4), 0);
+@@ -1119,12 +1131,16 @@ AptioBuildChrome (
+   LvglUiConfigLoad (&UiConfig);
+ 
+   //
+-  // Desktop: a flat backdrop behind the window or the icon grid.
++  // Desktop: the wallpaper (or a flat backdrop) behind the window or the
++  // icon grid.
+   //
+   lv_obj_remove_style_all (Screen);
+   lv_obj_set_style_bg_color (Screen, lv_color_hex (THEME_COLOR_BACKDROP), 0);
+   lv_obj_set_style_bg_opa (Screen, LV_OPA_COVER, 0);
+   lv_obj_clear_flag (Screen, LV_OBJ_FLAG_SCROLLABLE);
++#if THEME_WALLPAPER
++  DesktopBuild (Screen);
++#endif
+ 
+   BuildMenuBar (Screen);
+ 
+@@ -1191,9 +1207,9 @@ AptioBuildChrome (
+   lv_obj_set_style_border_color (Window, lv_color_hex (THEME_COLOR_FRAME_BORDER), 0);
+   lv_obj_set_style_border_width (Window, THEME_BORDER_PANE, 0);
+   lv_obj_set_style_shadow_width (Window, THEME_FRAME_SHADOW_WIDTH, 0);
+-  lv_obj_set_style_shadow_offset_y (Window, LvglThemePx (6), 0);
++  lv_obj_set_style_shadow_offset_y (Window, THEME_FRAME_SHADOW_OFFSET_Y, 0);
+   lv_obj_set_style_shadow_color (Window, lv_color_black (), 0);
+-  lv_obj_set_style_shadow_opa (Window, LV_OPA_50, 0);
++  lv_obj_set_style_shadow_opa (Window, THEME_FRAME_SHADOW_OPA, 0);
+   lv_obj_set_style_pad_all (Window, 0, 0);
+   lv_obj_set_style_pad_row (Window, 0, 0);
+   lv_obj_set_flex_flow (Window, LV_FLEX_FLOW_COLUMN);
+@@ -1236,6 +1252,7 @@ AptioChromeTeardown (
+     lv_timer_delete (mClockTimer);
+     mClockTimer = NULL;
+   }
++  DesktopTeardown ();
+   mClockLabel   = NULL;
+   mBatteryLabel = NULL;
+   mHelpTitle    = NULL;
+diff --git a/LvglDisplayEngineDxe/LvglDesktop.c b/LvglDisplayEngineDxe/LvglDesktop.c
+new file mode 100644
+index 0000000..1ca8c9a
+--- /dev/null
++++ b/LvglDisplayEngineDxe/LvglDesktop.c
+@@ -0,0 +1,244 @@
++/** @file
++  Desktop wallpaper of the setup: drawn, not stored. A vertical sky gradient
++  across the screen and three soft orbs of color over it, each a circle
++  filled with a radial gradient that fades to transparent at its edge, so
++  that they blend into the sky and into each other. The palette follows the
++  hour of the day, like a dynamic desktop: night, dawn, day, dusk and
++  evening. Nothing is animated: the wallpaper only changes when the hour
++  moves into another band, and the objects are only redrawn where the
++  screen is invalidated.
++
++  Copyright (c) 2024-2026, Hamit Karaca. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "LvglDesktop.h"
++#include <LvglTheme.h>
++#include <Library/UefiRuntimeServicesTableLib.h>
++
++//
++// The hour bands of the day and the palette of each.
++//
++typedef enum {
++  DesktopNight,
++  DesktopDawn,
++  DesktopDay,
++  DesktopDusk,
++  DesktopEvening,
++  DesktopPeriodMax
++} DESKTOP_PERIOD;
++
++typedef struct {
++  UINT32  SkyTop;
++  UINT32  SkyBottom;
++  UINT32  Orb[THEME_WALLPAPER_ORBS];
++  UINT8   OrbOpa[THEME_WALLPAPER_ORBS];
++} DESKTOP_PALETTE;
++
++STATIC CONST DESKTOP_PALETTE  mPalettes[DesktopPeriodMax] = {
++  [DesktopNight]   = { 0x05070F, 0x0C1230, { 0x3B2F8C, 0x0E4C6B, 0x5B1E63 }, { 180, 150, 140 } },
++  [DesktopDawn]    = { 0x0E1024, 0x2A1A3A, { 0xC4552A, 0x8C2F5A, 0x3D2B7A }, { 165, 155, 150 } },
++  [DesktopDay]     = { 0x0B1A33, 0x10294A, { 0x1E6FD9, 0x16A3A8, 0x3F3FBF }, { 175, 150, 135 } },
++  [DesktopDusk]    = { 0x121026, 0x3A1D2E, { 0xD9552E, 0xC98A2A, 0x5C2E8A }, { 175, 150, 155 } },
++  [DesktopEvening] = { 0x080A18, 0x141B3A, { 0x5A35B0, 0x1C4FA8, 0x8E2B6B }, { 175, 155, 130 } },
++};
++
++//
++// Where the orbs sit, in percent of the screen: center and radius (of the
++// screen height). They overlap on purpose.
++//
++typedef struct {
++  INT32  CenterXPct;
++  INT32  CenterYPct;
++  INT32  RadiusPct;
++} DESKTOP_ORB_PLACE;
++
++STATIC CONST DESKTOP_ORB_PLACE  mOrbPlaces[THEME_WALLPAPER_ORBS] = {
++  { 18, 24, 58 },
++  { 84, 62, 62 },
++  { 46, 108, 52 },
++};
++
++STATIC lv_obj_t        *mScreen = NULL;
++STATIC lv_obj_t        *mOrbs[THEME_WALLPAPER_ORBS];
++STATIC lv_grad_dsc_t   mOrbGrads[THEME_WALLPAPER_ORBS];
++STATIC DESKTOP_PERIOD  mPeriod  = DesktopPeriodMax;
++
++/**
++  The band of the day an hour falls in.
++**/
++STATIC
++DESKTOP_PERIOD
++DesktopPeriodOfHour (
++  IN UINTN  Hour
++  )
++{
++  if (Hour < 5) {
++    return DesktopNight;
++  } else if (Hour < 8) {
++    return DesktopDawn;
++  } else if (Hour < 17) {
++    return DesktopDay;
++  } else if (Hour < 20) {
++    return DesktopDusk;
++  } else if (Hour < 22) {
++    return DesktopEvening;
++  }
++
++  return DesktopNight;
++}
++
++/**
++  The current hour from the RTC, or the day band when the clock is not
++  readable.
++**/
++STATIC
++UINTN
++DesktopCurrentHour (
++  VOID
++  )
++{
++  EFI_TIME    Time;
++  EFI_STATUS  Status;
++
++  if (gRT == NULL) {
++    return 12;
++  }
++
++  Status = gRT->GetTime (&Time, NULL);
++  if (EFI_ERROR (Status) || (Time.Hour > 23)) {
++    return 12;
++  }
++
++  return Time.Hour;
++}
++
++/**
++  Paint the sky and the orbs in the colors of a palette.
++**/
++STATIC
++VOID
++DesktopApplyPalette (
++  IN CONST DESKTOP_PALETTE  *Palette
++  )
++{
++  UINTN       Index;
++  lv_color_t  Colors[2];
++  lv_opa_t    Opas[2];
++  UINT8       Fracs[2];
++
++  if (mScreen == NULL) {
++    return;
++  }
++
++  lv_obj_set_style_bg_color (mScreen, lv_color_hex (Palette->SkyTop), 0);
++  lv_obj_set_style_bg_grad_color (mScreen, lv_color_hex (Palette->SkyBottom), 0);
++  lv_obj_set_style_bg_grad_dir (mScreen, LV_GRAD_DIR_VER, 0);
++  lv_obj_set_style_bg_opa (mScreen, LV_OPA_COVER, 0);
++
++  for (Index = 0; Index < THEME_WALLPAPER_ORBS; Index++) {
++    if (mOrbs[Index] == NULL) {
++      continue;
++    }
++
++    //
++    // Radial, from the center of the circle, the color fading to nothing
++    // at the edge. The descriptors are static: the style keeps a pointer.
++    //
++    Colors[0] = lv_color_hex (Palette->Orb[Index]);
++    Colors[1] = Colors[0];
++    Opas[0]   = Palette->OrbOpa[Index];
++    Opas[1]   = LV_OPA_TRANSP;
++    Fracs[0]  = 0;
++    Fracs[1]  = 255;
++    lv_grad_init_stops (&mOrbGrads[Index], Colors, Opas, Fracs, 2);
++    lv_grad_radial_init (
++      &mOrbGrads[Index],
++      LV_GRAD_CENTER,
++      LV_GRAD_CENTER,
++      LV_GRAD_RIGHT,
++      LV_GRAD_CENTER,
++      LV_GRAD_EXTEND_PAD
++      );
++    lv_obj_set_style_bg_grad (mOrbs[Index], &mOrbGrads[Index], 0);
++    lv_obj_set_style_bg_opa (mOrbs[Index], LV_OPA_COVER, 0);
++    lv_obj_invalidate (mOrbs[Index]);
++  }
++
++  lv_obj_invalidate (mScreen);
++}
++
++VOID
++EFIAPI
++DesktopBuild (
++  IN lv_obj_t  *Screen
++  )
++{
++  UINTN     Index;
++  int32_t   HorRes;
++  int32_t   VerRes;
++  int32_t   Radius;
++  lv_obj_t  *Orb;
++
++  mScreen = Screen;
++  HorRes  = LV_HOR_RES;
++  VerRes  = LV_VER_RES;
++
++  for (Index = 0; Index < THEME_WALLPAPER_ORBS; Index++) {
++    Radius = (VerRes * mOrbPlaces[Index].RadiusPct) / 100;
++
++    Orb = lv_obj_create (Screen);
++    lv_obj_remove_style_all (Orb);
++    lv_obj_set_size (Orb, 2 * Radius, 2 * Radius);
++    lv_obj_set_pos (
++      Orb,
++      (HorRes * mOrbPlaces[Index].CenterXPct) / 100 - Radius,
++      (VerRes * mOrbPlaces[Index].CenterYPct) / 100 - Radius
++      );
++    lv_obj_set_style_radius (Orb, LV_RADIUS_CIRCLE, 0);
++    lv_obj_clear_flag (Orb, LV_OBJ_FLAG_CLICKABLE);
++    lv_obj_clear_flag (Orb, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_add_flag (Orb, LV_OBJ_FLAG_IGNORE_LAYOUT);
++    mOrbs[Index] = Orb;
++  }
++
++  mPeriod = DesktopPeriodOfHour (DesktopCurrentHour ());
++  DesktopApplyPalette (&mPalettes[mPeriod]);
++}
++
++VOID
++EFIAPI
++DesktopSetHour (
++  IN UINTN  Hour
++  )
++{
++  DESKTOP_PERIOD  Period;
++
++  if (mScreen == NULL) {
++    return;
++  }
++
++  Period = DesktopPeriodOfHour (Hour);
++  if (Period == mPeriod) {
++    return;
++  }
++
++  mPeriod = Period;
++  DesktopApplyPalette (&mPalettes[Period]);
++}
++
++VOID
++EFIAPI
++DesktopTeardown (
++  VOID
++  )
++{
++  UINTN  Index;
++
++  mScreen = NULL;
++  for (Index = 0; Index < THEME_WALLPAPER_ORBS; Index++) {
++    mOrbs[Index] = NULL;
++  }
++
++  mPeriod = DesktopPeriodMax;
++}
+diff --git a/LvglDisplayEngineDxe/LvglDesktop.h b/LvglDisplayEngineDxe/LvglDesktop.h
+new file mode 100644
+index 0000000..9f42775
+--- /dev/null
++++ b/LvglDisplayEngineDxe/LvglDesktop.h
+@@ -0,0 +1,49 @@
++/** @file
++  Desktop wallpaper of the setup: drawn, not stored. A sky gradient across
++  the screen and soft orbs of color over it, in a palette that follows the
++  hour of the day, like a dynamic desktop.
++
++  Copyright (c) 2024-2026, Hamit Karaca. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef LVGL_DESKTOP_H_
++#define LVGL_DESKTOP_H_
++
++#include <Library/LvglLib.h>
++
++/**
++  Draw the wallpaper on a screen, in the palette of the current hour: the
++  screen background becomes the sky gradient and the orbs are its first
++  children, so everything built afterwards sits on top of them.
++
++  @param[in]  Screen  The screen.
++**/
++VOID
++EFIAPI
++DesktopBuild (
++  IN lv_obj_t  *Screen
++  );
++
++/**
++  Switch the wallpaper to the palette of the given hour, if it is not the
++  one shown. Cheap when nothing changes: call it from the clock timer.
++
++  @param[in]  Hour  Hour of the day, 0-23.
++**/
++VOID
++EFIAPI
++DesktopSetHour (
++  IN UINTN  Hour
++  );
++
++/**
++  Forget the wallpaper objects: the screen that holds them is going away.
++**/
++VOID
++EFIAPI
++DesktopTeardown (
++  VOID
++  );
++
++#endif // LVGL_DESKTOP_H_
+diff --git a/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf b/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
+index eb8d738..cc18dc8 100644
+--- a/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
++++ b/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
+@@ -25,6 +25,8 @@
+   LvglFormRenderer.h
+   LvglAptioChrome.c
+   LvglAptioChrome.h
++  LvglDesktop.c
++  LvglDesktop.h
+ 
+ [Packages]
+   MdePkg/MdePkg.dec
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index 0f89438..18e0671 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -729,6 +729,8 @@ CreateIconSquare (
+   lv_obj_set_size (Square, Size, Size);
+   lv_obj_set_style_radius (Square, THEME_RADIUS_ICON, 0);
+   lv_obj_set_style_bg_color (Square, lv_color_hex (Color), 0);
++  lv_obj_set_style_bg_grad_color (Square, lv_color_darken (lv_color_hex (Color), THEME_ICON_SHADE), 0);
++  lv_obj_set_style_bg_grad_dir (Square, LV_GRAD_DIR_VER, 0);
+   lv_obj_set_style_bg_opa (Square, LV_OPA_COVER, 0);
+   lv_obj_clear_flag (Square, LV_OBJ_FLAG_CLICKABLE);
+   lv_obj_clear_flag (Square, LV_OBJ_FLAG_SCROLLABLE);
+@@ -4960,15 +4962,20 @@ CreateGridTile (
+   lv_obj_set_size (Square, THEME_TILE_SQUARE, THEME_TILE_SQUARE);
+   lv_obj_set_style_radius (Square, THEME_RADIUS_TILE, 0);
+   lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG), 0);
++  lv_obj_set_style_bg_grad_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_BOTTOM), 0);
++  lv_obj_set_style_bg_grad_dir (Square, LV_GRAD_DIR_VER, 0);
+   lv_obj_set_style_bg_opa (Square, LV_OPA_COVER, 0);
+   lv_obj_set_style_border_color (Square, lv_color_hex (THEME_COLOR_TILE_BORDER), 0);
++  lv_obj_set_style_border_opa (Square, THEME_TILE_BORDER_OPA, 0);
+   lv_obj_set_style_border_width (Square, THEME_BORDER_PANE, 0);
+   lv_obj_set_style_shadow_width (Square, THEME_TILE_SHADOW_WIDTH, 0);
+   lv_obj_set_style_shadow_offset_y (Square, THEME_TILE_SHADOW_OFFSET_Y, 0);
+   lv_obj_set_style_shadow_color (Square, lv_color_black (), 0);
+   lv_obj_set_style_shadow_opa (Square, LV_OPA_40, 0);
+   lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_HOVER), LV_STATE_HOVERED);
++  lv_obj_set_style_bg_grad_color (Square, lv_color_hex (THEME_COLOR_TILE_BG), LV_STATE_HOVERED);
+   lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_PRESSED), LV_STATE_PRESSED);
++  lv_obj_set_style_bg_grad_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_HOVER), LV_STATE_PRESSED);
+   lv_obj_set_style_outline_color (Square, lv_color_hex (THEME_COLOR_TILE_FOCUS), LV_STATE_FOCUSED);
+   lv_obj_set_style_outline_opa (Square, LV_OPA_COVER, LV_STATE_FOCUSED);
+   lv_obj_set_style_outline_width (Square, THEME_TILE_FOCUS_BORDER, LV_STATE_FOCUSED);
+-- 
+2.43.0
+

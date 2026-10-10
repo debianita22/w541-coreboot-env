@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 15:55:58 +0200
+Subject: [PATCH 7/7] MdeModulePkg/Ps2MouseDxe: Report at 100 Hz and 8
+ counts/mm, keep in sync
+
+The driver sets the mouse to 20 reports per second at 4 counts/mm, and
+takes one packet per 10 ms poll. On a laptop the TrackPoint and the
+touchpad come through this driver, and at 20 reports per second the
+pointer moves in steps of whatever the finger did in 50 ms; the pad,
+which filters its own motion for a 100 Hz host, responds poorly too.
+
+Set 100 reports per second at 8 counts/mm, the settings operating
+systems use, and take every packet that is waiting at each poll, up to
+eight, so that a delayed poll does not leave them queued in the device.
+
+The first byte of a packet was recognized by bit 3 set and bit 2 clear:
+bit 2 is the middle button, so a packet with it pressed (the TrackPoint
+scrolls with it) was not a packet, and the driver read its data bytes as
+first bytes until it happened to find one, with the motion of the bytes
+in between applied as it came. Recognize the first byte by bit 3 set and
+the overflow bits 6 and 7 clear instead: the buttons may be pressed, and
+the data bytes of a lost packet are rejected seven times out of eight
+rather than three out of four.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ MdeModulePkg/Bus/Isa/Ps2MouseDxe/CommPs2.h  | 16 +++++++++++--
+ MdeModulePkg/Bus/Isa/Ps2MouseDxe/Ps2Mouse.c | 26 +++++++++++++++------
+ 2 files changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/MdeModulePkg/Bus/Isa/Ps2MouseDxe/CommPs2.h b/MdeModulePkg/Bus/Isa/Ps2MouseDxe/CommPs2.h
+index d6fc0cc8c7..769823b390 100644
+--- a/MdeModulePkg/Bus/Isa/Ps2MouseDxe/CommPs2.h
++++ b/MdeModulePkg/Bus/Isa/Ps2MouseDxe/CommPs2.h
+@@ -11,8 +11,20 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include "Ps2Mouse.h"
+ 
+ #define PS2_PACKET_LENGTH  3
+-#define PS2_SYNC_MASK      0xc
+-#define PS2_SYNC_BYTE      0x8
++
++//
++// The first byte of a packet has bit 3 set and, unless the device reports
++// more motion than a packet holds (never at these settings, and nothing to
++// move the pointer by), the overflow bits 6 and 7 clear. The buttons, bits
++// 0 to 2, may be pressed: a packet with the middle button down is a packet.
++//
++#define PS2_SYNC_MASK      0xc8
++#define PS2_SYNC_BYTE      0x08
++
++//
++// Packets taken per poll of the device
++//
++#define PS2_PACKETS_PER_POLL  8
+ 
+ #define IS_PS2_SYNC_BYTE(byte)  ((byte & PS2_SYNC_MASK) == PS2_SYNC_BYTE)
+ 
+diff --git a/MdeModulePkg/Bus/Isa/Ps2MouseDxe/Ps2Mouse.c b/MdeModulePkg/Bus/Isa/Ps2MouseDxe/Ps2Mouse.c
+index fb61f75e08..84aa63d627 100644
+--- a/MdeModulePkg/Bus/Isa/Ps2MouseDxe/Ps2Mouse.c
++++ b/MdeModulePkg/Bus/Isa/Ps2MouseDxe/Ps2Mouse.c
+@@ -218,17 +218,22 @@ PS2MouseDriverStart (
+   //
+   MouseDev->Signature       = PS2_MOUSE_DEV_SIGNATURE;
+   MouseDev->Handle          = Controller;
+-  MouseDev->SampleRate      = SampleRate20;
+-  MouseDev->Resolution      = MouseResolution4;
++  //
++  // 100 reports per second at 8 counts/mm, the settings operating systems
++  // use: at 20 reports per second the pointer moves in steps, and the
++  // pads of laptops, which process their own motion, respond poorly.
++  //
++  MouseDev->SampleRate      = SampleRate100;
++  MouseDev->Resolution      = MouseResolution8;
+   MouseDev->Scaling         = Scaling1;
+   MouseDev->DataPackageSize = 3;
+   MouseDev->DevicePath      = DevicePath;
+ 
+   //
+-  // Resolution = 4 counts/mm
++  // Resolution = 8 counts/mm
+   //
+-  MouseDev->Mode.ResolutionX = 4;
+-  MouseDev->Mode.ResolutionY = 4;
++  MouseDev->Mode.ResolutionX = 8;
++  MouseDev->Mode.ResolutionY = 8;
+   MouseDev->Mode.LeftButton  = TRUE;
+   MouseDev->Mode.RightButton = TRUE;
+ 
+@@ -757,13 +762,20 @@ PollMouse (
+ 
+ {
+   PS2_MOUSE_DEV  *MouseDev;
++  UINTN          Count;
+ 
+   MouseDev = (PS2_MOUSE_DEV *)Context;
+ 
+   //
+-  // Polling mouse packet data
++  // Polling mouse packet data. Take every packet that is already waiting,
++  // not only the first: at 100 reports per second a delayed poll finds more
++  // than one, and they would queue up in the device.
+   //
+-  PS2MouseGetPacket (MouseDev);
++  for (Count = 0; Count < PS2_PACKETS_PER_POLL; Count++) {
++    if (EFI_ERROR (PS2MouseGetPacket (MouseDev))) {
++      break;
++    }
++  }
+ }
+ 
+ /**
+-- 
+2.43.0
+

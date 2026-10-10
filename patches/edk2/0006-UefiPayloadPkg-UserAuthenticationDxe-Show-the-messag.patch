@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 08:46:23 +0200
-Subject: [PATCH 6/6] UefiPayloadPkg/UserAuthenticationDxe: Show the messages
+Subject: [PATCH 6/7] UefiPayloadPkg/UserAuthenticationDxe: Show the messages
  as HII popups
 
 The driver reports a wrong password, a new password set, a short one and
