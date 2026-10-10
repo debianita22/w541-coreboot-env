@@ -11,7 +11,10 @@ The images use the map in [`configs/w541.fmd`](../configs/w541.fmd):
 | `0x598000-0x7FFFFF` | 8 MiB | unused |
 | `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and CBFS: all of coreboot |
 
-Each release has the complete image and the two chip images.
+Each release has the complete image and the two chip images. From v1.2.0
+on the laptop, later releases install from Linux with their capsule,
+without flashrom ([docs/update.md](update.md)); flashrom stays for the first
+install of v1.2.0 or later, for switching variant, and for older releases.
 
 - [Before you start](#before-you-start)
 - [Boot loader fallback path](#boot-loader-fallback-path)
@@ -126,8 +129,9 @@ python3 tools/vpd.py show vpd.rom          # before flashing: what goes into RO_
 sudo dmidecode -t system | grep -E 'Product|Version|Serial|UUID|SKU|Family'   # after a reboot
 ```
 
-A firmware update rewrites the whole BIOS region, `RO_VPD` included: copy
-the VPD into the new image first, as in [Internal update](#internal-update).
+An update with flashrom rewrites the whole BIOS region, `RO_VPD` included:
+copy the VPD into the new image first, as in [Internal update](#internal-update).
+An update with a capsule ([docs/update.md](update.md)) leaves it alone.
 
 ## Internal update
 
@@ -152,7 +156,8 @@ sudo flashrom -p internal --ifd -i bios -w w541-flash.rom
 ```
 
 With *BIOS Lock* on (*Security* → *Flash protection*), flashrom can only
-read the flash: turn it off, reboot, update, and turn it on again.
+read the flash: turn it off, reboot, update, and turn it on again. A capsule
+update ([docs/update.md](update.md)) works with it on.
 
 To switch between the `mrc` and `nri` variants, flash the other image the
 same way.
@@ -217,9 +222,9 @@ same way.
   - *Security*: *BIOS Lock*, *Clear memory at power-on*, VT-x, VT-d,
     *Intel Management Engine* and the supervisor password. *BIOS Lock*,
     off by default, leaves the flash writable only by the firmware in SMM,
-    as the Lenovo firmware did: the settings are still saved, but flashrom
-    and any other program in the OS can only read it, until it is turned
-    off again. *Clear memory at power-on*, on by default, clears all the
+    as the Lenovo firmware did: the settings are still saved, and signed
+    update capsules still install, but flashrom and any other program in
+    the OS can only read it, until it is turned off again. *Clear memory at power-on*, on by default, clears all the
     memory at every boot but not on resume, so that nothing the previous
     OS left in it can be read: about 1.7 s with 32 GB. The processor keeps
     the VT-x setting until it is powered off, so after a change the next
@@ -307,9 +312,9 @@ converting a laptop needs its own backup processed as in `legacy/`
 
 ## Recovery
 
-If the laptop does not boot after a flash, write the 4 MiB chip externally
-with a working image: the `-4mb-chip.rom` of a previous release, or the last
-4 MiB of your backup. The 8 MiB chip needs writing only if it was changed
+If the laptop does not boot after a flash, or after a capsule update cut
+short, write the 4 MiB chip externally with a working image: the
+`-4mb-chip.rom` of a previous release, or the last 4 MiB of your backup. The 8 MiB chip needs writing only if it was changed
 (see above for an image with your own descriptor and MAC address).
 
 ```sh

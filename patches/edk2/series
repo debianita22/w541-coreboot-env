@@ -5,3 +5,6 @@
 0005-UefiPayloadPkg-Name-the-graphical-setup-System-Prefe.patch
 0006-UefiPayloadPkg-UserAuthenticationDxe-Show-the-messag.patch
 0007-MdeModulePkg-Ps2MouseDxe-Report-at-100-Hz-and-8-coun.patch
+0008-UefiPayloadPkg-FmpDeviceSmmLib-Refuse-a-manifest-tha.patch
+0009-UefiPayloadPkg-SmmStoreLib-Let-the-caller-end-the-wh.patch
+0010-UefiPayloadPkg-PlatformBootManagerLib-Apply-capsules.patch

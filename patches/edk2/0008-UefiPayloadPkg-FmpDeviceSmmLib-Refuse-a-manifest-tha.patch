@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 21:27:00 +0200
+Subject: [PATCH] UefiPayloadPkg/FmpDeviceSmmLib: Refuse a manifest that
+ doesn't fit the flash
+
+When the regions named by the manifest of an image are not where the
+image puts them in the flash, or the FMAP of the flash can't be read,
+the library writes the whole BIOS region of the image instead. That
+also replaces what the manifest leaves alone: the variable store, with
+the settings, boot entries and Secure Boot keys, and regions written
+once per machine, like the vital product data with its serial number,
+which an image built for every machine has empty.
+
+Refuse the update instead. A firmware whose flash layout changes is
+then installed with an external tool, which can carry those regions
+over.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c | 48 +++++--------------
+ 1 file changed, 13 insertions(+), 35 deletions(-)
+
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+index eadfb7e1f5..f95579b413 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+@@ -2171,17 +2171,15 @@ FmpDeviceSetImageWithStatus (
+       FlashFmapBuffer = NULL;
+     }
+ 
+-    if (UseManifest && LayoutMismatch) {
++    if (LayoutMismatch) {
+       //
+-      // Manifest regions no longer match the current flash layout; fall back to
+-      // flashing the full BIOS region from the new image.
++      // The regions of the manifest are not where the image puts them in the
++      // flash, or the FMAP of the flash could not be read.  Refuse the update:
++      // writing the whole BIOS region instead would also replace what the
++      // manifest leaves alone, such as the variable store and the vital
++      // product data, with what the image has there.
+       //
+-      CHAR8        RegionName[REGION_MANIFEST_NAME_LEN + 1];
+-      CONST CHAR8  *BiosRegionSource;
+-
+-      UseManifest            = FALSE;
+-      UseBiosRegion          = FALSE;
+-      VariableStorePreserved = FALSE;
++      CHAR8  RegionName[REGION_MANIFEST_NAME_LEN + 1];
+ 
+       if (MismatchIndex != MAX_UINTN) {
+         CopyMem (
+@@ -2191,7 +2189,7 @@ FmpDeviceSetImageWithStatus (
+           );
+         RegionName[REGION_MANIFEST_NAME_LEN] = 0;
+         DEBUG ((
+-          DEBUG_WARN,
++          DEBUG_ERROR,
+           "%a(): FMAP layout mismatch for '%a': flash 0x%x+0x%x vs capsule 0x%x+0x%x\n",
+           __func__,
+           RegionName,
+@@ -2200,33 +2198,13 @@ FmpDeviceSetImageWithStatus (
+           (UINT32)CapsuleRegionOffset,
+           (UINT32)CapsuleRegionSize
+           ));
+-      }
+-
+-      TriedBiosFallback = TRUE;
+-      if (!EFI_ERROR (
+-             FindBiosFallbackRegion (
+-               BlockSize,
+-               BaseImageSize,
+-               (CONST UINT8 *)Image,
+-               BaseImageSize,
+-               &BiosOffset,
+-               &BiosSize,
+-               &BiosRegionSource
+-               )
+-             ))
+-      {
+-        UseBiosRegion = TRUE;
+-        DEBUG ((
+-          DEBUG_WARN,
+-          "%a(): flashing %a BIOS region instead (0x%x+0x%x)\n",
+-          __func__,
+-          BiosRegionSource,
+-          (UINT32)BiosOffset,
+-          (UINT32)BiosSize
+-          ));
+       } else {
+-        DEBUG ((DEBUG_WARN, "%a(): unable to locate BIOS region for fallback\n", __func__));
++        DEBUG ((DEBUG_ERROR, "%a(): the FMAP of the flash is unreadable\n", __func__));
+       }
++
++      FreePool (VerifyBuffer);
++      FreePool (ReadBuffer);
++      return EFI_ABORTED;
+     }
+   }
+ 
+-- 
+2.43.0
+

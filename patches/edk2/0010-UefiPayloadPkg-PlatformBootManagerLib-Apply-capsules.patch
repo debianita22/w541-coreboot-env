@@ -1,0 +1,734 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 22:11:22 +0200
+Subject: [PATCH] UefiPayloadPkg/PlatformBootManagerLib: Apply capsules on
+ disk, keep the flash safe
+
+With DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT, coreboot sees the capsules on
+disk announced in OsIndications and lets the SMMSTORE handler write the
+whole flash until the next boot, but the payload only applies capsules
+that come as HOBs and boots on: the capsules on disk are never applied,
+the bit in OsIndications stays set, and every boot hands the writable
+flash over to Driver#### options, option ROMs and the OS, past a BIOS
+lock. Capsules in memory have the same issue on a smaller scale, the
+reset coming only after the console, Driver#### options included.
+
+Handle the capsules of the boot before EndOfDxe, where FmpDxe still
+accepts SetImage(), in PlatformProcessCapsules():
+- clear the bit in OsIndications first, so that the next boot is a
+  normal one whatever happens;
+- with a battery, wait up to a minute for it to be charging or above
+  25% before writing, postponing the update otherwise;
+- process the HOB capsules as before, then connect the devices and load
+  the files of \EFI\UpdateCapsule on the EFI system partitions (the
+  payload has no PEI to load them on a later boot as CapsuleOnDisk.c
+  expects), delete them and process them with ProcessCapsuleImage(),
+  showing the result recorded in Capsule####;
+- reset after applying a capsule, before the console is connected;
+- otherwise give up the whole flash access with
+  SmmStoreLibEndAnyBlockAccess() and boot on, or reset if that fails.
+
+Whether the flash is writable is asked to the SMMSTORE handler, with a
+one byte read of the whole flash, not inferred from the variables:
+coreboot and the variable driver can read OsIndications differently from
+a store with an interrupted or crafted update of it.
+
+Capsules that need a second pass after EndOfDxe, for device firmware
+with embedded drivers, are no longer processed: the only FMP instance is
+the system firmware, locked by FmpDxe at EndOfDxe anyway.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../PlatformBootManager.c                     |  45 +-
+ .../PlatformBootManager.h                     |  13 +
+ .../PlatformBootManagerLib.inf                |   7 +
+ .../PlatformBootManagerLib/PlatformCapsule.c  | 538 ++++++++++++++++++
+ 4 files changed, 561 insertions(+), 42 deletions(-)
+ create mode 100644 UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+index b235733a47..5fa9462bb6 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+@@ -373,7 +373,6 @@ PlatformBootManagerBeforeConsole (
+   VOID
+   )
+ {
+-  EFI_STATUS                    Status;
+   EFI_INPUT_KEY                 Enter;
+   EFI_INPUT_KEY                 CustomKey;
+   EFI_INPUT_KEY                 Down;
+@@ -413,21 +412,10 @@ PlatformBootManagerBeforeConsole (
+   EfiBootManagerAddKeyOptionVariable (NULL, (UINT16)BootOption.OptionNumber, 0, &Down, NULL);
+ 
+   //
+-  // Process update capsules that don't contain embedded drivers.
++  // Apply the update capsules of this boot, if any: the whole flash must not
++  // stay writable for option ROMs, Driver#### options or an OS.
+   //
+-  ConsoleInitialized = FALSE;
+-  if (GetBootModeHob () == BOOT_ON_FLASH_UPDATE) {
+-    // TODO: when enabling capsule support for laptops, add a battery check here
+-    PlatformConsoleInit ();
+-    ConsoleInitialized = TRUE;
+-
+-    BootSplashApply ();
+-
+-    Status = ProcessCapsules ();
+-    if (EFI_ERROR (Status)) {
+-      DEBUG ((DEBUG_ERROR, "%a(): ProcessCapsule() failed with: %r\n", __func__, Status));
+-    }
+-  }
++  ConsoleInitialized = PlatformProcessCapsules ();
+ 
+   //
+   // Register a callback to show a message when the Boot Manager Menu hotkey is pressed.
+@@ -487,33 +475,6 @@ PlatformBootManagerAfterConsole (
+     EfiBootManagerRefreshAllBootOption ();
+   }
+ 
+-  //
+-  // Active BOOT_ON_FLASH_UPDATE mode means that at least one capsule has been
+-  // discovered by a bootloader and passed for further processing into EDK which
+-  // created EFI_HOB_TYPE_UEFI_CAPSULE HOB(s).
+-  //
+-  // Process update capsules that weren't processed on the first call to
+-  // ProcessCapsules() in PlatformBootManagerBeforeConsole().
+-  //
+-  if (GetBootModeHob () == BOOT_ON_FLASH_UPDATE) {
+-    // TODO: when enabling capsule support for laptops, add a battery check here
+-    Status = ProcessCapsules ();
+-    if (EFI_ERROR (Status)) {
+-      DEBUG ((DEBUG_ERROR, "%a(): ProcessCapsule() failed with: %r\n", __func__, Status));
+-    }
+-
+-    //
+-    // Reset the system to disable SMI handler in order to exclude the
+-    // possibility of it being used outside of the firmware.
+-    //
+-    // In practice, this will rarely execute because even the first
+-    // ProcessCapsules() invocation might do a reset if all capsules were
+-    // processed and at least one of them needed a reset.  This is just to catch
+-    // a case when this doesn't happen which is possible on error.
+-    //
+-    gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
+-  }
+-
+   //
+   // Process TPM PPI request
+   //
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+index 13c70065bc..9085f89771 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+@@ -150,3 +150,16 @@ PlatformBootManagerShowProgress (
+   IN UINTN                          Progress,
+   IN UINTN                          PreviousValue
+   );
++
++/**
++  Apply the update capsules of this boot, if it has any, and reset after
++  applying one.  Otherwise make sure that the whole flash is no longer
++  writable, or reset.  To be called before EndOfDxe.
++
++  @retval TRUE   The console is initialized.
++  @retval FALSE  It is not.
++**/
++BOOLEAN
++PlatformProcessCapsules (
++  VOID
++  );
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+index d1a15df444..8ce7235057 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+@@ -26,6 +26,7 @@
+   PlatformConsole.h
+   PlatformBootManager.c
+   PlatformBootManager.h
++  PlatformCapsule.c
+   BootSplash.c
+ 
+ [Packages]
+@@ -52,6 +53,7 @@
+   PlatformHookLib
+   CapsuleLib
+   HobLib
++  SmmStoreLib
+   TcgPhysicalPresenceLib
+   Tcg2PhysicalPresenceLib
+ 
+@@ -59,6 +61,9 @@
+   gEfiEndOfDxeEventGroupGuid
+   gUefiShellFileGuid
+   gUefiPayloadBootSplashGuid
++  gEfiCapsuleReportGuid           ## CONSUMES ## Variable:L"CapsuleLast"
++  gEfiFileInfoGuid                ## CONSUMES
++  gEfiPartTypeSystemPartGuid      ## CONSUMES
+ 
+ [Protocols]
+   gEfiGenericMemTestProtocolGuid  ## CONSUMES
+@@ -71,6 +76,7 @@
+   gEfiSmmAccess2ProtocolGuid
+   gEfiSerialIoProtocolGuid
+   gEfiPciRootBridgeIoProtocolGuid
++  gEfiBatteryStatusProtocolGuid   ## SOMETIMES_CONSUMES
+ 
+ [Pcd]
+   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut
+@@ -83,6 +89,7 @@
+   gEfiMdePkgTokenSpaceGuid.PcdUartDefaultStopBits
+   gEfiMdeModulePkgTokenSpaceGuid.PcdFollowBGRTSpecification
+   gUefiPayloadPkgTokenSpaceGuid.PcdBootManagerEscape
++  gEfiMdeModulePkgTokenSpaceGuid.PcdCapsuleOnDiskSupport
+   gUefiPayloadPkgTokenSpaceGuid.PcdSerialTerminalPrintEnabled
+   gUefiPayloadPkgTokenSpaceGuid.PcdiPXEFile
+   gUefiPayloadPkgTokenSpaceGuid.PcdiPXEOptionName
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+new file mode 100644
+index 0000000000..2712914663
+--- /dev/null
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+@@ -0,0 +1,538 @@
++/** @file
++  Update capsules of a boot: in memory, from coreboot, or on disk.
++
++  coreboot lets the SMMSTORE handler write the whole flash for the rest of a
++  boot that starts with update capsules: capsules the OS left in memory,
++  which the payload gets as HOBs, or capsules on disk (UEFI 2.10, 8.5.5),
++  announced by EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED in
++  OsIndications.  The payload has no PEI phase that could load the files of
++  a capsule on disk into memory on a later boot, so they are read from
++  \EFI\UpdateCapsule of the EFI system partitions and applied in the same
++  boot, before EndOfDxe locks the FMP instances.
++
++  After a capsule is applied the system resets.  Otherwise, before EndOfDxe
++  and before any Driver#### option, option ROM or OS can reach the whole
++  flash, the access is given up, or the system resets if that fails.  Whether
++  the flash is writable is asked to the SMI handler itself rather than
++  inferred from the variables: coreboot and the variable driver could read
++  OsIndications differently from a store with crafted contents.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "PlatformBootManager.h"
++#include "PlatformConsole.h"
++#include <Guid/CapsuleReport.h>
++#include <Guid/FileInfo.h>
++#include <Guid/Gpt.h>
++#include <Library/SmmStoreLib.h>
++#include <Protocol/BatteryStatus.h>
++#include <Protocol/SimpleFileSystem.h>
++
++#define CAPSULE_ON_DISK_DIR       L"\\EFI\\UpdateCapsule"
++#define CAPSULE_ON_DISK_MAX       8           // capsules applied in a boot
++#define CAPSULE_ON_DISK_MAX_SIZE  SIZE_64MB   // size of a capsule file
++#define CAPSULE_FILE_INFO_SIZE    (SIZE_OF_EFI_FILE_INFO + 256 * sizeof (CHAR16))
++#define CAPSULE_MIN_BATTERY       25          // percent, when not charging
++#define CAPSULE_POWER_WAIT        60          // seconds to plug the AC adapter
++#define CAPSULE_MESSAGE_DELAY     3000000     // microseconds a message stays
++
++/**
++  Show a line of text at the bottom of the screen, and in the debug log.
++
++  @param[in] Format  Format string, then its arguments.
++**/
++STATIC
++VOID
++EFIAPI
++CapsuleMessage (
++  IN CONST CHAR16  *Format,
++  ...
++  )
++{
++  VA_LIST                        Marker;
++  CHAR16                         Message[128];
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  Black;
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  White;
++
++  VA_START (Marker, Format);
++  UnicodeVSPrint (Message, sizeof (Message), Format, Marker);
++  VA_END (Marker);
++
++  DEBUG ((DEBUG_INFO, "Capsules: %s\n", Message));
++
++  ZeroMem (&Black, sizeof (Black));
++  SetMem (&White, sizeof (White), 0xFF);
++  BootLogoUpdateProgress (White, Black, Message, White, 0, 0);
++}
++
++/**
++  Ask the SMMSTORE handler of coreboot whether it serves the whole flash in
++  this boot, which it does only in a boot that started with update capsules.
++  SmmStoreLib must be initialized.
++
++  @retval TRUE   A read outside of the variable store succeeded.
++  @retval FALSE  The handler refused it.
++**/
++STATIC
++BOOLEAN
++CapsuleFlashIsWritable (
++  VOID
++  )
++{
++  UINT8  Byte;
++  UINTN  Size;
++
++  Size = sizeof (Byte);
++  return !EFI_ERROR (SmmStoreLibReadAnyBlock (0, 0, &Size, &Byte));
++}
++
++/**
++  Whether the battery can last through a flash update: absent (the adapter
++  powers the computer), charging, or charged enough.  Without battery
++  information, assume it can.
++
++  @param[out] Percentage  Charge of the battery, or 0xFF if unknown.
++**/
++STATIC
++BOOLEAN
++CapsulePowerIsEnough (
++  OUT UINT8  *Percentage
++  )
++{
++  EFI_STATUS                   Status;
++  EFI_BATTERY_STATUS_PROTOCOL  *Battery;
++  BOOLEAN                      Present;
++  BOOLEAN                      Charging;
++
++  *Percentage = 0xFF;
++  Status      = gBS->LocateProtocol (&gEfiBatteryStatusProtocolGuid, NULL, (VOID **)&Battery);
++  if (EFI_ERROR (Status)) {
++    return TRUE;
++  }
++
++  Status = Battery->GetBatteryInfo (Battery, Percentage, &Present, &Charging);
++  if (EFI_ERROR (Status) || !Present || Charging || (*Percentage > 100)) {
++    return TRUE;
++  }
++
++  return *Percentage >= CAPSULE_MIN_BATTERY;
++}
++
++/**
++  Wait up to CAPSULE_POWER_WAIT seconds for enough power to update.
++
++  @retval TRUE   There is enough power.
++  @retval FALSE  There is not, the update has to wait for another boot.
++**/
++STATIC
++BOOLEAN
++CapsuleWaitForPower (
++  VOID
++  )
++{
++  UINT8  Percentage;
++  UINTN  Second;
++
++  for (Second = 0; Second < CAPSULE_POWER_WAIT; Second++) {
++    if (CapsulePowerIsEnough (&Percentage)) {
++      return TRUE;
++    }
++
++    CapsuleMessage (
++      L"Battery at %d%%: connect the AC adapter to update the firmware (%d)",
++      Percentage,
++      (UINT32)(CAPSULE_POWER_WAIT - Second)
++      );
++    gBS->Stall (1000000);
++  }
++
++  return CapsulePowerIsEnough (&Percentage);
++}
++
++/**
++  Read a capsule file into memory and delete it.
++
++  @param[in]  Dir   The directory of the file.
++  @param[in]  Name  The name of the file.
++
++  @return The capsule, or NULL if the file is not one.
++**/
++STATIC
++EFI_CAPSULE_HEADER *
++CapsuleLoadFile (
++  IN EFI_FILE_PROTOCOL  *Dir,
++  IN CHAR16             *Name
++  )
++{
++  EFI_STATUS          Status;
++  EFI_FILE_PROTOCOL   *File;
++  EFI_FILE_INFO       *Info;
++  EFI_CAPSULE_HEADER  *Capsule;
++  UINTN               Size;
++  UINTN               ReadSize;
++  BOOLEAN             ReadOnly;
++
++  ReadOnly = FALSE;
++  Status   = Dir->Open (Dir, &File, Name, EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
++  if (EFI_ERROR (Status)) {
++    ReadOnly = TRUE;
++    Status   = Dir->Open (Dir, &File, Name, EFI_FILE_MODE_READ, 0);
++  }
++
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "Capsules: can't open %s: %r\n", Name, Status));
++    return NULL;
++  }
++
++  Capsule = NULL;
++  Info    = AllocatePool (CAPSULE_FILE_INFO_SIZE);
++  Size    = CAPSULE_FILE_INFO_SIZE;
++  if ((Info != NULL) && !EFI_ERROR (File->GetInfo (File, &gEfiFileInfoGuid, &Size, Info)) &&
++      (Info->FileSize >= sizeof (EFI_CAPSULE_HEADER)) && (Info->FileSize <= CAPSULE_ON_DISK_MAX_SIZE))
++  {
++    Size    = (UINTN)Info->FileSize;
++    Capsule = AllocatePool (Size);
++    if (Capsule != NULL) {
++      ReadSize = Size;
++      Status   = File->Read (File, &ReadSize, Capsule);
++      if (EFI_ERROR (Status) || (ReadSize != Size) ||
++          (Capsule->HeaderSize < sizeof (EFI_CAPSULE_HEADER)) ||
++          (Capsule->HeaderSize > Capsule->CapsuleImageSize) ||
++          (Capsule->CapsuleImageSize > Size))
++      {
++        FreePool (Capsule);
++        Capsule = NULL;
++      }
++    }
++  }
++
++  if (Info != NULL) {
++    FreePool (Info);
++  }
++
++  DEBUG ((DEBUG_INFO, "Capsules: %s %a\n", Name, (Capsule != NULL) ? "loaded" : "is not a capsule"));
++
++  //
++  // Delete the file either way: a capsule is applied once, the others would
++  // only come back in the next update.
++  //
++  if (ReadOnly) {
++    File->Close (File);
++    DEBUG ((DEBUG_ERROR, "Capsules: can't delete %s: read-only\n", Name));
++  } else {
++    Status = File->Delete (File);
++    if (Status != EFI_SUCCESS) {
++      DEBUG ((DEBUG_ERROR, "Capsules: can't delete %s: %r\n", Name, Status));
++    }
++  }
++
++  return Capsule;
++}
++
++/**
++  Load the capsules in \EFI\UpdateCapsule of a file system.
++
++  @param[in]     Root      The root directory of the file system.
++  @param[in,out] Capsules  The capsules, Count of them so far.
++  @param[in]     Count     The number of capsules in Capsules.
++  @param[in]     Max       The capacity of Capsules.
++
++  @return The number of capsules in Capsules.
++**/
++STATIC
++UINTN
++CapsuleLoadDirectory (
++  IN     EFI_FILE_PROTOCOL   *Root,
++  IN OUT EFI_CAPSULE_HEADER  **Capsules,
++  IN     UINTN               Count,
++  IN     UINTN               Max
++  )
++{
++  EFI_STATUS          Status;
++  EFI_FILE_PROTOCOL   *Dir;
++  EFI_FILE_INFO       *Info;
++  CHAR16              *Names[CAPSULE_ON_DISK_MAX];
++  UINTN               NameCount;
++  UINTN               Index;
++  UINTN               Size;
++  EFI_CAPSULE_HEADER  *Capsule;
++
++  Status = Root->Open (Root, &Dir, CAPSULE_ON_DISK_DIR, EFI_FILE_MODE_READ, 0);
++  if (EFI_ERROR (Status)) {
++    return Count;
++  }
++
++  //
++  // The names first: the directory is not read while its files are deleted.
++  //
++  NameCount = 0;
++  Info      = AllocatePool (CAPSULE_FILE_INFO_SIZE);
++  while ((Info != NULL) && (NameCount < ARRAY_SIZE (Names)) && (NameCount < Max - Count)) {
++    Size   = CAPSULE_FILE_INFO_SIZE;
++    Status = Dir->Read (Dir, &Size, Info);
++    if (EFI_ERROR (Status) || (Size == 0)) {
++      break;
++    }
++
++    if ((Info->Attribute & EFI_FILE_DIRECTORY) == 0) {
++      Names[NameCount] = AllocateCopyPool (StrSize (Info->FileName), Info->FileName);
++      if (Names[NameCount] != NULL) {
++        NameCount++;
++      }
++    }
++  }
++
++  if (Info != NULL) {
++    FreePool (Info);
++  }
++
++  for (Index = 0; Index < NameCount; Index++) {
++    Capsule = CapsuleLoadFile (Dir, Names[Index]);
++    if (Capsule != NULL) {
++      Capsules[Count++] = Capsule;
++    }
++
++    FreePool (Names[Index]);
++  }
++
++  Dir->Close (Dir);
++  return Count;
++}
++
++/**
++  Load the capsules on disk, from the EFI system partitions.
++
++  @param[out] Capsules  The capsules.
++  @param[in]  Max       The capacity of Capsules.
++
++  @return The number of capsules in Capsules.
++**/
++STATIC
++UINTN
++CapsuleLoadFromDisk (
++  OUT EFI_CAPSULE_HEADER  **Capsules,
++  IN  UINTN               Max
++  )
++{
++  EFI_STATUS                       Status;
++  EFI_HANDLE                       *Handles;
++  UINTN                            HandleCount;
++  UINTN                            Index;
++  UINTN                            Count;
++  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *FileSystem;
++  EFI_FILE_PROTOCOL                *Root;
++
++  Count  = 0;
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiPartTypeSystemPartGuid, NULL, &HandleCount, &Handles);
++  if (EFI_ERROR (Status)) {
++    return 0;
++  }
++
++  for (Index = 0; (Index < HandleCount) && (Count < Max); Index++) {
++    Status = gBS->HandleProtocol (Handles[Index], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&FileSystem);
++    if (EFI_ERROR (Status)) {
++      continue;
++    }
++
++    Status = FileSystem->OpenVolume (FileSystem, &Root);
++    if (EFI_ERROR (Status)) {
++      continue;
++    }
++
++    Count = CapsuleLoadDirectory (Root, Capsules, Count, Max);
++    Root->Close (Root);
++  }
++
++  FreePool (Handles);
++  return Count;
++}
++
++/**
++  The result recorded for the last capsule processed (UEFI 2.10, 8.5.6).
++
++  @param[in] Before      The CapsuleLast variable before the capsule, or NULL.
++  @param[in] BeforeSize  Its size.
++
++  @return The status of the capsule, EFI_NOT_FOUND without a new record.
++**/
++STATIC
++EFI_STATUS
++CapsuleLastStatus (
++  IN CONST VOID  *Before OPTIONAL,
++  IN UINTN       BeforeSize
++  )
++{
++  CHAR16                              *Last;
++  CHAR16                              Name[sizeof ("Capsule####")];
++  UINTN                               Size;
++  EFI_CAPSULE_RESULT_VARIABLE_HEADER  *Result;
++  EFI_STATUS                          Status;
++
++  if (EFI_ERROR (GetVariable2 (L"CapsuleLast", &gEfiCapsuleReportGuid, (VOID **)&Last, &Size))) {
++    return EFI_NOT_FOUND;
++  }
++
++  Status = EFI_NOT_FOUND;
++  if ((Before == NULL) || (Size != BeforeSize) || (CompareMem (Last, Before, Size) != 0)) {
++    ZeroMem (Name, sizeof (Name));
++    CopyMem (Name, Last, MIN (Size, sizeof (Name) - sizeof (CHAR16)));
++    if (!EFI_ERROR (GetVariable2 (Name, &gEfiCapsuleReportGuid, (VOID **)&Result, &Size))) {
++      if (Size >= sizeof (EFI_CAPSULE_RESULT_VARIABLE_HEADER)) {
++        Status = Result->CapsuleStatus;
++      }
++
++      FreePool (Result);
++    }
++  }
++
++  FreePool (Last);
++  return Status;
++}
++
++/**
++  Apply capsules loaded from disk.
++
++  @param[in] Capsules  The capsules.
++  @param[in] Count     How many.
++**/
++STATIC
++VOID
++CapsuleApply (
++  IN EFI_CAPSULE_HEADER  **Capsules,
++  IN UINTN               Count
++  )
++{
++  UINTN       Index;
++  VOID        *Before;
++  UINTN       BeforeSize;
++  EFI_STATUS  Status;
++  EFI_STATUS  Failure;
++
++  Failure = EFI_SUCCESS;
++  for (Index = 0; Index < Count; Index++) {
++    CapsuleMessage (L"Updating the firmware: do not turn off the computer");
++    if (EFI_ERROR (GetVariable2 (L"CapsuleLast", &gEfiCapsuleReportGuid, &Before, &BeforeSize))) {
++      Before     = NULL;
++      BeforeSize = 0;
++    }
++
++    Status = ProcessCapsuleImage (Capsules[Index]);
++    if (!EFI_ERROR (Status)) {
++      Status = CapsuleLastStatus (Before, BeforeSize);
++    }
++
++    DEBUG ((DEBUG_INFO, "Capsules: capsule %u of %u: %r\n", (UINT32)(Index + 1), (UINT32)Count, Status));
++    if (EFI_ERROR (Status)) {
++      Failure = Status;
++    }
++
++    if (Before != NULL) {
++      FreePool (Before);
++    }
++
++    FreePool (Capsules[Index]);
++  }
++
++  if (EFI_ERROR (Failure)) {
++    CapsuleMessage (L"Firmware update failed (%r), restarting", Failure);
++  } else {
++    CapsuleMessage (L"Firmware updated, restarting");
++  }
++}
++
++/**
++  Apply the update capsules of this boot, if it has any, and reset after
++  applying one.  Otherwise make sure that the whole flash is no longer
++  writable, or reset.  To be called before EndOfDxe.
++
++  @retval TRUE   The console is initialized.
++  @retval FALSE  It is not.
++**/
++BOOLEAN
++PlatformProcessCapsules (
++  VOID
++  )
++{
++  EFI_STATUS          Status;
++  BOOLEAN             InMemory;
++  BOOLEAN             OnDisk;
++  BOOLEAN             Writable;
++  BOOLEAN             Applied;
++  BOOLEAN             Console;
++  EFI_CAPSULE_HEADER  *Capsules[CAPSULE_ON_DISK_MAX];
++  UINTN               Count;
++
++  InMemory = (GetBootModeHob () == BOOT_ON_FLASH_UPDATE);
++  OnDisk   = PcdGetBool (PcdCapsuleOnDiskSupport) && CoDCheckCapsuleOnDiskFlag ();
++  Writable = !EFI_ERROR (SmmStoreLibInitialize ()) && CapsuleFlashIsWritable ();
++  Applied  = FALSE;
++  Console  = FALSE;
++
++  if (OnDisk) {
++    //
++    // Cleared first: whatever happens next, the next boot is a normal one.
++    //
++    CoDClearCapsuleOnDiskFlag ();
++  }
++
++  if ((InMemory || OnDisk) && !Writable) {
++    DEBUG ((DEBUG_ERROR, "Capsules: the flash is not writable in this boot, nothing applied\n"));
++  } else if (InMemory || OnDisk) {
++    PlatformConsoleInit ();
++    BootSplashApply ();
++    Console = TRUE;
++
++    if (!CapsuleWaitForPower ()) {
++      CapsuleMessage (L"Battery too low, firmware update postponed");
++      gBS->Stall (CAPSULE_MESSAGE_DELAY);
++    } else {
++      if (InMemory) {
++        Applied = TRUE;
++        Status  = ProcessCapsules ();
++        if (EFI_ERROR (Status)) {
++          DEBUG ((DEBUG_ERROR, "%a(): ProcessCapsules() failed with: %r\n", __func__, Status));
++        }
++      }
++
++      if (OnDisk) {
++        EfiBootManagerConnectAll ();
++        Count = CapsuleLoadFromDisk (Capsules, ARRAY_SIZE (Capsules));
++        if (Count == 0) {
++          CapsuleMessage (L"No firmware update found in %s", CAPSULE_ON_DISK_DIR);
++          gBS->Stall (CAPSULE_MESSAGE_DELAY);
++        } else {
++          Applied = TRUE;
++          CapsuleApply (Capsules, Count);
++        }
++      }
++    }
++  }
++
++  if (Applied) {
++    //
++    // The flash may have changed: start again from it.
++    //
++    gBS->Stall (CAPSULE_MESSAGE_DELAY);
++    gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
++    CpuDeadLoop ();
++  }
++
++  if (Writable) {
++    //
++    // Nothing written: give up the whole flash and boot on, or reset if it
++    // can't be given up.
++    //
++    Status = SmmStoreLibEndAnyBlockAccess ();
++    if (EFI_ERROR (Status) || CapsuleFlashIsWritable ()) {
++      DEBUG ((DEBUG_ERROR, "Capsules: can't end the whole flash access (%r), resetting\n", Status));
++      gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
++      CpuDeadLoop ();
++    }
++
++    DEBUG ((DEBUG_INFO, "Capsules: the whole flash is no longer writable\n"));
++  }
++
++  SmmStoreLibDeinitialize ();
++  return Console;
++}
+-- 
+2.43.0
+

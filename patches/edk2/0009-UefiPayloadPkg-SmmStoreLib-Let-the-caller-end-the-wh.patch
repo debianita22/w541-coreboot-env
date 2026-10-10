@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 22:11:22 +0200
+Subject: [PATCH] UefiPayloadPkg/SmmStoreLib: Let the caller end the whole
+ flash access
+
+coreboot grants the *AnyBlock commands, which reach the whole flash, to
+a boot that starts with update capsules, until the next boot; since it
+can't enforce it, the payload must reset before anything else runs.
+coreboot now lets the payload give that access up instead, with the
+command that enables it and a zero argument.
+
+Add SmmStoreLibEndAnyBlockAccess() for it, so that a boot that ends up
+writing nothing to the flash can go on without a reset.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/Include/Library/SmmStoreLib.h  | 15 +++++++++++
+ UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c | 25 +++++++++++++++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/UefiPayloadPkg/Include/Library/SmmStoreLib.h b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+index 282823f2fb..950ecf826f 100644
+--- a/UefiPayloadPkg/Include/Library/SmmStoreLib.h
++++ b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+@@ -145,6 +145,21 @@ SmmStoreLibEraseAnyBlock (
+   IN         EFI_LBA  Lba
+   );
+ 
++/**
++  Give up the access to the whole flash until the next boot.  The firmware
++  grants it to a boot that starts with update capsules; without it, the
++  *AnyBlock functions fail.
++
++  @retval EFI_SUCCESS     The whole flash is no longer accessible.
++  @retval EFI_NO_MEDIA    SmmStore is not initialized.
++  @retval others          The handler refused: it may still be accessible.
++
++**/
++EFI_STATUS
++SmmStoreLibEndAnyBlockAccess (
++  VOID
++  );
++
+ /**
+   Function to update a pointer on virtual address change.  Matches the signature
+   and operation of EfiConvertPointer.
+diff --git a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+index a5754a4d5c..875b7269b6 100644
+--- a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
++++ b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+@@ -383,6 +383,31 @@ SmmStoreLibEraseAnyBlock (
+            );
+ }
+ 
++/**
++  Give up the access to the whole flash until the next boot.  The firmware
++  grants it to a boot that starts with update capsules; without it, the
++  *AnyBlock functions fail.
++
++  @retval EFI_SUCCESS     The whole flash is no longer accessible.
++  @retval EFI_NO_MEDIA    SmmStore is not initialized.
++  @retval others          The handler refused: it may still be accessible.
++
++**/
++EFI_STATUS
++SmmStoreLibEndAnyBlockAccess (
++  VOID
++  )
++{
++  if (mSmmStoreInfo == NULL) {
++    return EFI_NO_MEDIA;
++  }
++
++  //
++  // The argument is the requested state, not a pointer: zero disables.
++  //
++  return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_USE_FULL_FLASH, 0);
++}
++
+ /**
+   Fixup internal data so that EFI can be called in virtual mode.
+   Converts any pointers in lib to virtual mode. This function is meant to
+-- 
+2.43.0
+

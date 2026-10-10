@@ -142,7 +142,7 @@ cmd_version() {
 
 # Le note della release della variante $2, dai file di $1
 cmd_notes() {
-	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
+	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
 	: "${VERSION:?}"
 	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
 	sha="${GITHUB_SHA:-$(git -C "${O}" rev-parse HEAD)}"
@@ -150,9 +150,10 @@ cmd_notes() {
 	rom="w541-coreboot-${version}-${v}.rom"
 	chip8="w541-coreboot-${version}-${v}-8mb-chip.rom"
 	chip4="w541-coreboot-${version}-${v}-4mb-chip.rom"
+	cap="w541-coreboot-${version}-${v}.cap"
 	cfg="w541-coreboot-${version}-${v}.config"
 	lay="w541-coreboot-${version}-${v}-layout.txt"
-	for f in "${rom}" "${chip8}" "${chip4}" "${cfg}" "${lay}"; do [ -f "${d}/${f}" ] || die "${d}/${f} non c'e'"; done
+	for f in "${rom}" "${chip8}" "${chip4}" "${cap}" "${cfg}" "${lay}"; do [ -f "${d}/${f}" ] || die "${d}/${f} non c'e'"; done
 	cb="$(pin COREBOOT_COMMIT)"
 	cbdesc="$(pin COREBOOT_DESCRIBE)"
 	edk2="$(sed -n 's/^CONFIG_EDK2_TAG_OR_REV="\(.*\)"$/\1/p' "${O}/configs/w541-${v}.defconfig")"
@@ -190,6 +191,7 @@ EOF
 | \`${rom}\` | **complete 12 MiB flash image**: descriptor (IFD), GbE, Intel ME and coreboot |
 | \`${chip4}\` | its last 4 MiB: all of coreboot, for an external programmer on the 4 MiB chip |
 | \`${chip8}\` | its first 8 MiB: descriptor, GbE and ME of the machine the blobs come from, for the 8 MiB chip |
+| \`${cap}\` | **signed UEFI capsule**: updates from Linux a W541 that already runs v1.2.0 or later, with \`tools/update.py\` |
 | \`${cfg}\` | the complete coreboot \`.config\` |
 | \`${lay}\` | flash layout (FMAP) and CBFS contents |
 | \`SHA256SUMS\` | checksums of the files above |
@@ -203,8 +205,21 @@ VPD, event log), empty. coreboot itself is alone on the 4 MiB chip. An
 update from Linux writes only the BIOS region, as below: it keeps the
 machine's own descriptor, ME and MAC address.
 
-**Update from Linux**, on a W541 that already runs coreboot with an unlocked
-flash: only the BIOS region is written (details, VPD and recovery in
+**Update with the capsule**, on a W541 that already runs v1.2.0 or later:
+the firmware checks the signature, rewrites coreboot in about a minute and
+starts again; settings, boot entries, Secure Boot keys, VPD and event log
+stay, and *BIOS Lock* can stay on
+([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md)).
+
+\`\`\`sh
+curl -LO https://raw.githubusercontent.com/${repo}/main/tools/update.py
+sudo python3 update.py stage --latest       # or: sudo python3 update.py stage ${cap}
+sudo systemctl reboot
+\`\`\`
+
+**Update with flashrom**, the first time (from earlier versions or other
+firmware), on a W541 that already runs coreboot with an unlocked flash: only
+the BIOS region is written (details, VPD and recovery in
 [docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md)).
 
 \`\`\`sh
@@ -241,10 +256,10 @@ suspend-to-idle (\`mem_sleep_default=s2idle\`) works meanwhile.
 **Serial number and machine type (VPD)**: from v1.0.9 the firmware reports
 the serial number, machine type model and UUID of the laptop as the Lenovo
 firmware did, from the \`RO_VPD\` flash region, which these images leave
-empty. Write it once with \`tools/vpd.py\`, and copy it into each new image
-before flashing (\`tools/vpd.py copy\`): an update rewrites the region
-([how](https://github.com/${repo}/blob/main/docs/flashing.md#serial-number-and-machine-type-vpd)).
-*BIOS Lock* (setup menu, *Security*) must be off to flash from the OS.
+empty. Write it once with \`tools/vpd.py\`; a capsule update leaves it alone,
+flashrom rewrites it, so copy it into the image first (\`tools/vpd.py copy\`,
+[how](https://github.com/${repo}/blob/main/docs/flashing.md#serial-number-and-machine-type-vpd)).
+*BIOS Lock* (setup menu, *Security*) must be off to flash with flashrom.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload
@@ -320,8 +335,8 @@ cmd_publish() {
 		mkdir -p "${d}/release-${v}"
 		local f
 		for f in "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom" \
-			"w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.config" \
-			"w541-coreboot-${VERSION}-${v}-layout.txt"; do
+			"w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.cap" \
+			"w541-coreboot-${VERSION}-${v}.config" "w541-coreboot-${VERSION}-${v}-layout.txt"; do
 			[ -f "${d}/${f}" ] || fail "Pubblica" "${f} non c'e' negli artifact"
 			cp "${d}/${f}" "${d}/release-${v}/"
 		done

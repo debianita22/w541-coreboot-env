@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 22:40:37 +0200
+Subject: [PATCH] payloads/external/edk2: Write the capsule certificate PCD
+ after clean
+
+prep depends on capsule_keys, which writes the certificate that FmpDxe
+trusts into Conf/CapsuleFmpPkcs7Pcd.inc of the WORKSPACE, and on clean,
+which deletes that file. With parallel make, nothing orders the two:
+the file is there for one build and missing for the next. The DSC then
+looks for the relative path in the PACKAGES_PATH too, and either fails
+to find it or, with a stale Conf/CapsuleFmpPkcs7Pcd.inc in the edk2 tree,
+builds a payload that trusts another certificate, without an error.
+
+Run capsule_keys after clean, and give the DSC the absolute path of the
+file, so that only the one just written can be used.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ payloads/external/edk2/Makefile | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/payloads/external/edk2/Makefile b/payloads/external/edk2/Makefile
+index 29fa450ae..bb488553a 100644
+--- a/payloads/external/edk2/Makefile
++++ b/payloads/external/edk2/Makefile
+@@ -166,13 +166,15 @@ CAPSULE_SIGNER_PRIVATE_CERT_PATH := $(call edk2_abspath,$(CAPSULE_SIGNER_PRIVATE
+ CAPSULE_OTHER_PUBLIC_CERT_PATH := $(call edk2_abspath,$(CAPSULE_OTHER_PUBLIC_CERT))
+ CAPSULE_TRUSTED_PUBLIC_CERT_PATH := $(call edk2_abspath,$(CAPSULE_TRUSTED_PUBLIC_CERT))
+ 
+-# Workspace-local PCD include for FmpDxe; path is relative to EDK2 WORKSPACE for DSC (!include).
++# Workspace-local PCD include for FmpDxe. The DSC gets it by its absolute path:
++# a relative one that is missing from the WORKSPACE is also looked up in the
++# PACKAGES_PATH, where a stale copy would go unnoticed.
+ CAPSULE_FMP_PCD_INC_REL := Conf/CapsuleFmpPkcs7Pcd.inc
+ CAPSULE_FMP_PCD_INC_PCD_NAME := gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr
+ 
+ ifeq ($(CONFIG_DRIVERS_EFI_UPDATE_CAPSULES),y)
+ ifneq ($(CAPSULE_TRUSTED_PUBLIC_CERT),)
+-BUILD_STR += -D FMP_DEVICE_PKCS7_PCD_INC=$(CAPSULE_FMP_PCD_INC_REL)
++BUILD_STR += -D FMP_DEVICE_PKCS7_PCD_INC=$(WORKSPACE)/$(CAPSULE_FMP_PCD_INC_REL)
+ endif
+ endif
+ 
+@@ -346,7 +348,8 @@ checktools:
+ 	fi
+ 
+ ifeq ($(CONFIG_DRIVERS_EFI_UPDATE_CAPSULES),y)
+-capsule_keys: $(EDK2_PATH)
++# After clean, which deletes the include this writes
++capsule_keys: $(EDK2_PATH) clean
+ 	type openssl > /dev/null 2>&1 || { echo "ERROR: Please install openssl."; exit 1; }; \
+ 	test -f "$(CAPSULE_TRUSTED_PUBLIC_CERT_PATH)"; \
+ 	binto_pcd="$(EDK2_PATH)/BaseTools/Scripts/BinToPcd.py"; \
+-- 
+2.43.0
+

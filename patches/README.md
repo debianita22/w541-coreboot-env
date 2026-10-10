@@ -24,6 +24,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0044 | with the BIOS lock on, the event log written from SMM too (S3/S5 entry, GSMI, power button), with InSMM.STS and BIOSWE set around the writes as for SMMSTORE |
 | 0045-0046 | Security options: *BIOS Lock* (`bios_lock` of `BOOTMEDIA_SMM_BWP_RUNTIME_OPTION`: only SMM writes the flash, off by default) and *Clear memory at power-on* (`clear_dram_on_boot`, on by default; 1.7 s with 32 GB) |
 | 0047 | the machine's data from the VPD as the OEM firmware reports it: the machine type as the base board product too, the system serial on the chassis; machine type, serial and UUID in the About card of the setup menu |
+| 0048-0051 | firmware updates with UEFI capsules (`docs/update.md`): the capsules coalesced in memory kept by the DRAM clearing at boot, the EDK2 build without a PCD that MrChromebox's tree does not declare, an SMMSTORE command for the payload to give up the whole-flash access of an update boot when it writes nothing, and the certificate the payload trusts written after the EDK2 clean (with parallel make it raced with it, and the build could pick another file) |
 
 ## EDK2 and LvglPkg
 
@@ -43,6 +44,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `edk2/0005` | the setup UI named *System Preferences* |
 | `edk2/0006` | the messages of the password driver (UserAuthenticationDxe) as HII popups, so that the graphical UI draws them |
 | `edk2/0007` | Ps2MouseDxe at 100 reports per second and 8 counts/mm, every waiting packet taken at each poll, packets with the middle button pressed recognized |
+| `edk2/0008-0010` | firmware updates with UEFI capsules: capsules on disk (`\EFI\UpdateCapsule`) applied in the same boot, before EndOfDxe, after a battery check; a reset after an update, otherwise the whole-flash access given up (asked to the SMI handler, not inferred from `OsIndications`) before Driver#### options, option ROMs or the OS run; a capsule whose regions do not fit the flash layout refused instead of a rewrite of the whole BIOS region |
 | `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
 | `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
 | `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |

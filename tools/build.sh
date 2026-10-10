@@ -18,7 +18,9 @@
 #                  util/crossgcc/xgcc dell'albero (e nella cache della CI)
 #   config         solo il .config di ogni variante, con il controllo che
 #                  nessuna riga del defconfig sia andata persa
-#   roms           .config, build, tools/verify-rom.sh, file in dist/
+#   roms           .config, build, tools/verify-rom.sh, file in dist/; con
+#                  la chiave in CAPSULE_SIGNING_KEY anche la capsula firmata
+#                  di ogni variante (docs/update.md)
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
 #
 # Opzioni:
@@ -31,7 +33,8 @@
 #   --with NOME     applica anche patches/optional/NOME.patch; il nome finisce
 #                   nella versione e nei file (+NOME). Mai in una release
 #   --release       build da pubblicare: solo crossgcc, niente --with, e
-#                   verify-rom.sh --release (build.yml)
+#                   verify-rom.sh --release (build.yml); con una versione
+#                   vX.Y.Z anche la capsula, che vuole la chiave
 #   --work DIR      cartella di lavoro (default: work/ in questo repository)
 #   --dist DIR      i file finali (default: dist/ in questo repository)
 #   --jobs N        default: nproc
@@ -43,7 +46,16 @@
 # ancora nel chip da 8 MiB; coreboot (FMAP + CBFS) da solo nel chip da 4 MiB.
 # In dist/ anche le immagini dei due chip, per un programmatore esterno.
 # Dall'interno si aggiorna solo la regione BIOS: flashrom --ifd -i bios
-# (docs/flashing.md).
+# (docs/flashing.md), o, dalla v1.2.0, con la capsula (docs/update.md).
+#
+# La capsula (w541-coreboot-<versione>-<variante>.cap): la ROM con il
+# manifest RMAP delle regioni che il firmware riscrive (CAPSULE_REGIONS),
+# firmata con GenerateCapsule di EDK2. La chiave privata arriva solo
+# dall'ambiente, CAPSULE_SIGNING_KEY (PEM; nella CI il secret omonimo), e
+# deve essere quella del certificato keys/capsule-signing.pem, di cui le ROM
+# si fidano. La versione nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
+# (il "triplet" di fwupd: X << 24 | Y << 16 | Z); con le altre versioni (dev,
+# ci-...) e' 0 e la capsula non si fa.
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -74,7 +86,13 @@ EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 # I file di blobs/, assets/ e configs/ che vanno nell'albero (w541/<nome>): i
 # defconfig li cercano li'. mrc.bin lo usa solo la variante mrc.
 TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
-	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp configs/w541.fmd)
+	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp configs/w541.fmd
+	keys/capsule-signing.pem)
+# Le regioni che una capsula riscrive: coreboot e il training della RAM, che
+# coreboot rifa' (con il codice nuovo) al primo avvio. Le altre restano:
+# variabili UEFI (SMMSTORE), VPD, registro degli eventi, IFD, GbE, ME.
+CAPSULE_REGIONS=(RW_MRC_CACHE COREBOOT)
+CAPSULE_CERT=keys/capsule-signing.pem
 # La chiave Optimus (patch 0036, CONFIG_LENOVO_HASWELL_NVIDIA_OPVK): il DSDT
 # la include da questo file, che la patch fa ignorare a git
 OPVK_FILE=blobs/opvk.inc
@@ -204,6 +222,20 @@ flavour() {
 # CONFIG_LOCALVERSION della variante $1, e il nome dei suoi file in dist/
 localversion() { printf 'w541-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 romname()      { printf 'w541-coreboot-%s-%s' "${VERSION}" "$(flavour "$1")"; }
+
+# La versione per l'ESRT e la capsula: vX.Y.Z[-...] -> (X << 24) | (Y << 16) | Z,
+# 0x00000000 per le altre
+fw_version() {
+	local x y z
+	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?$ ]]; then
+		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
+		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 65535 ]; then
+			printf '0x%08x' $(( (x << 24) | (y << 16) | z ))
+			return
+		fi
+	fi
+	printf '0x%08x' 0
+}
 
 cmd_prepare() {
 	say "coreboot ${COREBOOT_DESCRIBE} (${COREBOOT_COMMIT:0:12})"
@@ -434,6 +466,7 @@ variant_config() {
 	{
 		cat "${O}/configs/w541-${v}.defconfig"
 		echo "CONFIG_LOCALVERSION=\"$(localversion "${v}")\""
+		echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=$(fw_version)"
 		if [ "${TOOLCHAIN}" = host ]; then echo "CONFIG_ANY_TOOLCHAIN=y"; fi
 	} > "${TREE}/${obj}/defconfig"
 	mk "${v}" defconfig KBUILD_DEFCONFIG="${obj}/defconfig" > "${TREE}/${obj}/defconfig.log" 2>&1 \
@@ -485,9 +518,79 @@ collect() {
 	} > "${DIST}/${n}-layout.txt"
 }
 
+# Il certificato di cui si fida la ROM appena costruita: quello compilato
+# in FmpDxe (il PCD che scrive capsule_keys di payloads/external/edk2,
+# nell'AutoGen.c della build di EDK2 della variante $1) deve essere
+# keys/capsule-signing.pem, e solo quello
+check_trusted_cert() {
+	local v="$1" guid build autogen
+	guid="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_GUID="\(.*\)"$/\1/p' "${TREE}/build-${v}/.config")"
+	build=RELEASE
+	if grep -qx 'CONFIG_EDK2_DEBUG=y' "${TREE}/build-${v}/.config"; then build=DEBUG; fi
+	autogen="${TREE}/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/${build}_GCC/X64/FmpDevicePkg/FmpDxe/${guid}/DEBUG/AutoGen.c"
+	[ -f "${autogen}" ] || die "${v}: ${autogen#"${TREE}/"} non c'e': FmpDxe non costruito?"
+	openssl x509 -in "${O}/${CAPSULE_CERT}" -outform der \
+		| python3 -c '
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r"PcdFmpDevicePkcs7CertBufferXdr\[\d*\]\s*=\s*\{([^}]*)\}", src)
+pcd = bytes(int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]+", m.group(1))) if m else b""
+der = sys.stdin.buffer.read()
+# XDR: lunghezza a 32 bit big endian e certificato, allineati a 4 byte
+sys.exit(0 if der and pcd[:4] == len(der).to_bytes(4, "big") and pcd[4:4 + len(der)] == der
+         and len(pcd) <= 4 + len(der) + 3 else 1)' "${autogen}" \
+		|| die "${v}: FmpDxe non si fida di ${CAPSULE_CERT} (o non solo di quello): ${autogen#"${TREE}/"}"
+	echo "  ok  ${v}: FmpDxe si fida solo di ${CAPSULE_CERT}"
+}
+
+# La capsula della variante $1 in dist/, firmata con CAPSULE_SIGNING_KEY e
+# ricontrollata con tools/update.py info (GUID, versioni, regioni, immagine
+# uguale alla ROM, firma valida per keys/capsule-signing.pem)
+make_capsule() {
+	local v="$1" n guid lsv fwv tmp r regions=()
+	n="${DIST}/$(romname "${v}")"
+	guid="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_GUID="\(.*\)"$/\1/p' "${TREE}/build-${v}/.config")"
+	lsv="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_LSV=\(0x[0-9a-fA-F]*\)$/\1/p' "${TREE}/build-${v}/.config")"
+	fwv="$(fw_version)"
+	[ -n "${guid}" ] && [ -n "${lsv}" ] || die "${v}: GUID o LSV mancanti nel .config"
+	tmp="$(mktemp -d)"
+	chmod 700 "${tmp}"
+	# la chiave privata solo in questa cartella e solo per GenerateCapsule
+	(
+		umask 077
+		trap 'rm -rf "${tmp}"' EXIT
+		printf '%s\n' "${CAPSULE_SIGNING_KEY}" > "${tmp}/key.pem"
+		[ "$(openssl pkey -in "${tmp}/key.pem" -pubout 2>/dev/null)" = \
+			"$(openssl x509 -in "${O}/${CAPSULE_CERT}" -noout -pubkey)" ] \
+			|| die "CAPSULE_SIGNING_KEY non e' la chiave di ${CAPSULE_CERT}"
+		cat "${tmp}/key.pem" "${O}/${CAPSULE_CERT}" > "${tmp}/signer.pem"
+		rm -f "${tmp}/key.pem"
+		for r in "${CAPSULE_REGIONS[@]}"; do regions+=(-r "${r}"); done
+		python3 "${EDK2_DIR}/UefiPayloadPkg/Tools/AppendRmapManifest.py" -o "${tmp}/image.bin" \
+			"${regions[@]}" "${n}.rom" > /dev/null || die "${v}: AppendRmapManifest.py fallito"
+		PYTHONPATH="${EDK2_DIR}/BaseTools/Source/Python" python3 \
+			"${EDK2_DIR}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e -o "${n}.cap" \
+			--guid "${guid}" --fw-version "${fwv}" --lsv "${lsv}" --capflag PersistAcrossReset \
+			--signer-private-cert "${tmp}/signer.pem" \
+			--other-public-cert "${O}/${CAPSULE_CERT}" --trusted-public-cert "${O}/${CAPSULE_CERT}" \
+			"${tmp}/image.bin" || die "${v}: GenerateCapsule fallito"
+	) || exit 1
+	chmod 644 "${n}.cap"
+	python3 "${O}/tools/update.py" info --cert "${O}/${CAPSULE_CERT}" --rom "${n}.rom" \
+		--guid "${guid}" --fw-version "${fwv}" --lsv "${lsv}" "${n}.cap" \
+		|| die "${v}: la capsula non passa tools/update.py info"
+}
+
 cmd_roms() {
 	need_prepared
-	local v
+	local v capsule=no
+	if [ "$(fw_version)" != 0x00000000 ]; then
+		if [ -n "${CAPSULE_SIGNING_KEY:-}" ]; then
+			capsule=yes
+		elif [ "${RELEASE}" = yes ]; then
+			die "--release ${VERSION}: senza CAPSULE_SIGNING_KEY niente capsula (docs/update.md)"
+		fi
+	fi
 	if [ "${TOOLCHAIN}" = crossgcc ]; then
 		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
 		# nasm e iasl del crossgcc anche per EDK2, che li cerca nel PATH
@@ -517,6 +620,11 @@ cmd_roms() {
 		if [ "${RELEASE}" = yes ]; then args+=(--release); fi
 		"${O}/tools/verify-rom.sh" "${args[@]}" "${n}.rom" "${n}-8mb-chip.rom" "${n}-4mb-chip.rom" \
 			|| die "${v}: la ROM non passa tools/verify-rom.sh"
+		check_trusted_cert "${v}"
+		if [ "${capsule}" = yes ]; then
+			say "capsula ${v} ($(fw_version))"
+			make_capsule "${v}"
+		fi
 	done
 	(cd "${DIST}" && find . -maxdepth 1 -type f -name 'w541-coreboot-*' -printf '%f\n' | LC_ALL=C sort \
 		| xargs -r sha256sum > SHA256SUMS)

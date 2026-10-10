@@ -33,6 +33,7 @@ Everything else is the same in the two variants.
 | `w541-coreboot-<version>-<variant>.rom` | complete 12 MiB flash image: descriptor, GbE, Intel ME and coreboot |
 | `…-4mb-chip.rom` | last 4 MiB of the image: all of coreboot, for an external programmer on the 4 MiB chip |
 | `…-8mb-chip.rom` | first 8 MiB of the image: descriptor, GbE and ME **of the machine the blobs come from**, for the 8 MiB chip |
+| `….cap` | signed UEFI capsule (from v1.2.0): updates a laptop that runs v1.2.0 or later from Linux, without flashrom ([docs/update.md](docs/update.md)) |
 | `….config` | the complete coreboot configuration |
 | `…-layout.txt` | flash map (FMAP) and CBFS contents |
 | `SHA256SUMS` | checksums |
@@ -101,6 +102,11 @@ Inside coreboot:
   `tools/elog.py` or coreboot's `elogtool`, and POST codes kept in CMOS, so
   that the boot after a hang logs where it stopped
   ([docs/flashing.md](docs/flashing.md#diagnosing-a-hang));
+- firmware updates with signed UEFI capsules (from v1.2.0): `tools/update.py`
+  stages the capsule of a release on the EFI system partition, and at the
+  next boot the firmware checks its signature and version and rewrites
+  coreboot, keeping settings, VPD and event log, also with *BIOS Lock* on;
+  the version is in the ESRT, for fwupd too ([docs/update.md](docs/update.md));
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -138,6 +144,14 @@ you reboot, read [docs/flashing.md](docs/flashing.md): boot loader fallback
 path, serial number and machine type in the VPD (and how to keep them
 across updates), external flashing and recovery.
 
+From v1.2.0 on the laptop, the next releases install with their capsule,
+keeping settings, boot entries and VPD, with *BIOS Lock* on or off
+([docs/update.md](docs/update.md)):
+
+```sh
+sudo python3 tools/update.py stage --latest && sudo systemctl reboot
+```
+
 ## Building
 
 Debian or Ubuntu:
@@ -169,11 +183,13 @@ tools/build.sh --help
 | Workflow | When | What |
 |---|---|---|
 | [`check.yml`](.github/workflows/check.yml) | every push and pull request | `tools/ci-check.sh` (shellcheck, actionlint, blob checksums, patch series, defconfigs); the series applied to the pinned coreboot and EDK2, and both configurations checked |
-| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
+| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, their capsules signed, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
 | [`upstream.yml`](.github/workflows/upstream.yml) | every Monday | opens an issue when the series no longer applies on coreboot `main`, a patch was merged upstream, a coreboot release is out, or MrChromebox's EDK2 branch moved |
 
 A release is made by pushing a version tag (`git tag v1.0.0 && git push origin
-v1.0.0`) or with *Run workflow* and a version. Versions with a hyphen
+v1.0.0`) or with *Run workflow* and a version. It needs the repository secret
+`CAPSULE_SIGNING_KEY`, the key that signs the capsules
+([keys/README.md](keys/README.md)); test builds go without it. Versions with a hyphen
 (`v1.1.0-rc1`) or the *prerelease* box give two pre-releases. A pre-release
 that works on the laptop becomes a release without rebuilding it:
 
@@ -189,9 +205,10 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | `assets/` | the EDK2 boot splash |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts, and `elog.py`, which reads the event log from a flash dump |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump |
+| `keys/` | the certificate of the key that signs the capsules ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
-| `docs/` | [flashing and recovery](docs/flashing.md) |
+| `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md) |
 
 ## Binary blobs
 

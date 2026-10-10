@@ -38,7 +38,9 @@
 #   6. il .config dentro la ROM: board, RAM init della variante, IFD, ME
 #      (me_cleaner) e GbE, flash non bloccato (regioni sbloccate,
 #      BOOTMEDIA_LOCK_NONE e niente SMM_BWP: il prossimo aggiornamento si fa
-#      ancora con flashrom -p internal)
+#      ancora con flashrom -p internal), aggiornamento con capsula (ESRT con
+#      il GUID del defconfig della variante e la versione X.Y.Z di
+#      CONFIG_LOCALVERSION, capsule su disco, il certificato di keys/)
 set -uo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -102,6 +104,20 @@ at_offset() {
 	cmp -s -n "$(stat -c%s "$3")" <(tail -c +"$(( $2 + 1 ))" "$1") "$3"
 }
 hex() { printf '0x%x' "$1"; }
+
+# La versione dell'ESRT di un CONFIG_LOCALVERSION w541-vX.Y.Z[-...]-<variante>[+...]
+# (come fw_version di tools/build.sh), 0x00000000 per le altre
+fw_version_of() {
+	local x y z
+	if [[ "$1" =~ ^w541-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?-${VARIANT}(\+.*)?$ ]]; then
+		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
+		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 65535 ]; then
+			printf '0x%08x' $(( (x << 24) | (y << 16) | z ))
+			return
+		fi
+	fi
+	printf '0x%08x' 0
+}
 
 echo "${ROM} (${VARIANT})"
 
@@ -275,7 +291,15 @@ if extract config "${TMP}/config"; then
 	want CONFIG_UNLOCK_FLASH_REGIONS=y
 	want CONFIG_BOOTMEDIA_LOCK_NONE=y
 	never CONFIG_BOOTMEDIA_SMM_BWP=y "flash scrivibile solo da SMM: flashrom -p internal non aggiornerebbe piu'"
+	# aggiornamento con capsula (docs/update.md)
+	want CONFIG_DRIVERS_EFI_FW_INFO=y
+	want "$(grep '^CONFIG_DRIVERS_EFI_MAIN_FW_GUID=' "${O}/configs/w541-${VARIANT}.defconfig")"
+	want CONFIG_DRIVERS_EFI_UPDATE_CAPSULES=y
+	want CONFIG_DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT=y
+	want 'CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT="../../../../../w541/capsule-signing.pem"'
+	never CONFIG_DRIVERS_EFI_GENERATE_CAPSULE=y "la capsula la fa tools/build.sh, con la chiave fuori dal .config"
 	lv="$(sed -n 's/^CONFIG_LOCALVERSION="\(.*\)"$/\1/p' "${TMP}/config")"
+	want "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=$(fw_version_of "${lv}")"
 	if [ -n "${LOCALVERSION}" ]; then
 		if [ "${lv}" = "${LOCALVERSION}" ]; then ok "versione: ${lv}"; else bad "versione: '${lv}', attesa '${LOCALVERSION}'"; fi
 	else

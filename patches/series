@@ -45,3 +45,7 @@
 0045-security-memory-Let-an-option-turn-off-clearing-DRAM.patch
 0046-mb-lenovo-haswell-Add-the-BIOS-lock-and-memory-clear.patch
 0047-mb-lenovo-haswell-Report-the-machine-type-and-serial.patch
+0048-security-memory-Keep-the-coalesced-update-capsules.patch
+0049-payloads-external-edk2-Pass-PcdCapsuleOnDiskConnectB.patch
+0050-drivers-smmstore-Let-the-payload-end-the-full-flash-.patch
+0051-payloads-external-edk2-Write-the-capsule-certificate.patch

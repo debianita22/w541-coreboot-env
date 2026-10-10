@@ -8,10 +8,16 @@
 #   vuota, o push su ci-test/** artifact del run (14 giorni)
 #
 # Ogni release ha l'immagine completa da 12 MiB (IFD, GbE, ME, coreboot), le
-# immagini dei due chip per un programmatore esterno, il .config, il layout e
+# immagini dei due chip per un programmatore esterno, la capsula firmata per
+# l'aggiornamento da Linux (docs/update.md), il .config, il layout e
 # SHA256SUMS. tools/verify-rom.sh blocca la release se i primi 5 MiB non sono
 # identici a legacy/coreboot-4.22/coreboot.rom o la mappa non e' quella di
 # configs/w541.fmd.
+#
+# La capsula si firma con il secret CAPSULE_SIGNING_KEY (Settings -> Secrets
+# and variables -> Actions): la chiave privata di keys/capsule-signing.pem,
+# che arriva solo al passo ROM. Senza, una release vX.Y.Z si ferma; le build di
+# prova escono senza capsula.
 #
 # Quale release e' cosa (tools/ci.sh):
 #   - mrc: RAM init con mrc.bin, come la 4.22. "latest" se non e' una
@@ -139,15 +145,18 @@ jobs:
           key: ${{ steps.tc.outputs.key }}
 
       - name: ROM
+        env:
+          CAPSULE_SIGNING_KEY: ${{ secrets.CAPSULE_SIGNING_KEY }}
         run: ./tools/build.sh --release --version "${VERSION}" roms
 
       - name: Riepilogo
         run: |
+          shopt -s nullglob
           {
             echo "### ${VERSION}"
             echo
             echo '```'
-            (cd dist && sha256sum -- *.rom)
+            (cd dist && sha256sum -- *.rom *.cap)
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -189,13 +198,16 @@ jobs:
           sha256sum -c SHA256SUMS
           for v in mrc nri; do
             for f in "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom" \
-              "w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.config" \
-              "w541-coreboot-${VERSION}-${v}-layout.txt"; do
+              "w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.cap" \
+              "w541-coreboot-${VERSION}-${v}.config" "w541-coreboot-${VERSION}-${v}-layout.txt"; do
               test -s "${f}" || { echo "manca ${f}"; exit 1; }
             done
             # i primi 5 MiB (IFD, GbE, ME): quelli della 4.22 (verify-rom.sh li
             # ha gia' controllati nel job build; qui sui file che si pubblicano)
             cmp -n 5242880 "w541-coreboot-${VERSION}-${v}.rom" ../legacy/coreboot-4.22/coreboot.rom
+            # la capsula: la ROM di questa release, firmata dalla chiave di keys/
+            python3 ../tools/update.py info --cert ../keys/capsule-signing.pem \
+              --rom "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}.cap"
           done
           ls -la
 

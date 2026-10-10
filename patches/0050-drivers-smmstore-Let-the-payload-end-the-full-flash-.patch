@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 21:47:55 +0200
+Subject: [PATCH] drivers/smmstore: Let the payload end the full flash access
+
+On a boot that starts with update capsules, the SMMSTORE handler serves
+the whole flash until the next boot, and the payload has to reboot
+before anything else can reach it. A capsule on disk, though, is only
+announced by a bit in OsIndications: the payload may find no capsule
+file, or have to postpone the update for a low battery, and then reboots
+for nothing; and if coreboot and the payload read that variable
+differently, the payload doesn't know it has to reboot at all.
+
+Once the full flash is enabled, let SMMSTORE_CMD_USE_FULL_FLASH with a
+zero argument disable it until the next boot, so that the payload can
+give it up and boot on when it has written nothing. The handler only
+loses access with it.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Documentation/drivers/smmstore.md | 20 +++++++++++---------
+ src/drivers/smmstore/store.c      |  5 +++++
+ src/include/smmstore.h            |  3 ++-
+ 3 files changed, 18 insertions(+), 10 deletions(-)
+
+diff --git a/Documentation/drivers/smmstore.md b/Documentation/drivers/smmstore.md
+index a647ecb86..63dde2249 100644
+--- a/Documentation/drivers/smmstore.md
++++ b/Documentation/drivers/smmstore.md
+@@ -241,19 +241,21 @@ with highest bit set can be used.
+ 
+ ### - SMMSTORE_CMD_USE_FULL_FLASH = 0x80
+ 
+-This command can only be executed once and is done by the firmware.
+-Calling this function at runtime has no effect. It takes one additional
+-parameter that, contrary to other commands, isn't a pointer. Instead,
+-`%ebx` indicates requested state of full flash access. If it equals 0,
+-commands for accessing full flash are permanently disabled, otherwise
+-they are permanently enabled until the next boot.
++This command is executed by the firmware, which decides whether the boot
++gets full flash access. It takes one additional parameter that, contrary
++to other commands, isn't a pointer. Instead, `%ebx` indicates requested
++state of full flash access. If it equals 0, commands for accessing full
++flash are permanently disabled, otherwise they are enabled until the next
++boot. Once they are enabled, calling it again with 0 disables them until
++the next boot; any other later call has no effect.
+ 
+ The assumption is that if capsule updates are enabled at build time and
+ whole flash access is enabled at runtime, a UEFI payload (highly likely
+ EDK2 or its derivative) won't allow a regular OS to boot if the handler is
+-enabled without rebooting first. There could be a way of deactivating the
+-handler, but coreboot, having no way of enforcing its usage, might as well
+-permit access until a reboot and rely on the payload to do the right thing.
++enabled without rebooting first. The payload either reboots or, when it
++has written nothing (no capsule found, or the update postponed), disables
++the access and goes on booting. coreboot, having no way of enforcing it,
++relies on the payload to do the right thing.
+ 
+ ## External links
+ 
+diff --git a/src/drivers/smmstore/store.c b/src/drivers/smmstore/store.c
+index e950a4239..b5715200a 100644
+--- a/src/drivers/smmstore/store.c
++++ b/src/drivers/smmstore/store.c
+@@ -37,6 +37,11 @@ int smmstore_preprocess_cmd(uint8_t *cmd, void *param)
+ 			 * the caller whether capsule handling was enabled or not.
+ 			 */
+ 			return has_capsules;
++		} else if (has_capsules == 1 && *cmd == SMMSTORE_CMD_USE_FULL_FLASH && !param) {
++			/* The payload is done with the capsules: no full flash until reboot */
++			has_capsules = 0;
++			smmstore_use_full_flash = 0;
++			return 1;
+ 		} else if (has_capsules == 1 && *cmd & SMMSTORE_CMD_USE_FULL_FLASH) {
+ 			smmstore_use_full_flash = 1;
+ 			*cmd &= ~SMMSTORE_CMD_USE_FULL_FLASH;
+diff --git a/src/include/smmstore.h b/src/include/smmstore.h
+index 8962137db..6b25774cb 100644
+--- a/src/include/smmstore.h
++++ b/src/include/smmstore.h
+@@ -21,7 +21,8 @@
+  * Availability depends on CONFIG(DRIVERS_EFI_UPDATE_CAPSULES). Usage of this
+  * extension requires considering which portions of the flash is read-only or
+  * otherwise protected to avoid causing problems while trying to overwrite
+- * them.
++ * them. As a standalone command with a zero argument, after the firmware has
++ * enabled the full flash, it disables it until the next boot.
+  */
+ #define SMMSTORE_CMD_USE_FULL_FLASH 0x80
+ 
+-- 
+2.43.0
+

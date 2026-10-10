@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 21:26:02 +0200
+Subject: [PATCH] security/memory: Keep the coalesced update capsules
+
+clear_memory() has efi_parse_capsules() coalesce the update capsules
+that the OS left in memory into a buffer of free RAM, for the payload,
+and then clears all the free RAM, that buffer included. With
+SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT the payload finds zeros where the
+capsules were, and the update fails.
+
+Leave the buffer out of the ranges to clear, as CBMEM.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/efi/capsules.c         | 7 +++++++
+ src/drivers/efi/capsules.h         | 7 +++++++
+ src/security/memory/memory_clear.c | 6 +++++-
+ 3 files changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/src/drivers/efi/capsules.c b/src/drivers/efi/capsules.c
+index c53e1b024..1984d5fbb 100644
+--- a/src/drivers/efi/capsules.c
++++ b/src/drivers/efi/capsules.c
+@@ -817,6 +817,13 @@ void efi_add_capsules_to_bootmem(void)
+ 	}
+ }
+ 
++void efi_reserve_capsules(struct memranges *ranges)
++{
++	if (coalesce_buffer.len != 0)
++		memranges_insert(ranges, coalesce_buffer.base, coalesce_buffer.len,
++				 BM_MEM_RESERVED);
++}
++
+ /*
+  * The code from this unit is typically executed by clear_memory() which is run
+  * after DEV_INIT.  However, clear_memory() might not be compiled in in which
+diff --git a/src/drivers/efi/capsules.h b/src/drivers/efi/capsules.h
+index 608ce3400..0a84be101 100644
+--- a/src/drivers/efi/capsules.h
++++ b/src/drivers/efi/capsules.h
+@@ -3,18 +3,25 @@
+ #ifndef _EDK2_CAPSULES_H_
+ #define _EDK2_CAPSULES_H_
+ 
++struct memranges;
++
+ #if CONFIG(DRIVERS_EFI_UPDATE_CAPSULES)
+ 
+ void efi_parse_capsules(void);
+ 
+ void efi_add_capsules_to_bootmem(void);
+ 
++/* Marks the memory of the coalesced capsules as reserved in the ranges. */
++void efi_reserve_capsules(struct memranges *ranges);
++
+ #else
+ 
+ static inline void efi_parse_capsules(void) { }
+ 
+ static inline void efi_add_capsules_to_bootmem(void) { }
+ 
++static inline void efi_reserve_capsules(struct memranges *ranges) { }
++
+ #endif
+ 
+ #endif /* _EDK2_CAPSULES_H_ */
+diff --git a/src/security/memory/memory_clear.c b/src/security/memory/memory_clear.c
+index a67e2432f..56de955cd 100644
+--- a/src/security/memory/memory_clear.c
++++ b/src/security/memory/memory_clear.c
+@@ -84,11 +84,15 @@ static void clear_memory(void *unused)
+ 	void *baseptr;
+ 	size_t size;
+ 
+-	/* Only skip CBMEM, stage program, stack and heap are included there. */
++	/*
++	 * Skip CBMEM, stage program, stack and heap are included there, and the
++	 * update capsules that efi_parse_capsules() coalesced for the payload.
++	 */
+ 
+ 	if (cbmem_get_region(&baseptr, &size))
+ 		die("Could not find cbmem region");
+ 	memranges_insert(&mem, (uintptr_t)baseptr, size, BM_MEM_TABLE);
++	efi_reserve_capsules(&mem);
+ 
+ 	if (ENV_X86) {
+ 		/* Find space for PAE enabled memset */
+-- 
+2.43.0
+

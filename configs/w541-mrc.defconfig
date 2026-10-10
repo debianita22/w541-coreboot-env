@@ -70,9 +70,26 @@ CONFIG_SMBIOS_SYSTEM_DATA_FROM_VPD=y
 
 # BIOS Lock nel menu (Security -> Flash protection), spento di default:
 # acceso, solo l'SMM scrive il flash (variabili UEFI e registro degli
-# eventi, patch 0044), flashrom dall'OS puo' solo leggere. Va spento prima
-# di aggiornare il firmware dall'OS.
+# eventi, patch 0044, e gli aggiornamenti con capsula), flashrom dall'OS
+# puo' solo leggere.
 CONFIG_BOOTMEDIA_SMM_BWP_RUNTIME_OPTION=y
+
+# Aggiornamento con capsula UEFI (docs/update.md): ESRT con la versione della
+# release (DRIVERS_EFI_MAIN_FW_VERSION, la mette tools/build.sh), capsule su
+# disco (\EFI\UpdateCapsule dell'ESP) applicate dal payload nello stesso
+# avvio, solo se firmate dalla chiave di keys/capsule-signing.pem (patch
+# 0048-0051, edk2 0008-0010). La capsula riscrive RW_MRC_CACHE e COREBOOT:
+# variabili UEFI, VPD e registro degli eventi restano. Il GUID e' della
+# variante: una capsula nri non si applica sulla mrc, e viceversa. Con
+# un'altra mappa del flash le capsule si rifiutano (edk2 0008): GUID nuovi.
+# Mai capsule piu' vecchie della v1.2.0, la prima che le applica (LSV).
+CONFIG_DRIVERS_EFI_FW_INFO=y
+CONFIG_DRIVERS_EFI_MAIN_FW_GUID="b774aa46-be0e-4ec1-bb1b-b7c0bf2722aa"
+CONFIG_DRIVERS_EFI_MAIN_FW_LSV=0x01020000
+CONFIG_DRIVERS_EFI_UPDATE_CAPSULES=y
+CONFIG_DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT=y
+# relativo all'albero di EDK2 (payloads/external/edk2/workspace/mrchromebox)
+CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT="../../../../../w541/capsule-signing.pem"
 
 # Grafica: libgfxinit per l'iGPU, framebuffer limitato al pannello FHD
 CONFIG_MAINBOARD_USE_LIBGFXINIT=y
