@@ -6,18 +6,20 @@
 #   ./tools/ci-check.sh
 #
 #   1. shellcheck (livello warning) sugli script, riconosciuti dalla prima riga
-#   2. i workflow (actionlint, se c'e')
-#   3. blobs/, assets/ e legacy/: i file corrispondono ai loro SHA256SUMS
-#   4. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
+#   2. Python: la sintassi dei file .py, e la VPD che scrive tools/vpd.py
+#      riletta uguale
+#   3. i workflow (actionlint, se c'e')
+#   4. blobs/, assets/ e legacy/: i file corrispondono ai loro SHA256SUMS
+#   5. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
 #      patch elencata c'e', ogni .patch della cartella e' elencata, ognuna e'
 #      una mail di git format-patch
-#   5. la chiave Optimus NVIDIA solo in blobs/opvk.inc (lista di byte con la
+#   6. la chiave Optimus NVIDIA solo in blobs/opvk.inc (lista di byte con la
 #      firma della chiave): non nelle patch ne' in altri file
-#   6. i due defconfig: diversi solo nella RAM init (cosi' mrc e nri
+#   7. i due defconfig: diversi solo nella RAM init (cosi' mrc e nri
 #      differiscono solo li'), con IFD, ME e GbE (immagine completa), EDK2
 #      pinnato a un commit, i file in w541/ che tools/build.sh copia davvero;
 #      la mappa configs/w541.fmd con le regioni scrivibili nel chip da 8 MiB
-#   7. il pin di coreboot in tools/build.sh: commit intero e describe coerente
+#   8. il pin di coreboot in tools/build.sh: commit intero e describe coerente
 # L'applicazione delle patch e i .config li prova check.yml (job "patch").
 set -u
 O="$(cd "$(dirname "$0")/.." && pwd)"
@@ -51,6 +53,46 @@ if command -v shellcheck >/dev/null 2>&1; then
 	fi
 else
 	bad "shellcheck non installato (Debian/Ubuntu: apt install shellcheck)"
+fi
+
+step "Python"
+if command -v python3 >/dev/null 2>&1; then
+	py_files=()
+	while IFS= read -r f; do
+		case "${f}" in *.py) [ -f "${f}" ] && py_files+=("${f}") ;; esac
+	done < <(files)
+	if python3 - "${py_files[@]}" <<'EOF'
+import ast
+import sys
+for f in sys.argv[1:]:
+    with open(f, encoding="utf-8") as fh:
+        ast.parse(fh.read(), f)
+EOF
+	then
+		ok "${#py_files[@]} file .py"
+	else
+		bad "Python: errore di sintassi, vedi sopra"
+	fi
+	# La regione RO_VPD che scrive tools/vpd.py (lunghezze di uno e piu'
+	# byte, UUID binario) si rilegge uguale, e una regione vuota resta vuota
+	if python3 - <<'EOF'
+import sys
+import uuid
+sys.dont_write_bytecode = True
+sys.path.insert(0, "tools")
+import vpd
+entries = [("serial_number", b"R90ABCDE"), ("system_uuid", uuid.uuid4().bytes_le),
+           ("k" * 200, b"v" * 300)]
+assert vpd.parse_region(vpd.encode_region(entries, 0x4000)) == (entries, 0)
+assert vpd.parse_region(b"\xff" * 0x4000) == ([], None)
+EOF
+	then
+		ok "tools/vpd.py: VPD scritta e riletta"
+	else
+		bad "tools/vpd.py: la VPD scritta non si rilegge uguale"
+	fi
+else
+	bad "python3 non installato"
 fi
 
 step "workflow (actionlint)"

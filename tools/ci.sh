@@ -238,6 +238,14 @@ before. If a resume still stops, the event log has its last POST code:
 [diagnosing a hang](https://github.com/${repo}/blob/main/docs/flashing.md#diagnosing-a-hang);
 suspend-to-idle (\`mem_sleep_default=s2idle\`) works meanwhile.
 
+**Serial number and machine type (VPD)**: from v1.0.9 the firmware reports
+the serial number, machine type model and UUID of the laptop as the Lenovo
+firmware did, from the \`RO_VPD\` flash region, which these images leave
+empty. Write it once with \`tools/vpd.py\`, and copy it into each new image
+before flashing (\`tools/vpd.py copy\`): an update rewrites the region
+([how](https://github.com/${repo}/blob/main/docs/flashing.md#serial-number-and-machine-type-vpd)).
+*BIOS Lock* (setup menu, *Security*) must be off to flash from the OS.
+
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload
 (MrChromebox [\`${edk2:0:12}\`](https://github.com/mrchromebox/edk2/commit/${edk2})

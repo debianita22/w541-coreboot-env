@@ -28,6 +28,8 @@ CONFIG_CHECK_ME=y
 # RAM init: upstream la marca ancora "[NOT COMPLETE]"
 CONFIG_USE_NATIVE_RAMINIT=y
 CONFIG_ENABLE_DDR_2X_REFRESH=y
+# Memoria azzerata a ogni avvio (non alla ripresa da S3): 1,7 s con 32 GB.
+# Si spegne dal menu, Security -> Memory protection (patch 0045-0046).
 CONFIG_SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT=y
 
 # CPU, EC, flash e PCIe come la 4.22
@@ -52,10 +54,22 @@ CONFIG_ELOG_GSMI=y
 CONFIG_CMOS_POST=y
 CONFIG_CMOS_POST_OFFSET=0x70
 
-# Numero di serie e versione SMBIOS da VPD, come la 4.22
+# I dati di questa macchina dalla VPD (RO_VPD, vuota nelle release, si
+# scrive con tools/vpd.py): numero di serie, UUID, Machine Type Model, SKU e
+# famiglia nelle tabelle SMBIOS e nel menu, come col BIOS Lenovo (patch
+# 0047). Non la versione del BIOS (VPD_SMBIOS_VERSION, attiva nella 4.22):
+# una firmware_version scritta una volta resterebbe dopo ogni aggiornamento.
 CONFIG_VPD=y
 CONFIG_SMBIOS_SERIAL_FROM_VPD=y
-CONFIG_VPD_SMBIOS_VERSION=y
+CONFIG_SMBIOS_UUID_FROM_VPD=y
+CONFIG_SMBIOS_SYSTEM_DATA_FROM_VPD=y
+# CONFIG_VPD_SMBIOS_VERSION is not set
+
+# BIOS Lock nel menu (Security -> Flash protection), spento di default:
+# acceso, solo l'SMM scrive il flash (variabili UEFI e registro degli
+# eventi, patch 0044), flashrom dall'OS puo' solo leggere. Va spento prima
+# di aggiornare il firmware dall'OS.
+CONFIG_BOOTMEDIA_SMM_BWP_RUNTIME_OPTION=y
 
 # Grafica: libgfxinit per l'iGPU, framebuffer limitato al pannello FHD
 CONFIG_MAINBOARD_USE_LIBGFXINIT=y

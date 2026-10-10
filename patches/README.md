@@ -21,6 +21,9 @@ for upstream review (one change each, with the reasoning in the message).
 | 0038 | no S3 resume attempt after a power button override, which leaves the S3 sleep type behind |
 | 0039-0042 | where a boot or an S3 resume stopped, with `CMOS_POST`: a POST code as soon as the CMOS bank of a boot is chosen, one after each romstage step, the number of lines `mrc.bin` has printed, codes around loading ramstage |
 | 0043 | S3 resume: the cache-as-RAM region is filled with the code uncached again, as before coreboot commit `97dbfd309`; with the code cached, one 64-byte line of the 256 KiB region (the size of the Haswell L2) is lost, and `mrc.bin` hung on it while restoring the memory on resume |
+| 0044 | with the BIOS lock on, the event log written from SMM too (S3/S5 entry, GSMI, power button), with InSMM.STS and BIOSWE set around the writes as for SMMSTORE |
+| 0045-0046 | Security options: *BIOS Lock* (`bios_lock` of `BOOTMEDIA_SMM_BWP_RUNTIME_OPTION`: only SMM writes the flash, off by default) and *Clear memory at power-on* (`clear_dram_on_boot`, on by default; 1.7 s with 32 GB) |
+| 0047 | the machine's data from the VPD as the OEM firmware reports it: the machine type as the base board product too, the system serial on the chassis; machine type, serial and UUID in the About card of the setup menu |
 
 ## EDK2 and LvglPkg
 

@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 19:06:54 +0200
+Subject: [PATCH] mb/lenovo/haswell: Report the machine type and serial as the
+ OEM firmware
+
+The OEM firmware has the machine type model and the serial number of
+the ThinkPad in its own flash. With coreboot they can be stored in the
+VPD (RO_VPD) and SMBIOS takes them from there with
+SMBIOS_SYSTEM_DATA_FROM_VPD, SMBIOS_SERIAL_FROM_VPD and
+SMBIOS_UUID_FROM_VPD. Fill in the strings these leave out the way the
+OEM firmware does:
+
+- the base board (type 2) is named after the machine type model, as the
+  system (type 1) is, when the VPD has system_product_name;
+- the chassis (type 3) has the serial number of the system.
+
+Without the VPD keys the strings stay as they were. Tools from Lenovo
+look the machine up by its machine type, and OS quirks match the model
+in the system version, which stays "ThinkPad W541" or "ThinkPad T440p".
+
+Show what the VPD holds in the About card of the setup menu too, as the
+OEM setup does: machine type, serial number, system board serial
+number and UUID, each hidden when the VPD does not have it.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/cfr.c       | 80 ++++++++++++++++++++++++
+ src/mainboard/lenovo/haswell/mainboard.c | 23 +++++++
+ 2 files changed, 103 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 4d9010d5d..61e15a044 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -8,6 +8,7 @@
+ #include <cpu/x86/name.h>
+ #include <drivers/intel/oc_mailbox/cfr.h>
+ #include <drivers/option/cfr_frontend.h>
++#include <drivers/vpd/vpd.h>
+ #include <ec/lenovo/h8/cfr.h>
+ #include <ec/lenovo/h8/h8.h>
+ #include <memory_info.h>
+@@ -32,6 +33,81 @@ static const struct sm_object info_model = SM_DECLARE_VARCHAR({
+ 	.default_value	= CONFIG_MAINBOARD_PART_NUMBER,
+ });
+ 
++/* This machine's data from the VPD, as the OEM setup shows it, if there */
++static void show_vpd_string(struct sm_object *new, const char *key)
++{
++	char *value = CONFIG(VPD) ? malloc(64) : NULL;
++
++	if (value && vpd_gets(key, value, 64, VPD_RO) && value[0]) {
++		new->sm_varchar.default_value = value;
++		return;
++	}
++	free(value);
++	new->sm_varchar.flags |= CFR_OPTFLAG_SUPPRESS;
++}
++
++static void update_mtm(struct sm_object *new)
++{
++	show_vpd_string(new, "system_product_name");
++}
++
++static void update_serial(struct sm_object *new)
++{
++	show_vpd_string(new, "serial_number");
++}
++
++static void update_board_serial(struct sm_object *new)
++{
++	show_vpd_string(new, "mlb_serial_number");
++}
++
++static void update_uuid(struct sm_object *new)
++{
++	const uint8_t *u = NULL;
++	int size = 0;
++	char *text;
++
++	if (CONFIG(VPD))
++		u = vpd_find("system_uuid", &size, VPD_RO);
++	if (!u || size != 16 || !(text = malloc(37))) {
++		new->sm_varchar.flags |= CFR_OPTFLAG_SUPPRESS;
++		return;
++	}
++	/* The first three fields are little-endian, as in SMBIOS */
++	snprintf(text, 37, "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
++		 u[3], u[2], u[1], u[0], u[5], u[4], u[7], u[6],
++		 u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
++	new->sm_varchar.default_value = text;
++}
++
++static const struct sm_object info_mtm = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_mtm",
++	.ui_name	= "Machine type",
++	.default_value	= "",
++}, WITH_CALLBACK(update_mtm));
++
++static const struct sm_object info_serial = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_serial",
++	.ui_name	= "Serial number",
++	.default_value	= "",
++}, WITH_CALLBACK(update_serial));
++
++static const struct sm_object info_board_serial = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_board_serial",
++	.ui_name	= "System board serial number",
++	.default_value	= "",
++}, WITH_CALLBACK(update_board_serial));
++
++static const struct sm_object info_uuid = SM_DECLARE_VARCHAR({
++	.flags		= CFR_OPTFLAG_READONLY | CFR_OPTFLAG_VOLATILE,
++	.opt_name	= "info_uuid",
++	.ui_name	= "UUID",
++	.default_value	= "",
++}, WITH_CALLBACK(update_uuid));
++
+ static void update_processor(struct sm_object *new)
+ {
+ 	char *name = malloc(49);
+@@ -114,6 +190,10 @@ static const struct sm_object general_about = SM_DECLARE_FORM({
+ 	.ui_name	= "About this ThinkPad",
+ 	.obj_list	= (const struct sm_object *[]) {
+ 		&info_model,
++		&info_mtm,
++		&info_serial,
++		&info_board_serial,
++		&info_uuid,
+ 		&info_processor,
+ 		&info_memory,
+ 		&info_memory_profile,
+diff --git a/src/mainboard/lenovo/haswell/mainboard.c b/src/mainboard/lenovo/haswell/mainboard.c
+index b234534ae..eaeb0c898 100644
+--- a/src/mainboard/lenovo/haswell/mainboard.c
++++ b/src/mainboard/lenovo/haswell/mainboard.c
+@@ -4,6 +4,7 @@
+ #include <console/console.h>
+ #include <device/device.h>
+ #include <drivers/intel/gma/int15.h>
++#include <drivers/vpd/vpd.h>
+ #include <ec/acpi/ec.h>
+ #include <ec/lenovo/h8/h8.h>
+ #include <option.h>
+@@ -27,6 +28,28 @@ const char *smbios_mainboard_bios_version(void)
+ 	return "CBET4000 " COREBOOT_VERSION;
+ }
+ 
++/*
++ * The SMBIOS strings as the OEM firmware reports them, given the VPD that
++ * holds this machine's data: the machine type model (system_product_name)
++ * names the board too, and the chassis has the serial number of the system.
++ */
++#if CONFIG(SMBIOS_SYSTEM_DATA_FROM_VPD)
++const char *smbios_mainboard_product_name(void)
++{
++	static char mtm[CONFIG_SMBIOS_SYSTEM_DATA_SIZE];
++
++	if (vpd_gets("system_product_name", mtm, sizeof(mtm), VPD_RO) && mtm[0])
++		return mtm;
++
++	return CONFIG_MAINBOARD_SMBIOS_PRODUCT_NAME;
++}
++#endif
++
++const char *smbios_chassis_serial_number(void)
++{
++	return smbios_system_serial_number();
++}
++
+ /* Before enumeration: the PCH code then hides and powers down the port */
+ static void disable_root_port(unsigned int func, const char *what)
+ {
+-- 
+2.43.0
+

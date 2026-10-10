@@ -83,15 +83,19 @@ Inside coreboot:
 
   | Category | Settings |
   |---|---|
-  | *General* | model, processor, memory and firmware versions; beeps and volume; NMI |
+  | *General* | model, machine type, serial number and UUID (from the VPD), processor, memory and firmware versions; beeps and volume; NMI |
   | *Energy Saver* | battery charge thresholds (OS controlled, 100%, 80%, 60%), Intel SpeedStep, Turbo Boost, C-states, CPU PL1/PL2 limits, cooling policy (active or passive), USB always on, power-on after power failure |
-  | *Security* | Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
+  | *Security* | BIOS Lock (flash writable only by the firmware, off by default), memory cleared at power-on, Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
   | *Keyboard* | Fn/Ctrl swap, F1-F12 or special keys, sticky Fn, keyboard backlight, TrackPoint, touchpad |
   | *Hardware* | NVIDIA GPU, graphics stolen memory (native RAM init only: `mrc.bin` reserves a fixed 32 MiB) and aperture, ExpressCard and Thunderbolt ports, Wi-Fi, Bluetooth, WWAN |
 
   Settings live in UEFI variables in the `SMMSTORE` flash region and apply
   at the next boot. XMP memory profiles are not supported: the memory runs
   at its JEDEC timings;
+- the serial number, machine type model and UUID of the laptop in the
+  `RO_VPD` flash region, written once with `tools/vpd.py` and reported in
+  SMBIOS as the Lenovo firmware did
+  ([docs/flashing.md](docs/flashing.md#serial-number-and-machine-type-vpd));
 - an event log in the `RW_ELOG` flash region (boots, wake sources, entries
   into S3 and S5, power failures, watchdog resets), read with
   `tools/elog.py` or coreboot's `elogtool`, and POST codes kept in CMOS, so
@@ -130,7 +134,8 @@ sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.2-mrc.rom
 
 The UEFI settings and boot entries start from scratch after flashing. Before
 you reboot, read [docs/flashing.md](docs/flashing.md): boot loader fallback
-path, serial number in VPD, external flashing and recovery.
+path, serial number and machine type in the VPD (and how to keep them
+across updates), external flashing and recovery.
 
 ## Building
 

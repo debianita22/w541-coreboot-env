@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 19:03:48 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Write the event log from SMM under the
+ BIOS lock
+
+With the BIOS lock (BOOTMEDIA_SMM_BWP, or the bios_lock option of
+BOOTMEDIA_SMM_BWP_RUNTIME_OPTION), BLE and SMM_BWP are set in BIOS_CNTL
+and the BIOS region can only be written in SMM with InSMM.STS and BIOSWE
+set. The SMMSTORE handler sets them around its writes since commit
+808c2d25ef ("sb/intel/*: Fix SMMSTORE when CONFIG_BOOTMEDIA_SMM_BWP=y"),
+but the event log is written from SMM too, and without them its writes
+fail: the S3, S4 and S5 entries (ELOG_GSMI), the events the OS logs
+through GSMI and the power button press before the OS takes over.
+
+Move the SMMSTORE code into a pair of helpers and use them around the
+event log writes as well. Without the lock BIOSWE is set and the helpers
+change nothing.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/smihandler.c | 55 +++++++++++++++-----
+ 1 file changed, 42 insertions(+), 13 deletions(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/smihandler.c b/src/southbridge/intel/lynxpoint/smihandler.c
+index 966b3d892..68b212997 100644
+--- a/src/southbridge/intel/lynxpoint/smihandler.c
++++ b/src/southbridge/intel/lynxpoint/smihandler.c
+@@ -35,6 +35,34 @@ void southbridge_smi_set_eos(void)
+ 	enable_smi(EOS);
+ }
+ 
++/*
++ * With the BIOS lock (BLE and SMM_BWP in BIOS_CNTL), the BIOS region can only
++ * be written in SMM with InSMM.STS and BIOSWE set. Set them around the flash
++ * writes of this handler, and clear them again: true when they were set.
++ */
++static bool smm_bios_write_begin(void)
++{
++	const pci_devfn_t lpc_dev = PCI_DEV(0, 0x1f, 0);
++
++	if (pci_read_config16(lpc_dev, BIOS_CNTL) & BIOS_CNTL_BIOSWE)
++		return false;
++
++	set_insmm_sts(true);
++	pci_or_config16(lpc_dev, BIOS_CNTL, BIOS_CNTL_BIOSWE);
++	return true;
++}
++
++static void smm_bios_write_end(bool was_protected)
++{
++	const pci_devfn_t lpc_dev = PCI_DEV(0, 0x1f, 0);
++
++	if (!was_protected)
++		return;
++
++	pci_and_config16(lpc_dev, BIOS_CNTL, ~BIOS_CNTL_BIOSWE);
++	set_insmm_sts(false);
++}
++
+ static void busmaster_disable_on_bus(int bus)
+ {
+ 	int slot, func;
+@@ -148,8 +176,11 @@ static void southbridge_smi_sleep(void)
+ 	usb_xhci_sleep_prepare(PCH_XHCI_DEV, slp_typ);
+ 
+ 	/* Log S3, S4, and S5 entry */
+-	if (slp_typ >= ACPI_S3)
++	if (CONFIG(ELOG_GSMI) && slp_typ >= ACPI_S3) {
++		const bool was_protected = smm_bios_write_begin();
+ 		elog_gsmi_add_event_byte(ELOG_TYPE_ACPI_ENTER, slp_typ);
++		smm_bios_write_end(was_protected);
++	}
+ 
+ 	/* TODO: Consolidate */
+ 	if (CONFIG(SOUTHBRIDGE_INTEL_WILDCATPOINT)) {
+@@ -267,6 +298,7 @@ static void southbridge_smi_gsmi(void)
+ {
+ 	u32 *ret, *param;
+ 	u8 sub_command;
++	bool was_protected;
+ 	em64t101_smm_state_save_area_t *io_smi =
+ 		smi_apmc_find_state_save(APM_CNT_ELOG_GSMI);
+ 
+@@ -281,7 +313,9 @@ static void southbridge_smi_gsmi(void)
+ 	param = (u32 *)&io_smi->rbx;
+ 
+ 	/* drivers/elog/gsmi.c */
++	was_protected = smm_bios_write_begin();
+ 	*ret = gsmi_exec(sub_command, param);
++	smm_bios_write_end(was_protected);
+ }
+ 
+ static void southbridge_smi_store(void)
+@@ -299,20 +333,11 @@ static void southbridge_smi_store(void)
+ 	/* Parameter buffer in EBX */
+ 	reg_ebx = io_smi->rbx;
+ 
+-	const pci_devfn_t lpc_dev = PCI_DEV(0, 0x1f, 0);
+-	const bool wp_enabled = !(pci_read_config16(lpc_dev, BIOS_CNTL) & BIOS_CNTL_BIOSWE);
+-	if (wp_enabled) {
+-		set_insmm_sts(true);
+-		pci_or_config16(lpc_dev, BIOS_CNTL, BIOS_CNTL_BIOSWE);
+-	}
++	const bool was_protected = smm_bios_write_begin();
+ 	/* drivers/smmstore/smi.c */
+ 	ret = smmstore_exec(sub_command, (void *)reg_ebx);
+ 	io_smi->rax = ret;
+-
+-	if (wp_enabled) {
+-		pci_and_config16(lpc_dev, BIOS_CNTL, ~BIOS_CNTL_BIOSWE);
+-		set_insmm_sts(false);
+-	}
++	smm_bios_write_end(was_protected);
+ }
+ 
+ static void southbridge_smi_apmc(void)
+@@ -368,7 +393,11 @@ static void southbridge_smi_pm1(void)
+ 	 */
+ 	if (pm1_sts & PWRBTN_STS) {
+ 		/* power button pressed */
+-		elog_gsmi_add_event(ELOG_TYPE_POWER_BUTTON);
++		if (CONFIG(ELOG_GSMI)) {
++			const bool was_protected = smm_bios_write_begin();
++			elog_gsmi_add_event(ELOG_TYPE_POWER_BUTTON);
++			smm_bios_write_end(was_protected);
++		}
+ 		disable_pm1_control(~0);
+ 		enable_pm1_control(SLP_EN | (SLP_TYP_S5 << 10));
+ 	}
+-- 
+2.43.0
+

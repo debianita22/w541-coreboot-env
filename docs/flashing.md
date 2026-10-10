@@ -15,7 +15,7 @@ Each release has the complete image and the two chip images.
 
 - [Before you start](#before-you-start)
 - [Boot loader fallback path](#boot-loader-fallback-path)
-- [Serial number in VPD](#serial-number-in-vpd)
+- [Serial number and machine type (VPD)](#serial-number-and-machine-type-vpd)
 - [Internal update](#internal-update)
 - [First boot and settings](#first-boot-and-settings)
 - [Diagnosing a hang](#diagnosing-a-hang)
@@ -26,8 +26,9 @@ Each release has the complete image and the two chip images.
 
 - The laptop must already run coreboot with a writable flash, like the 4.22
   image in `legacy/` and every image from this repository (unlocked
-  descriptor, `BOOTMEDIA_LOCK_NONE`). The Lenovo firmware does not allow it:
-  the first flash needs an [external programmer](#external-programmer).
+  descriptor, `BOOTMEDIA_LOCK_NONE`, *BIOS Lock* off in the setup menu, its
+  default). The Lenovo firmware does not allow it: the first flash needs an
+  [external programmer](#external-programmer).
 - AC adapter connected, battery charged.
 - `flashrom` (`sudo apt install flashrom`). With two chips it switches to
   hardware sequencing by itself and reads and writes all 12 MiB.
@@ -91,24 +92,42 @@ then recreate the entry from Linux with
 `efibootmgr --create --disk /dev/sda --part 1 --label cachyos --loader '\EFI\cachyos\grubx64.efi'`
 (your disk, partition and path).
 
-## Serial number in VPD
+## Serial number and machine type (VPD)
 
-The firmware reads the SMBIOS serial number and BIOS version from the `RO_VPD`
-region, as the 4.22 configuration did. The region is empty in the release
-images. If you stored values there with the `vpd` tool, copy the region from
-your backup into the image before flashing; `cbfstool` addresses it by name,
-so a different offset does not matter:
+The Lenovo firmware kept the serial number, the machine type model (MTM) and
+the UUID of the laptop in its own flash. coreboot reads them from the
+`RO_VPD` region (VPD, Vital Product Data) and reports them the way the
+Lenovo firmware did, from v1.0.9: SMBIOS (`dmidecode`, Windows, Lenovo
+tools) has the MTM as product name, `LENOVO_MT_20EF` or `LENOVO_MT_20EG` as
+SKU, *ThinkPad W541* as version and family, the serial number for the system
+and the chassis; the setup menu shows them in *General* → *About this
+ThinkPad*. The release images leave the region empty, so that each laptop
+keeps its own data.
+
+Write it once, with the values on the label under the laptop (`TYPE
+20EG-XXXXXX`, `S/N R9-0XXXXX`; `tools/vpd.py` drops the dash of the serial
+number, as the Lenovo firmware did):
 
 ```sh
-cbfstool backup1.rom read -r RO_VPD -f ro_vpd.bin
-tr -d '\377' < ro_vpd.bin | wc -c            # 0: empty, nothing to copy
-cp w541-coreboot-v1.0.2-mrc.rom w541-flash.rom
-cbfstool w541-flash.rom write -r RO_VPD -f ro_vpd.bin
+sudo flashrom -p internal -r dump.rom
+python3 tools/vpd.py set dump.rom -o vpd.rom --serial R9-0XXXXX --mtm 20EG-XXXXXX --uuid serial
+sudo flashrom -p internal --fmap-file vpd.rom -i RO_VPD -N -w vpd.rom
 ```
 
-Then flash `w541-flash.rom` (its checksum no longer matches `SHA256SUMS`).
-`cbfstool` is `work/coreboot/build-mrc/cbfstool` after `tools/build.sh`, or
-`make -C util/cbfstool` in any coreboot tree.
+flashrom writes and verifies only the 16 KiB `RO_VPD` region of `vpd.rom`;
+the rest of the flash stays as it is. `--uuid serial` derives the UUID from
+the MTM and the serial number, so running the command again gives the same
+one; with the original UUID (from `dmidecode` under the Lenovo firmware),
+pass it instead. `--board-serial` adds the system board serial number.
+To check:
+
+```sh
+python3 tools/vpd.py show vpd.rom          # before flashing: what goes into RO_VPD
+sudo dmidecode -t system | grep -E 'Product|Version|Serial|UUID|SKU|Family'   # after a reboot
+```
+
+A firmware update rewrites the whole BIOS region, `RO_VPD` included: copy
+the VPD into the new image first, as in [Internal update](#internal-update).
 
 ## Internal update
 
@@ -121,6 +140,19 @@ the descriptor, GbE and ME already on the machine: on another W541 those are
 its own, with its own MAC address. flashrom must end with `VERIFIED`. If it
 does not, do not power off: write the image (or your backup) again
 straight away.
+
+With the [VPD](#serial-number-and-machine-type-vpd) written, copy it from
+the flash into the new image first, and flash that one (its checksum no
+longer matches `SHA256SUMS`):
+
+```sh
+sudo flashrom -p internal -r dump.rom
+python3 tools/vpd.py copy dump.rom w541-coreboot-v1.0.2-mrc.rom -o w541-flash.rom
+sudo flashrom -p internal --ifd -i bios -w w541-flash.rom
+```
+
+With *BIOS Lock* on (*Security* → *Flash protection*), flashrom can only
+read the flash: turn it off, reboot, update, and turn it on again.
 
 To switch between the `mrc` and `nri` variants, flash the other image the
 same way.
@@ -149,9 +181,11 @@ same way.
   initialization: see [Recovery](#recovery).
 - coreboot log: `sudo cbmem -c` (build it from coreboot's `util/cbmem`,
   `make -C util/cbmem WERROR=`). Normal on this laptop: `ME: BIOS path:
-  Error` and `MBP not ready` with an ME reduced by me_cleaner, `RO_VPD is
-  uninitialized` without a serial number in VPD, `fallback/slic' not
-  found`, and `1c.3: Timeout waiting for 328h` for the unused root port 4.
+  Error` and `MBP not ready` with an ME reduced by me_cleaner, `No RW_VPD
+  FMAP section` (there is only `RO_VPD`), `RO_VPD is uninitialized` and
+  `DMI: Cannot read ... from VPD` without the [VPD](#serial-number-and-machine-type-vpd),
+  `fallback/slic' not found`, and `1c.3: Timeout waiting for 328h` for the
+  unused root port 4.
 - VT-d: the firmware enables it and writes the DMAR table, but Linux
   kernels that leave the IOMMU off by default only use it for interrupt
   remapping: add `intel_iommu=on` to the kernel command line for device
@@ -179,18 +213,26 @@ same way.
   - *Energy Saver*: battery charge thresholds (*OS controlled* keeps what
     TLP or `thinkpad_acpi` sets), SpeedStep, Turbo Boost, C-states, CPU
     PL1/PL2 limits and lock, cooling policy, *Restore AC Power Loss*;
-  - *Security*: VT-x, VT-d, *Intel Management Engine* and the supervisor
-    password. The processor keeps the VT-x setting until it is powered
-    off, so after a change the next boot switches the laptop off and on
-    once by itself. With a password set, Esc at power-on asks for it
-    before the setup menu, boot entries included, opens; without Esc the
-    laptop boots as usual. A forgotten password goes away when the image
-    is flashed again from Linux, since that also writes the empty
-    `SMMSTORE` region: every setting and boot entry resets too;
+  - *Security*: *BIOS Lock*, *Clear memory at power-on*, VT-x, VT-d,
+    *Intel Management Engine* and the supervisor password. *BIOS Lock*,
+    off by default, leaves the flash writable only by the firmware in SMM,
+    as the Lenovo firmware did: the settings are still saved, but flashrom
+    and any other program in the OS can only read it, until it is turned
+    off again. *Clear memory at power-on*, on by default, clears all the
+    memory at every boot but not on resume, so that nothing the previous
+    OS left in it can be read: about 1.7 s with 32 GB. The processor keeps
+    the VT-x setting until it is powered off, so after a change the next
+    boot switches the laptop off and on once by itself. With a password
+    set, Esc at power-on asks for it before the setup menu, boot entries
+    included, opens; without Esc the laptop boots as usual. A forgotten
+    password goes away when the image is flashed again from Linux, since
+    that also writes the empty `SMMSTORE` region: every setting and boot
+    entry resets too;
   - *Keyboard*: Fn/Ctrl swap, F1-F12 or special keys, TrackPoint and
     touchpad;
-  - *General*: what the laptop is (model, processor, memory, firmware and
-    EC versions), beeps, *Non-maskable Interrupts*.
+  - *General*: what the laptop is (model, machine type, serial number and
+    UUID from the VPD, processor, memory, firmware and EC versions), beeps,
+    *Non-maskable Interrupts*.
 
   Changes apply at the next boot. Graphics stolen memory and aperture
   change the memory map: do not change them between suspend and resume.

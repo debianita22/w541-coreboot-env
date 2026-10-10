@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 19:05:59 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add the BIOS lock and memory clearing to
+ Security
+
+Offer two options in the Security category of the setup menu, each on a
+card of its own:
+
+- Flash protection: "BIOS Lock", the bios_lock option that
+  BOOTMEDIA_SMM_BWP_RUNTIME_OPTION reads. When it is on, only SMM can
+  write the BIOS region, as with the OEM firmware: tools in the OS such
+  as flashrom can only read it, while the UEFI variables are still
+  written by the SMMSTORE handler. It defaults to BOOTMEDIA_SMM_BWP, off
+  unless selected, so that the firmware can still be updated from the
+  OS. The card is hidden without the runtime option.
+
+- Memory protection: "Clear memory at power-on", the
+  clear_dram_on_boot option that SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT now
+  reads, on by default. Clearing 32 GiB takes 1.7 s on the W541. The
+  card is hidden without SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/cfr.c | 47 ++++++++++++++++++++++++++++++
+ 1 file changed, 47 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index a71f96bac..4d9010d5d 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -243,6 +243,51 @@ static const struct sm_object energy_power = SM_DECLARE_FORM({
+ 
+ /* Security */
+ 
++static void update_bios_lock(struct sm_object *new)
++{
++	if (!CONFIG(BOOTMEDIA_SMM_BWP_RUNTIME_OPTION))
++		new->sm_bool.flags |= CFR_OPTFLAG_SUPPRESS;
++}
++
++/* Read by enable_smm_bios_protection() (security/lockdown/lockdown.h) */
++static const struct sm_object bios_lock = SM_DECLARE_BOOL({
++	.opt_name	= "bios_lock",
++	.ui_name	= "BIOS Lock",
++	.ui_helptext	= "Only the firmware, in System Management Mode, can write\n"
++			  "the flash: flashrom and the other tools of the OS can only\n"
++			  "read it. Settings are still saved.\n"
++			  "Turn it off before updating the firmware from the OS.",
++	.default_value	= CONFIG(BOOTMEDIA_SMM_BWP),
++}, WITH_CALLBACK(update_bios_lock));
++
++/* Read by security_clear_dram_request() (security/memory/memory.c) */
++static const struct sm_object clear_dram_on_boot = SM_DECLARE_BOOL({
++	.opt_name	= "clear_dram_on_boot",
++	.ui_name	= "Clear memory at power-on",
++	.ui_helptext	= "Clear all the memory at every boot (not when resuming\n"
++			  "from sleep), so that what the previous OS left in it\n"
++			  "cannot be read. About 1.7 s with 32 GB of memory.",
++	.default_value	= true,
++});
++
++static const struct sm_object security_flash = SM_DECLARE_FORM({
++	.flags		= CONFIG(BOOTMEDIA_SMM_BWP_RUNTIME_OPTION) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.ui_name	= "Flash protection",
++	.obj_list	= (const struct sm_object *[]) {
++		&bios_lock,
++		NULL
++	},
++});
++
++static const struct sm_object security_memory = SM_DECLARE_FORM({
++	.flags		= CONFIG(SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.ui_name	= "Memory protection",
++	.obj_list	= (const struct sm_object *[]) {
++		&clear_dram_on_boot,
++		NULL
++	},
++});
++
+ static const struct sm_object security_virtualization = SM_DECLARE_FORM({
+ 	.ui_name	= "Virtualization",
+ 	.obj_list	= (const struct sm_object *[]) {
+@@ -385,6 +430,8 @@ static struct sm_obj_form energy_saver = {
+ static struct sm_obj_form security = {
+ 	.ui_name = "Security",
+ 	.obj_list = (const struct sm_object *[]) {
++		&security_flash,
++		&security_memory,
+ 		&security_virtualization,
+ 		&security_me,
+ 		NULL
+-- 
+2.43.0
+

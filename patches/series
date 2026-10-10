@@ -41,3 +41,7 @@
 0041-nb-intel-haswell-haswell_mrc-Keep-the-mrc.bin-progre.patch
 0042-lib-prog_loaders-Add-POST-codes-around-loading-ramst.patch
 0043-cpu-intel-car-non-evict-Keep-the-code-uncached-while.patch
+0044-sb-intel-lynxpoint-Write-the-event-log-from-SMM-unde.patch
+0045-security-memory-Let-an-option-turn-off-clearing-DRAM.patch
+0046-mb-lenovo-haswell-Add-the-BIOS-lock-and-memory-clear.patch
+0047-mb-lenovo-haswell-Report-the-machine-type-and-serial.patch

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 19:04:23 +0200
+Subject: [PATCH] security/memory: Let an option turn off clearing DRAM on boot
+
+SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT clears all the memory on every boot
+that is not an S3 resume. It protects what the previous OS left in
+memory, at a cost that grows with the memory installed: 1.7 seconds with
+32 GiB on a Haswell ThinkPad W541, most of the time coreboot takes to
+boot it.
+
+Read the option "clear_dram_on_boot", on by default, so that a setup
+menu can offer the choice at runtime. Boards without the option, or
+without an option backend, keep clearing it as before.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/security/memory/Kconfig  | 3 +++
+ src/security/memory/memory.c | 4 +++-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/security/memory/Kconfig b/src/security/memory/Kconfig
+index d3dec043d..ded2b280c 100644
+--- a/src/security/memory/Kconfig
++++ b/src/security/memory/Kconfig
+@@ -19,4 +19,7 @@ config SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT
+ 	  This increases boot time depending on the amount of DRAM
+ 	  installed.
+ 
++	  With an option backend, the option "clear_dram_on_boot" can
++	  turn it off at runtime (it defaults to on).
++
+ endmenu #Memory initialization
+diff --git a/src/security/memory/memory.c b/src/security/memory/memory.c
+index c4f3bdd68..07ca0c028 100644
+--- a/src/security/memory/memory.c
++++ b/src/security/memory/memory.c
+@@ -1,5 +1,6 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
++#include <option.h>
+ #include <security/intel/txt/txt.h>
+ #include <stdbool.h>
+ 
+@@ -12,7 +13,8 @@
+  */
+ bool security_clear_dram_request(void)
+ {
+-	if (CONFIG(SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT))
++	if (CONFIG(SECURITY_CLEAR_DRAM_ON_REGULAR_BOOT) &&
++	    get_uint_option("clear_dram_on_boot", true))
+ 		return true;
+ 
+ 	if (CONFIG(INTEL_TXT) && intel_txt_memory_has_secrets())
+-- 
+2.43.0
+
