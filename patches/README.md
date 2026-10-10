@@ -17,6 +17,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0030-0033 | options for the Haswell ThinkPads: cooling policy (active trip point from GNVS), battery charge threshold presets, ExpressCard and Thunderbolt ports on the W541 |
 | 0034-0035 | the setup menu in categories (General, Energy Saver, Security, Keyboard, Hardware), with the H8 options placed by the mainboard |
 | 0036 | the NVIDIA Optimus key for the Windows driver (NVOP function 0x10), included in the DSDT from `blobs/opvk.inc`, which `tools/build.sh` copies into the tree |
+| 0037 | no "Null dereference" error when the DRAM clearing at boot writes the first page, which starts at address zero |
 
 ## EDK2 and LvglPkg
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 9 Oct 2026 23:57:52 +0200
-Subject: [PATCH 31/36] mb/lenovo/haswell: Add a cooling policy option
+Subject: [PATCH 31/37] mb/lenovo/haswell: Add a cooling policy option
 
 Add a cooling_policy option to the setup menu:
 

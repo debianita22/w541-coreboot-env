@@ -133,6 +133,15 @@ same way.
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
   fatal error (`H8_FLASH_LEDS_ON_DEATH`), for example a failed memory
   initialization: see [Recovery](#recovery).
+- coreboot log: `sudo cbmem -c` (build it from coreboot's `util/cbmem`,
+  `make -C util/cbmem WERROR=`). Normal on this laptop: `ME: BIOS path:
+  Error` and `MBP not ready` with an ME reduced by me_cleaner, `RO_VPD is
+  uninitialized` without a serial number in VPD, `fallback/slic' not
+  found`, and `1c.3: Timeout waiting for 328h` for the unused root port 4.
+- VT-d: the firmware enables it and writes the DMAR table, but Linux
+  kernels that leave the IOMMU off by default only use it for interrupt
+  remapping: add `intel_iommu=on` to the kernel command line for device
+  passthrough (`/sys/class/iommu/` then lists `dmar0` and `dmar1`).
 - Event log: coreboot records every boot, the wake source of a resume
   (lid, Fn, a GPE), power failures, watchdog resets and the ME state in
   the `RW_ELOG` region, which starts empty and is erased by a flash. Read

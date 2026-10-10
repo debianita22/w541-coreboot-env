@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 9 Oct 2026 23:55:33 +0200
-Subject: [PATCH 29/36] nb/intel/haswell: Add an option for VT-d
+Subject: [PATCH 29/37] nb/intel/haswell: Add an option for VT-d
 
 The DMA remapping engines are always set up when the CPU supports
 VT-d. Add a vtd option, enabled by default, and a CFR object for it.

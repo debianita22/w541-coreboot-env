@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Wed, 30 Sep 2026 23:14:02 +0200
-Subject: [PATCH 36/36] mb/lenovo/haswell: Add an option for the NVIDIA Optimus
+Subject: [PATCH 36/37] mb/lenovo/haswell: Add an option for the NVIDIA Optimus
  key
 
 The Windows NVIDIA driver requests an Optimus key through NVOP function
