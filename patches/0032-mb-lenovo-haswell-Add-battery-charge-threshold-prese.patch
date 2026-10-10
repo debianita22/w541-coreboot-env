@@ -14,15 +14,20 @@ at the end of ramstage, for both batteries, like those methods do:
 
 With a preset, a threshold set from the OS lasts until the next boot.
 
+The writes are ordered so that the EC never sees a start threshold above
+the stop one in effect, in case it refuses it: when the start threshold
+goes up past the old stop one, the stop threshold is written first.
+
 TEST=Built lenovo/w541.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- src/mainboard/lenovo/haswell/cfr.c           | 16 +++++++
- src/mainboard/lenovo/haswell/mainboard.c     | 49 ++++++++++++++++++++
- src/mainboard/lenovo/haswell/setup_options.h |  8 ++++
- 3 files changed, 73 insertions(+)
+ src/mainboard/lenovo/haswell/cfr.c           | 16 +++++
+ src/mainboard/lenovo/haswell/mainboard.c     | 64 ++++++++++++++++++++
+ src/mainboard/lenovo/haswell/setup_options.h |  8 +++
+ 3 files changed, 88 insertions(+)
 
 diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
 index d614c7dc1..9200dae61 100644
@@ -58,7 +63,7 @@ index d614c7dc1..9200dae61 100644
  	},
  };
 diff --git a/src/mainboard/lenovo/haswell/mainboard.c b/src/mainboard/lenovo/haswell/mainboard.c
-index eae723fd7..c84f75183 100644
+index eae723fd7..088256b6d 100644
 --- a/src/mainboard/lenovo/haswell/mainboard.c
 +++ b/src/mainboard/lenovo/haswell/mainboard.c
 @@ -1,12 +1,23 @@
@@ -85,11 +90,28 @@ index eae723fd7..c84f75183 100644
  const char *smbios_mainboard_bios_version(void)
  {
  	/* Satisfy thinkpad_acpi. */
-@@ -23,6 +34,44 @@ static void mainboard_enable(struct device *dev)
+@@ -23,6 +34,59 @@ static void mainboard_enable(struct device *dev)
  					GMA_INT15_BOOT_DISPLAY_DEFAULT, 0);
  }
  
-+/* The same writes as the BCCS/BCSS methods that the OS uses */
++/*
++ * The same writes as the BCCS/BCSS methods that the OS uses. The EC is not
++ * asked for a start threshold above the stop one in effect, in case it
++ * refuses it: when the start one goes up past it, the stop one goes first.
++ */
++static void set_battery_thresholds(u8 start_reg, u8 stop_reg, u8 start, u8 stop)
++{
++	const u8 old_stop = ec_read(stop_reg) & 0x7f;
++
++	if (start >= old_stop) {
++		ec_write(stop_reg, stop);
++		ec_write(start_reg, start);
++	} else {
++		ec_write(start_reg, start);
++		ec_write(stop_reg, stop);
++	}
++}
++
 +static void set_battery_charge_limit(void)
 +{
 +	unsigned int start, stop;
@@ -115,10 +137,8 @@ index eae723fd7..c84f75183 100644
 +
 +	printk(BIOS_DEBUG, "EC: battery charge thresholds: start %u%%, stop %u%%\n",
 +	       start, stop);
-+	ec_write(EC_BAT0_START_THRESHOLD, start);
-+	ec_write(EC_BAT0_STOP_THRESHOLD, stop);
-+	ec_write(EC_BAT1_START_THRESHOLD, start);
-+	ec_write(EC_BAT1_STOP_THRESHOLD, stop);
++	set_battery_thresholds(EC_BAT0_START_THRESHOLD, EC_BAT0_STOP_THRESHOLD, start, stop);
++	set_battery_thresholds(EC_BAT1_START_THRESHOLD, EC_BAT1_STOP_THRESHOLD, start, stop);
 +}
 +
 +static void mainboard_final(void *chip_info)

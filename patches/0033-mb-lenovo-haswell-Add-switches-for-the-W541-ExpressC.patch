@@ -68,7 +68,7 @@ index 9200dae61..520fa6611 100644
  	},
  };
 diff --git a/src/mainboard/lenovo/haswell/mainboard.c b/src/mainboard/lenovo/haswell/mainboard.c
-index c84f75183..c411a0368 100644
+index 088256b6d..b234534ae 100644
 --- a/src/mainboard/lenovo/haswell/mainboard.c
 +++ b/src/mainboard/lenovo/haswell/mainboard.c
 @@ -27,11 +27,31 @@ const char *smbios_mainboard_bios_version(void)
@@ -102,7 +102,7 @@ index c84f75183..c411a0368 100644
 +	}
  }
  
- /* The same writes as the BCCS/BCSS methods that the OS uses */
+ /*
 -- 
 2.43.0
 
