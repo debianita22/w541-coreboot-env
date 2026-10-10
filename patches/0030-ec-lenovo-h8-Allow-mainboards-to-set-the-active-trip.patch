@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 9 Oct 2026 23:56:40 +0200
-Subject: [PATCH 30/35] ec/lenovo/h8: Allow mainboards to set the active trip
+Subject: [PATCH 30/36] ec/lenovo/h8: Allow mainboards to set the active trip
  point
 
 The active trip point of THM0, where the OS turns on the fan power

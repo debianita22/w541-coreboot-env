@@ -56,6 +56,9 @@ CONFIG_LINEAR_FRAMEBUFFER_MAX_HEIGHT=1080
 CONFIG_VGA_BIOS_DGPU=y
 CONFIG_VGA_BIOS_DGPU_FILE="w541/vbios_10de_11fc_1.rom"
 CONFIG_VGA_BIOS_DGPU_ID="10de,11fc"
+# Chiave Optimus per il driver NVIDIA di Windows (NVOP 0x10), da
+# blobs/opvk.inc: tools/build.sh la copia dove la include il DSDT
+CONFIG_LENOVO_HASWELL_NVIDIA_OPVK=y
 
 # Payload: EDK2 di MrChromebox al commit provato in QEMU
 CONFIG_PAYLOAD_EDK2=y

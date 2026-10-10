@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Sat, 10 Oct 2026 00:05:32 +0200
-Subject: [PATCH 35/35] mb/lenovo/haswell: Group the setup menu into categories
+Subject: [PATCH 35/36] mb/lenovo/haswell: Group the setup menu into categories
 
 The setup menu has three mainboard forms (System, Processor, Graphics)
 followed by the four generic H8 forms, and the new CPU, VT-d and iGPU

@@ -31,7 +31,8 @@
 #      coreboot completo
 #   3. CBFS: i file di ogni build; mrc.bin solo nella mrc, uguale a
 #      blobs/mrc.bin e a 0xFFFA0000, dove lo chiama la romstage;
-#      pci10de,11fc.rom uguale al VBIOS NVIDIA di blobs/
+#      pci10de,11fc.rom uguale al VBIOS NVIDIA di blobs/; la chiave Optimus
+#      di blobs/opvk.inc nel DSDT
 #   4. microcode per la CPU del W541 (CPUID 306C3) e voci microcode nel FIT
 #   5. vettore di reset: un jmp a 0xFFFFFFF0
 #   6. il .config dentro la ROM: board, RAM init della variante, IFD, ME
@@ -195,6 +196,24 @@ if has pci10de,11fc.rom && extract pci10de,11fc.rom "${TMP}/vbios.rom" \
 	ok "pci10de,11fc.rom uguale a blobs/vbios_10de_11fc_1.rom"
 else
 	bad "pci10de,11fc.rom assente o diverso da blobs/vbios_10de_11fc_1.rom"
+fi
+# la chiave Optimus di blobs/opvk.inc (byte 0x.. separati da virgola) nel DSDT
+if has fallback/dsdt.aml && extract fallback/dsdt.aml "${TMP}/dsdt.aml" \
+	&& [ -f "${O}/blobs/opvk.inc" ]; then
+	n="$(python3 -I - "${O}/blobs/opvk.inc" "${TMP}/dsdt.aml" <<'PY'
+import re, sys
+key = bytes(int(t, 16) for t in re.findall(r"0x[0-9a-fA-F]{2}", open(sys.argv[1]).read()))
+dsdt = open(sys.argv[2], "rb").read()
+print(len(key) if key and key in dsdt else 0)
+PY
+)"
+	if [ "${n:-0}" -gt 0 ]; then
+		ok "DSDT: chiave Optimus di blobs/opvk.inc (${n} byte)"
+	else
+		bad "DSDT: senza la chiave Optimus di blobs/opvk.inc"
+	fi
+else
+	bad "DSDT o blobs/opvk.inc non trovati per il controllo della chiave Optimus"
 fi
 
 # --- 4. microcode e FIT -------------------------------------------------------

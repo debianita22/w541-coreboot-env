@@ -9,7 +9,8 @@
 #   prepare        coreboot al commit pinnato (solo quel commit), i submodule
 #                  che servono dai mirror GitHub, le patch di patches/series,
 #                  i blob controllati con SHA256SUMS nella cartella w541/
-#                  dell'albero (e' li' che li cercano i defconfig); EDK2 al
+#                  dell'albero (e' li' che li cercano i defconfig) e la
+#                  chiave Optimus dove la include il DSDT; EDK2 al
 #                  commit dei defconfig con le patch di patches/edk2/series
 #                  e di patches/lvglpkg/series (il submodule LvglPkg)
 #   toolchain      il crossgcc di coreboot: i386 con Ada (libgfxinit), iasl e
@@ -74,6 +75,10 @@ EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 # defconfig li cercano li'. mrc.bin lo usa solo la variante mrc.
 TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
 	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp configs/w541.fmd)
+# La chiave Optimus (patch 0036, CONFIG_LENOVO_HASWELL_NVIDIA_OPVK): il DSDT
+# la include da questo file, che la patch fa ignorare a git
+OPVK_FILE=blobs/opvk.inc
+OPVK_TREE=src/mainboard/lenovo/haswell/acpi/opvk.inc
 
 # git am: il committer e le date fisse rendono uguale ogni volta il commit in
 # cima all'albero (genbuild_h.sh ne prende data e hash)
@@ -175,6 +180,7 @@ state() {
 		while read -r p; do sha256sum "patches/edk2/${p}"; done < <(series edk2)
 		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
 		for p in "${TREE_FILES[@]}"; do sha256sum "${p}"; done
+		sha256sum "${OPVK_FILE}"
 	) | sha256sum | cut -d' ' -f1
 }
 need_prepared() {
@@ -260,6 +266,8 @@ cmd_prepare() {
 		cp "${O}/${p}" "${TREE}/w541/"
 		echo "  w541/$(basename "${p}")"
 	done
+	cp "${O}/${OPVK_FILE}" "${TREE}/${OPVK_TREE}"
+	echo "  ${OPVK_TREE}"
 
 	prepare_edk2
 	state > "${STAMP}"

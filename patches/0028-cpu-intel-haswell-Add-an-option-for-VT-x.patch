@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 9 Oct 2026 23:55:12 +0200
-Subject: [PATCH 28/35] cpu/intel/haswell: Add an option for VT-x
+Subject: [PATCH 28/36] cpu/intel/haswell: Add an option for VT-x
 
 VMX is enabled according to ENABLE_VMX. Add a vmx option, defaulting to
 ENABLE_VMX, and a CFR object for it, so that it can be changed from the

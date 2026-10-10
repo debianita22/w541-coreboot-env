@@ -16,6 +16,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0025-0029 | options for the Haswell CPU and northbridge: graphics aperture (also with `mrc.bin`, reprogrammed after raminit), graphics stolen memory (native RAM init), SpeedStep, Turbo Boost, C-states, VT-x (a change applies through a full reset), VT-d |
 | 0030-0033 | options for the Haswell ThinkPads: cooling policy (active trip point from GNVS), battery charge threshold presets, ExpressCard and Thunderbolt ports on the W541 |
 | 0034-0035 | the setup menu in categories (General, Energy Saver, Security, Keyboard, Hardware), with the H8 options placed by the mainboard |
+| 0036 | the NVIDIA Optimus key for the Windows driver (NVOP function 0x10), included in the DSDT from `blobs/opvk.inc`, which `tools/build.sh` copies into the tree |
 
 ## EDK2 and LvglPkg
 
@@ -48,7 +49,6 @@ file names; `tools/verify-rom.sh --release` rejects such an image.
 |---|---|---|
 | `test-peg-afe` | programs the PEG PHY (AFE) recipe when neither MRC nor the native RAM init does, to compare dGPU link speed and AER errors | test: runs on every boot, whatever the NVIDIA GPU setting |
 | `test-charge-behaviour` | ACPI charge behaviour (inhibit charge, force discharge) on the W541, as on the T440p | test: the EC registers were only verified on the T440p |
-| `local-optimus-key` | returns the NVIDIA Optimus key that the Windows driver asks for, from a local `src/mainboard/lenovo/haswell/acpi/opvk.inc` | local only: the key belongs to NVIDIA, extract it from your own OEM firmware; never commit it |
 
 ## Updating the series
 

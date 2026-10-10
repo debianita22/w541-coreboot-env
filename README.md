@@ -71,7 +71,8 @@ Inside coreboot:
 - libgfxinit for the Intel GPU (no Intel VBIOS is executed);
 - the NVIDIA K2100M VBIOS, handed to the operating system through the ACPI
   `_ROM` method of the GPU, with runtime power management (the GPU is switched
-  off when idle) and its power state kept across suspend;
+  off when idle), its power state kept across suspend, and the Optimus key
+  the Windows NVIDIA driver asks for (`blobs/opvk.inc`);
 - CPU microcode from coreboot's `intel-microcode`, also referenced by the FIT;
 - a setup menu laid out like System Preferences (Esc at power-on): a grid
   of icons on a dark desktop, one per category, then the boot entries; each
@@ -178,11 +179,9 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 
 The images contain proprietary binaries that are not covered by the GPL: the
 Intel flash descriptor, ME firmware and `mrc.bin`, the GbE configuration and
-the NVIDIA VBIOS. They are published here by the owner of the laptop they come
-from; their redistribution terms are those of Intel, Lenovo and NVIDIA. The
-NVIDIA Optimus key that the Windows driver asks for is **not** in this
-repository: `patches/optional/local-optimus-key.patch` reads it from a local
-file that you extract from your own firmware.
+the NVIDIA VBIOS and the NVIDIA Optimus key (`blobs/opvk.inc`, from the
+Lenovo DSDT). They are published here by the owner of the laptop they come
+from; their redistribution terms are those of Intel, Lenovo and NVIDIA.
 
 ## License
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 9 Oct 2026 23:58:41 +0200
-Subject: [PATCH 32/35] mb/lenovo/haswell: Add battery charge threshold presets
+Subject: [PATCH 32/36] mb/lenovo/haswell: Add battery charge threshold presets
 
 The charge thresholds are only set by the OS, through the BCCS and BCSS
 methods. Add a battery_charge_limit option that writes them to the EC

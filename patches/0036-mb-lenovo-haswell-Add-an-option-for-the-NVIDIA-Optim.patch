@@ -1,20 +1,22 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Wed, 30 Sep 2026 23:14:02 +0200
-Subject: [PATCH] [LOCAL] mb/lenovo/haswell: Add NVIDIA Optimus key for Windows
+Subject: [PATCH 36/36] mb/lenovo/haswell: Add an option for the NVIDIA Optimus
+ key
 
-Not for upstream: the key belongs to NVIDIA and is not distributed
-with coreboot.
-
-The Windows NVIDIA driver requests an Optimus key through NVOP
-function 0x10 and keeps Optimus disabled without it. Add an option
-that returns the key from a local opvk.inc, extracted from the OEM
-firmware DSDT (buffer OPVK in method GOBT).
+The Windows NVIDIA driver requests an Optimus key through NVOP function
+0x10 and keeps Optimus disabled without it; the Linux drivers do not ask
+for it. Add LENOVO_HASWELL_NVIDIA_OPVK, which returns the key from
+src/mainboard/lenovo/haswell/acpi/opvk.inc: the bytes of the OPVK buffer
+that method GOBT of the OEM DSDT returns, as a comma-separated list. The
+key belongs to NVIDIA and is not part of coreboot: whoever builds with
+the option provides the file, which git ignores.
 
 TEST=Built for W541 with and without the option. NVOP 0x00 and 0x10
 results checked in acpiexec.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
  src/mainboard/lenovo/haswell/Kconfig         | 10 +++++++
@@ -24,10 +26,10 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  create mode 100644 src/mainboard/lenovo/haswell/acpi/.gitignore
 
 diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
-index 04b8c3e7c..38b6268ce 100644
+index ca8cf3c7d..991a90c3f 100644
 --- a/src/mainboard/lenovo/haswell/Kconfig
 +++ b/src/mainboard/lenovo/haswell/Kconfig
-@@ -108,4 +108,14 @@ config LENOVO_HASWELL_DGPU_RUNTIME_PM
+@@ -110,4 +110,14 @@ config LENOVO_HASWELL_DGPU_RUNTIME_PM
  	  power it off while it is idle, as the OEM firmware does. Only
  	  relevant with the "enable_dual_graphics" option enabled.
  
@@ -50,7 +52,7 @@ index 000000000..05470cdc5
 @@ -0,0 +1 @@
 +opvk.inc
 diff --git a/src/mainboard/lenovo/haswell/acpi/dgpu.asl b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
-index cebd5da62..4ea3bd7b9 100644
+index cebd5da62..34034d96a 100644
 --- a/src/mainboard/lenovo/haswell/acpi/dgpu.asl
 +++ b/src/mainboard/lenovo/haswell/acpi/dgpu.asl
 @@ -28,6 +28,7 @@
@@ -67,7 +69,7 @@ index cebd5da62..4ea3bd7b9 100644
  
 -	Method (NVOP, 1, Serialized)
 +#if CONFIG(LENOVO_HASWELL_NVIDIA_OPVK)
-+	/* Optimus key from the OEM firmware, not distributed with coreboot */
++	/* Optimus key from the OEM firmware, not part of coreboot */
 +	Name (OPVK, Buffer () {
 +		#include "opvk.inc"
 +	})

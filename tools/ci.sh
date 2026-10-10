@@ -237,8 +237,9 @@ with [${nedk2} patches](https://github.com/${repo}/blob/${sha}/patches/README.md
 to EDK2 and LvglPkg: the setup menu laid out like System Preferences, mouse
 support for the TrackPoint and the touchpad),
 libgfxinit for the Intel GPU, the NVIDIA Quadro K2100M VBIOS exposed to the OS
-through ACPI \`_ROM\`, CPU microcode from coreboot's intel-microcode. Built
-with the coreboot cross toolchain.
+through ACPI \`_ROM\` and the Optimus key the Windows NVIDIA driver asks for,
+CPU microcode from coreboot's intel-microcode. Built with the coreboot cross
+toolchain.
 EOF
 
 	# i cambi dall'ultima release di questa variante (pubblicata, antenata di

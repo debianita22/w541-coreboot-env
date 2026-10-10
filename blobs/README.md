@@ -15,6 +15,7 @@ rest of the repository.
 | `vbios_10de_11fc_1.rom` | 94.5 KiB | NVIDIA Quadro K2100M VBIOS (PCI `10de:11fc`) | yes, as `pci10de,11fc.rom`, handed to the OS through ACPI `_ROM` |
 | `vbios_8086_0406_1.rom` | 64 KiB | Intel HD Graphics 4600 VBIOS (PCI `8086:0406`), modified | no: libgfxinit initializes the Intel GPU |
 | `vbios_8086_0416_1.rom` | 64 KiB | Intel VBIOS with PCI ID `8086:0416`; its checksum byte is wrong | no |
+| `opvk.inc` | 230 bytes | NVIDIA Optimus key: the `OPVK` buffer that method `GOBT` of the Lenovo DSDT returns, as comma-separated bytes | yes, in the DSDT (patch 0036): the Windows NVIDIA driver asks for it through NVOP function 0x10 and keeps Optimus off without it; Linux does not need it |
 
 The descriptor, GbE and ME regions that the build produces from these files
 are byte-identical to the first 5 MiB of `legacy/coreboot-4.22/coreboot.rom`;
