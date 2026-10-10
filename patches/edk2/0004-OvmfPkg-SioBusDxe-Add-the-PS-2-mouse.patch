@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 01:22:44 +0200
+Subject: [PATCH 4/5] OvmfPkg/SioBusDxe: Add the PS/2 mouse
+
+SioBusDxe creates the COM ports and the PS/2 keyboard only, so
+Ps2MouseDxe, which binds to a PNP0F03 or PNP0F13 device, never starts:
+the TrackPoint and the touchpad of a laptop, on the auxiliary port of
+the keyboard controller, do not work in the firmware.
+
+Add a PS/2 mouse (PNP0F03). Ps2MouseDxe installs its simple pointer only
+when a keyboard controller answers and a device acknowledges on its
+auxiliary port (an absent mouse costs one 50 ms timeout), and the
+keyboard driver leaves the bytes of the auxiliary port to it: it stops
+reading when the status register flags them. Platforms without
+Ps2MouseDxe are not affected.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ OvmfPkg/SioBusDxe/SioService.c | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/OvmfPkg/SioBusDxe/SioService.c b/OvmfPkg/SioBusDxe/SioService.c
+index 66c5a08cf9..957b22c626 100644
+--- a/OvmfPkg/SioBusDxe/SioService.c
++++ b/OvmfPkg/SioBusDxe/SioService.c
+@@ -54,6 +54,17 @@ SIO_RESOURCES_IO  mPs2KeyboardDeviceResources = {
+   { ACPI_END_TAG_DESCRIPTOR, 0             }
+ };
+ 
++//
++// PS/2 Mouse, on the auxiliary port of the PS/2 keyboard controller
++//
++GLOBAL_REMOVE_IF_UNREFERENCED
++SIO_RESOURCES_IO  mPs2MouseDeviceResources = {
++  {
++    { ACPI_FIXED_LOCATION_IO_PORT_DESCRIPTOR }, 0x60, 5
++  },
++  { ACPI_END_TAG_DESCRIPTOR, 0             }
++};
++
+ //
+ // Table of SIO Controllers
+ //
+@@ -73,7 +84,12 @@ SIO_DEVICE_INFO  mDevicesInfo[] = {
+     EISA_PNP_ID (0x303),
+     0,
+     { (ACPI_SMALL_RESOURCE_HEADER *)&mPs2KeyboardDeviceResources }
+-  }   // PS/2 Keyboard Controller
++  },  // PS/2 Keyboard Controller
++  {
++    EISA_PNP_ID (0xF03),
++    0,
++    { (ACPI_SMALL_RESOURCE_HEADER *)&mPs2MouseDeviceResources    }
++  }   // PS/2 Mouse
+ };
+ 
+ //
+-- 
+2.43.0
+

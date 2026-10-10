@@ -9,7 +9,9 @@
 #   prepare        coreboot al commit pinnato (solo quel commit), i submodule
 #                  che servono dai mirror GitHub, le patch di patches/series,
 #                  i blob controllati con SHA256SUMS nella cartella w541/
-#                  dell'albero (e' li' che li cercano i defconfig)
+#                  dell'albero (e' li' che li cercano i defconfig); EDK2 al
+#                  commit dei defconfig con le patch di patches/edk2/series
+#                  e di patches/lvglpkg/series (il submodule LvglPkg)
 #   toolchain      il crossgcc di coreboot: i386 con Ada (libgfxinit), iasl e
 #                  nasm. La prima volta 30-60 minuti, poi resta in
 #                  util/crossgcc/xgcc dell'albero (e nella cache della CI)
@@ -59,6 +61,14 @@ SUBMODULES=(
 	"libgfxinit 3rdparty/libgfxinit https://github.com/coreboot/libgfxinit.git"
 	"intel-microcode 3rdparty/intel-microcode https://github.com/coreboot/intel-microcode.git"
 )
+
+# EDK2: il repository di MrChromebox (quello di CONFIG_EDK2_REPO_MRCHROMEBOX)
+# nella cartella dove lo cerca il Makefile del payload, e il commit dei
+# defconfig. Le patch vanno nell'albero come modifiche, non come commit: il
+# Makefile riporta al commit pinnato un albero pulito, ma uno con modifiche
+# lo lascia com'e' ("Working directory not clean; will not overwrite").
+EDK2_REPO="https://github.com/mrchromebox/edk2"
+EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 
 # I file di blobs/, assets/ e configs/ che vanno nell'albero (w541/<nome>): i
 # defconfig li cercano li'. mrc.bin lo usa solo la variante mrc.
@@ -142,9 +152,14 @@ fi
 TREE="${WORK}/coreboot"
 XGCC="${TREE}/util/crossgcc/xgcc"
 STAMP="${WORK}/prepared"
+EDK2_DIR="${TREE}/${EDK2_SUBDIR}"
 
-# Le patch di patches/series, una per riga (vuote e # saltate)
-series() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${O}/patches/series" | sed '/^$/d'; }
+# Le patch di patches/series (o di patches/$1/series), una per riga (vuote e
+# # saltate)
+series() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${O}/patches/${1:+$1/}series" | sed '/^$/d'; }
+
+# Il commit di EDK2, lo stesso nei due defconfig (ci-check.sh lo controlla)
+edk2_rev() { sed -n 's/^CONFIG_EDK2_TAG_OR_REV="\([0-9a-f]\{40\}\)"$/\1/p' "${O}/configs/w541-mrc.defconfig"; }
 
 # L'impronta di cio' che prepare mette nell'albero: commit, patch, blob. Le
 # altre fasi la confrontano con quella scritta da prepare.
@@ -156,6 +171,9 @@ state() {
 		local p
 		while read -r p; do sha256sum "patches/${p}"; done < <(series)
 		for p in "${WITH[@]}"; do sha256sum "patches/optional/${p}.patch"; done
+		edk2_rev
+		while read -r p; do sha256sum "patches/edk2/${p}"; done < <(series edk2)
+		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
 		for p in "${TREE_FILES[@]}"; do sha256sum "${p}"; done
 	) | sha256sum | cut -d' ' -f1
 }
@@ -242,7 +260,57 @@ cmd_prepare() {
 		cp "${O}/${p}" "${TREE}/w541/"
 		echo "  w541/$(basename "${p}")"
 	done
+
+	prepare_edk2
 	state > "${STAMP}"
+}
+
+# EDK2 al commit dei defconfig, i submodule ai loro commit, poi le patch
+# applicate come modifiche: patches/edk2 sull'albero, patches/lvglpkg sul
+# submodule LvglPkg. Il clone e' parziale (--filter=blob:none): la storia
+# senza il contenuto dei file, che arriva solo per i commit pinnati.
+prepare_edk2() {
+	local rev p n
+	rev="$(edk2_rev)"
+	[ -n "${rev}" ] || die "configs/w541-mrc.defconfig: CONFIG_EDK2_TAG_OR_REV non e' un commit intero"
+	say "EDK2 ${rev:0:12}"
+	if [ ! -d "${EDK2_DIR}/.git" ]; then
+		rm -rf "${EDK2_DIR}"
+		mkdir -p "$(dirname "${EDK2_DIR}")"
+		git clone -q --filter=blob:none --no-checkout "${EDK2_REPO}" "${EDK2_DIR}" \
+			|| die "EDK2: clone da ${EDK2_REPO} fallito"
+	fi
+	if ! git -C "${EDK2_DIR}" cat-file -e "${rev}^{commit}" 2>/dev/null; then
+		git -C "${EDK2_DIR}" fetch -q origin || die "EDK2: fetch da ${EDK2_REPO} fallito"
+	fi
+	# Di nuovo al commit pinnato: via le patch di un giro precedente, i file
+	# nuovi che avevano creato e il Logo.bmp che riscrive la build. Restano i
+	# file ignorati (BaseTools compilati).
+	git -C "${EDK2_DIR}" checkout -q --force --detach "${rev}" || die "EDK2: ${rev} non c'e' in ${EDK2_REPO}"
+	git -C "${EDK2_DIR}" clean -q -fd
+	git -C "${EDK2_DIR}" submodule update -q --init --force --recursive --filter=blob:none \
+		|| die "EDK2: submodule"
+	git -C "${EDK2_DIR}" submodule foreach -q --recursive 'git clean -q -fd'
+	[ -d "${EDK2_DIR}/LvglPkg/.git" ] || [ -f "${EDK2_DIR}/LvglPkg/.git" ] || die "EDK2: senza il submodule LvglPkg"
+
+	# --whitespace=nowarn: le righe CRLF dei file di EDK2 per git apply sono
+	# spazi in fondo alla riga
+	n=0
+	while read -r p; do
+		[ -f "${O}/patches/edk2/${p}" ] || die "patches/edk2/series: ${p} non c'e'"
+		git -C "${EDK2_DIR}" apply --whitespace=nowarn "${O}/patches/edk2/${p}" \
+			|| die "patches/edk2/${p} non applica su EDK2 ${rev:0:12}"
+		n=$((n + 1))
+	done < <(series edk2)
+	echo "  ${n} patch di patches/edk2/series"
+	n=0
+	while read -r p; do
+		[ -f "${O}/patches/lvglpkg/${p}" ] || die "patches/lvglpkg/series: ${p} non c'e'"
+		git -C "${EDK2_DIR}/LvglPkg" apply --whitespace=nowarn "${O}/patches/lvglpkg/${p}" \
+			|| die "patches/lvglpkg/${p} non applica su LvglPkg $(git -C "${EDK2_DIR}/LvglPkg" rev-parse --short=12 HEAD)"
+		n=$((n + 1))
+	done < <(series lvglpkg)
+	echo "  ${n} patch di patches/lvglpkg/series (LvglPkg $(git -C "${EDK2_DIR}/LvglPkg" rev-parse --short=12 HEAD))"
 }
 
 # I sorgenti del crossgcc in util/crossgcc/tarballs/ prima di buildgcc, che
@@ -397,6 +465,8 @@ collect() {
 	{
 		echo "${n}"
 		echo "coreboot ${COREBOOT_DESCRIBE} (${COREBOOT_COMMIT}) + $(series | wc -l) patches (patches/series)"
+		echo "EDK2 $(edk2_rev) + $(series edk2 | wc -l) patches (patches/edk2/series)," \
+			"LvglPkg + $(series lvglpkg | wc -l) patches (patches/lvglpkg/series)"
 		local w
 		for w in "${WITH[@]}"; do echo "+ patches/optional/${w}.patch"; done
 		echo "CONFIG_LOCALVERSION=\"$(localversion "${v}")\""

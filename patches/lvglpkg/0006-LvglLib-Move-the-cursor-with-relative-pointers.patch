@@ -1,0 +1,282 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 01:22:07 +0200
+Subject: [PATCH 6/6] LvglLib: Move the cursor with relative pointers
+
+The pointer input device reads EFI_ABSOLUTE_POINTER_PROTOCOL only: USB
+mice through UsbMouseAbsolutePointerDxe, and touch screens. The
+TrackPoint and the touchpad of a laptop are PS/2 mice, which
+Ps2MouseDxe exposes as EFI_SIMPLE_POINTER_PROTOCOL, so they do not move
+the cursor.
+
+Read the simple pointer of the console (the ConSplitter, which merges
+all of them) too, once per frame like the absolute one. Its motion, in
+counts at the resolution of the protocol, moves the cursor 8 pixels per
+mm, twice as fast for the part of a read beyond 6 pixels; the fraction
+of a pixel is kept for the next read. The left button clicks. The
+cursor still appears only once a pointer moves or clicks.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Library/LvglLib/LvglLib.inf     |   1 +
+ Library/LvglLib/lv_port_indev.c | 158 +++++++++++++++++++++++++++++---
+ 2 files changed, 145 insertions(+), 14 deletions(-)
+
+diff --git a/Library/LvglLib/LvglLib.inf b/Library/LvglLib/LvglLib.inf
+index 4b8cca7..3e80d1e 100644
+--- a/Library/LvglLib/LvglLib.inf
++++ b/Library/LvglLib/LvglLib.inf
+@@ -521,6 +521,7 @@
+ [Protocols]
+   gEfiGraphicsOutputProtocolGuid
+   gEfiAbsolutePointerProtocolGuid
++  gEfiSimplePointerProtocolGuid
+   gEfiSimpleTextInputExProtocolGuid
+ 
+ [BuildOptions]
+diff --git a/Library/LvglLib/lv_port_indev.c b/Library/LvglLib/lv_port_indev.c
+index 16f8827..e39dc60 100644
+--- a/Library/LvglLib/lv_port_indev.c
++++ b/Library/LvglLib/lv_port_indev.c
+@@ -32,6 +32,12 @@
+  * the case where the protocol itself is absent at init time; the callback
+  * re-grabs mAbsPointer via HandleProtocol.
+  *
++ * Relative pointers (EFI_SIMPLE_POINTER_PROTOCOL: the PS/2 TrackPoint and
++ * touchpad of a laptop, through the ConSplitter) move the same cursor, read
++ * once per frame too. Their motion is in counts at the resolution of the
++ * protocol (counts per mm); it moves the cursor LVGL_POINTER_PX_PER_MM pixels
++ * per mm, twice as fast beyond LVGL_POINTER_ACCEL_PX pixels per read.
++ *
+  * --- Keyboard ---
+  * Custom keypad_read returns PRESSED while the EFI console buffer has a key and
+  * RELEASED when it is empty.  LVGL's long_press_repeat throttle governs the
+@@ -70,6 +76,13 @@ extern const lv_img_dsc_t mouse_cursor_icon;
+ //
+ #define LVGL_WHEEL_SCROLL_PIXELS      40
+ 
++//
++// Relative pointers: pixels per mm of motion, and the motion per read (in
++// pixels) beyond which it counts twice.
++//
++#define LVGL_POINTER_PX_PER_MM        8
++#define LVGL_POINTER_ACCEL_PX         6
++
+ /**********************
+  *  STATIC VARIABLES
+  **********************/
+@@ -87,6 +100,16 @@ STATIC UINT64                         mLastAbsZ      = 0;
+ STATIC INT32                          mWheelDelta    = 0;
+ STATIC BOOLEAN                        mLeftButton    = FALSE;
+ 
++//
++// Relative pointer state: the protocol, the fractions of a pixel left over
++// (in 1/256 px), the left button, and whether it has moved at all.
++//
++STATIC EFI_SIMPLE_POINTER_PROTOCOL    *mRelPointer   = NULL;
++STATIC INT64                          mRelRestX      = 0;
++STATIC INT64                          mRelRestY      = 0;
++STATIC BOOLEAN                        mRelLeftButton = FALSE;
++STATIC BOOLEAN                        mRelSeen       = FALSE;
++
+ //
+ // The mouse cursor image. Hidden until an absolute pointer (mouse) is actually
+ // present, so a machine with no mouse doesn't show a dead cursor stuck in the
+@@ -131,12 +154,103 @@ find_scrollable_at_point (
+   return NULL;
+ }
+ 
++//
++// Convert relative motion, in counts at Resolution counts per mm, to pixels.
++// Rest carries the fraction of a pixel (in 1/256 px) over to the next read.
++//
++STATIC
++INT32
++RelativeToPixels (
++  IN     INT32   Motion,
++  IN     UINT64  Resolution,
++  IN OUT INT64   *Rest
++  )
++{
++  INT64  Q8;
++  INT64  Limit;
++  INT64  Pixels;
++
++  if ((Motion == 0) || (Resolution == 0)) {
++    return 0;
++  }
++
++  Q8    = ((INT64)Motion * LVGL_POINTER_PX_PER_MM * 256) / (INT64)Resolution;
++  Limit = (INT64)LVGL_POINTER_ACCEL_PX * 256;
++  if (Q8 > Limit) {
++    Q8 += Q8 - Limit;
++  } else if (Q8 < -Limit) {
++    Q8 += Q8 + Limit;
++  }
++
++  Q8    += *Rest;
++  Pixels = Q8 / 256;
++  *Rest  = Q8 - Pixels * 256;
++  return (INT32)Pixels;
++}
++
++//
++// Read the relative pointer, if any, and move the cursor by its motion.
++//
++// @retval TRUE   The pointer moved or a button is down.
++// @retval FALSE  No activity.
++//
++STATIC
++BOOLEAN
++relative_pointer_read (
++  IN INT32  hor_res,
++  IN INT32  ver_res
++  )
++{
++  EFI_STATUS                Status;
++  EFI_SIMPLE_POINTER_STATE  RelState;
++  INT32                     Dx;
++  INT32                     Dy;
++
++  if (mRelPointer == NULL) {
++    gBS->HandleProtocol (
++           gST->ConsoleInHandle,
++           &gEfiSimplePointerProtocolGuid,
++           (VOID **)&mRelPointer);
++    if (mRelPointer == NULL) {
++      return FALSE;
++    }
++  }
++
++  Status = mRelPointer->GetState (mRelPointer, &RelState);
++  if (EFI_ERROR (Status)) {
++    //
++    // EFI_NOT_READY: no motion and no button change since the last read.
++    //
++    return mRelLeftButton;
++  }
++
++  Dx = RelativeToPixels (RelState.RelativeMovementX, mRelPointer->Mode->ResolutionX, &mRelRestX);
++  Dy = RelativeToPixels (RelState.RelativeMovementY, mRelPointer->Mode->ResolutionY, &mRelRestY);
++
++  mLastCursorX += Dx;
++  if (mLastCursorX > hor_res - 1) mLastCursorX = hor_res - 1;
++  if (mLastCursorX < 0)           mLastCursorX = 0;
++
++  mLastCursorY += Dy;
++  if (mLastCursorY > ver_res - 1) mLastCursorY = ver_res - 1;
++  if (mLastCursorY < 0)           mLastCursorY = 0;
++
++  mRelLeftButton = RelState.LeftButton;
++  if ((Dx != 0) || (Dy != 0) || mRelLeftButton) {
++    mRelSeen = TRUE;
++    return TRUE;
++  }
++
++  return FALSE;
++}
++
+ //
+ // Custom pointer read callback.
+ //
+ // Performs a single GetState() per frame, updating cursor position, button
+ // state, and the wheel accumulator.  Applies wheel scroll when the ratchet
+-// threshold is crossed.
++// threshold is crossed. A relative pointer, read after the absolute one,
++// moves the same cursor.
+ //
+ static void
+ mouse_read (
+@@ -153,6 +267,10 @@ mouse_read (
+   INT32                        hor_res;
+   INT32                        ver_res;
+ 
++  disp    = lv_indev_get_display (indev_drv);
++  hor_res = lv_display_get_horizontal_resolution (disp);
++  ver_res = lv_display_get_vertical_resolution (disp);
++
+   //
+   // Lazy-acquire the protocol -- succeeds after USB/ConSplitter have bound.
+   //
+@@ -164,35 +282,38 @@ mouse_read (
+   }
+ 
+   //
+-  // Report last position + RELEASED if the protocol is still absent or the
+-  // ConSplitter's virtual range is zero (USB not yet bound).
++  // Without an absolute pointer (the protocol is still absent or the
++  // ConSplitter's virtual range is zero: USB not yet bound), only a relative
++  // pointer can move the cursor.
+   //
+   if (mAbsPointer == NULL ||
+       mAbsPointer->Mode->AbsoluteMaxX == 0 ||
+       mAbsPointer->Mode->AbsoluteMaxY == 0)
+   {
+-    //
+-    // No pointer device: keep the cursor hidden so it doesn't sit dead in the
+-    // middle of the screen.
+-    //
+-    if (mCursorVisible && (mCursorObj != NULL)) {
++    mLeftButton = FALSE;
++    if (relative_pointer_read (hor_res, ver_res)) {
++      if (!mCursorVisible && (mCursorObj != NULL)) {
++        lv_obj_clear_flag (mCursorObj, LV_OBJ_FLAG_HIDDEN);
++        mCursorVisible = TRUE;
++      }
++    } else if (mCursorVisible && !mRelSeen && (mCursorObj != NULL)) {
++      //
++      // No pointer device: keep the cursor hidden so it doesn't sit dead in
++      // the middle of the screen.
++      //
+       lv_obj_add_flag (mCursorObj, LV_OBJ_FLAG_HIDDEN);
+       mCursorVisible = FALSE;
+     }
+ 
+     data->point.x = (lv_coord_t)mLastCursorX;
+     data->point.y = (lv_coord_t)mLastCursorY;
+-    data->state   = LV_INDEV_STATE_RELEASED;
++    data->state   = mRelLeftButton ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+     return;
+   }
+ 
+   RangeX = mAbsPointer->Mode->AbsoluteMaxX - mAbsPointer->Mode->AbsoluteMinX;
+   RangeY = mAbsPointer->Mode->AbsoluteMaxY - mAbsPointer->Mode->AbsoluteMinY;
+ 
+-  disp    = lv_indev_get_display (indev_drv);
+-  hor_res = lv_display_get_horizontal_resolution (disp);
+-  ver_res = lv_display_get_vertical_resolution (disp);
+-
+   Status = mAbsPointer->GetState (mAbsPointer, &AbsState);
+   if (!EFI_ERROR (Status)) {
+     INTN  PrevX = mLastCursorX;
+@@ -236,9 +357,17 @@ mouse_read (
+   }
+   // On EFI_NOT_READY (no state change since last call) keep last values.
+ 
++  //
++  // A relative pointer (TrackPoint, touchpad) next to the absolute one.
++  //
++  if (relative_pointer_read (hor_res, ver_res) && !mCursorVisible && (mCursorObj != NULL)) {
++    lv_obj_clear_flag (mCursorObj, LV_OBJ_FLAG_HIDDEN);
++    mCursorVisible = TRUE;
++  }
++
+   data->point.x = (lv_coord_t)mLastCursorX;
+   data->point.y = (lv_coord_t)mLastCursorY;
+-  data->state   = mLeftButton ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
++  data->state   = (mLeftButton || mRelLeftButton) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+   data->enc_diff = 0;
+ 
+   //
+@@ -523,6 +652,7 @@ void lv_port_indev_close (void)
+   }
+ 
+   mAbsPointer  = NULL;
++  mRelPointer  = NULL;
+   mWheelDelta  = 0;
+   mLastAbsZ    = 0;
+   indev_mouse  = NULL;
+-- 
+2.43.0
+

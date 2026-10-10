@@ -1,0 +1,6 @@
+0001-LvglPkg-Add-a-1.25x-UI-scale.patch
+0002-LvglPkg-Add-a-PCD-for-the-default-UI-scale.patch
+0003-LvglLib-Style-the-stock-widgets-from-LvglTheme.h.patch
+0004-LvglDisplayEngineDxe-Redesign-the-setup-UI-as-System.patch
+0005-LvglDisplayEngineDxe-Change-passwords-in-dialogs.patch
+0006-LvglLib-Move-the-cursor-with-relative-pointers.patch

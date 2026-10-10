@@ -1,0 +1,5122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 23:04:14 +0200
+Subject: [PATCH 4/6] LvglDisplayEngineDxe: Redesign the setup UI as System
+ Preferences
+
+Lay the setup UI out like the System Preferences of macOS, in a dark
+theme: a #121212 desktop, #2C2C2C windows and icons, a #007AFF accent.
+
+- A menu bar across the top of the screen: a symbol, the setup title and
+  the device model on the left; Secure Boot, USB storage, battery, date
+  and time on the right. A dock of key hints floats above the bottom
+  edge.
+- The front page is a grid of icons on the desktop: one rounded square
+  per entry, with a light shadow and a colored symbol, and the label
+  below it. The arrow keys move between the icons in all four directions
+  and a light-blue ring marks the focus; the help of the focused entry
+  is shown below the grid. The categories of the setup menu and the other
+  settings come first, then, after a divider, the boot entries and
+  reboot. Above the grid, an overview of the machine: a drawing of the
+  laptop, the model and the banner lines (firmware, processor, memory,
+  battery).
+- Every other form is a window with a gray title bar: window controls
+  (decorative; the close control marks unsaved changes), a back button
+  (ESC) and the centered title. Settings are grouped on rounded cards,
+  one per section, next to a help card. Menus whose entries all open
+  other forms (System Configuration) are laid out in titled areas, in
+  columns.
+- Check boxes are switches, one-of questions open a drop-down menu, and
+  dialogs are alerts with a symbol. Read-only strings show their value
+  like text lines. Help texts are reflowed for the help card: the line
+  breaks of the 80-column text UI are joined within a sentence.
+
+Sizes, colors and fonts come from LvglTheme.h and follow the UI scale.
+Only the built-in Montserrat fonts and LVGL symbols are used, without
+images or blur: the shadows of the windows, the dock and the icons are
+LVGL box shadows.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Include/Library/LvglThemeLib.h                |   38 +
+ Include/LvglTheme.h                           |  292 ++-
+ Library/LvglThemeLib/LvglThemeLib.c           |   69 +
+ LvglDisplayEngineDxe/LvglAptioChrome.c        | 1236 ++++++---
+ LvglDisplayEngineDxe/LvglAptioChrome.h        |   67 +-
+ LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf |    6 +
+ LvglDisplayEngineDxe/LvglFormRenderer.c       | 2292 +++++++++++++++--
+ 7 files changed, 3397 insertions(+), 603 deletions(-)
+
+diff --git a/Include/Library/LvglThemeLib.h b/Include/Library/LvglThemeLib.h
+index 03e0a38..cc47c9d 100644
+--- a/Include/Library/LvglThemeLib.h
++++ b/Include/Library/LvglThemeLib.h
+@@ -45,6 +45,44 @@ LvglThemeFontPopup (
+   VOID
+   );
+ 
++/**
++  Font for captions, section labels and help text: a step below the body
++  font (14 px at 1x).
++**/
++const lv_font_t *
++EFIAPI
++LvglThemeFontSmall (
++  VOID
++  );
++
++/**
++  Font for the device model in the front-page overview (24 px at 1x).
++**/
++const lv_font_t *
++EFIAPI
++LvglThemeFontIcon (
++  VOID
++  );
++
++/**
++  Font for the symbols of the front-page icon grid (32 px at 1x, 40 px
++  from 1.25x).
++**/
++const lv_font_t *
++EFIAPI
++LvglThemeFontTile (
++  VOID
++  );
++
++/**
++  Size an lv_switch (track and knob) for the body font.
++**/
++VOID
++EFIAPI
++LvglThemeStyleSwitch (
++  IN lv_obj_t  *Sw
++  );
++
+ VOID
+ EFIAPI
+ LvglThemeApplyBodyFont (
+diff --git a/Include/LvglTheme.h b/Include/LvglTheme.h
+index 3120324..fcf4eec 100644
+--- a/Include/LvglTheme.h
++++ b/Include/LvglTheme.h
+@@ -3,7 +3,14 @@
+ 
+   Edit the macros in this file and rebuild to restyle the LVGL HII form
+   renderer. All colors, fonts, padding, and radius values used by
+-  LvglFormRenderer.c flow through these macros.
++  LvglFormRenderer.c and LvglAptioChrome.c flow through these macros.
++
++  The layout follows a desktop: a thin menu bar across the top of the
++  screen and a dock of key hints floating above the bottom edge. The front
++  page is a grid of icons on the desktop, like System Preferences; every
++  other form is a rounded window with a gray title bar. Inside the window,
++  settings are grouped on rounded cards and the keyboard focus is an
++  accent-colored fill with white text; on the grid, an accent ring.
+ 
+   Fonts referenced here must be enabled in LvglPkg/lv_conf.h
+   (LV_FONT_MONTSERRAT_*).
+@@ -17,41 +24,44 @@
+ //
+ // Background colors (24-bit RGB; passed to lv_color_hex())
+ //
+-// NovaCore palette: near-black canvas, blue-tinted panels, accent blue.
++// Dark palette: #121212 desktop, #2C2C2C windows and icons, slightly
++// lighter cards, blue accent.
+ //
+-#define THEME_COLOR_BG_SCREEN     0x0F141A
+-#define THEME_COLOR_BG_PANEL      0x182328
+-#define THEME_COLOR_BG_PANEL_ELEV 0x23304A
+-#define THEME_COLOR_BG_DIALOG     0x1B2A3A
+-#define THEME_COLOR_BG_SEPARATOR  0x2A3A52
++#define THEME_COLOR_BG_SCREEN     0x2C2C2C
++#define THEME_COLOR_BG_PANEL      0x363638
++#define THEME_COLOR_BG_PANEL_ELEV 0x444446
++#define THEME_COLOR_BG_DIALOG     0x2C2C2C
++#define THEME_COLOR_BG_SEPARATOR  0x444446
+ 
+ //
+ // Text colors
+ //
+ #define THEME_COLOR_TEXT_TITLE     0xFFFFFF
+-#define THEME_COLOR_TEXT_PRIMARY   0xEAF2FF
+-#define THEME_COLOR_TEXT_SECONDARY 0x9FB0C8
+-#define THEME_COLOR_TEXT_DISABLED  0x6A7B92
++#define THEME_COLOR_TEXT_PRIMARY   0xF5F5F7
++#define THEME_COLOR_TEXT_SECONDARY 0xA1A1A6
++#define THEME_COLOR_TEXT_DISABLED  0x636366
+ #define THEME_COLOR_TEXT_LABEL     THEME_COLOR_TEXT_PRIMARY
+ #define THEME_COLOR_TEXT_POPUP     THEME_COLOR_TEXT_PRIMARY
+ 
+ //
+-// Row colors (default / hovered / focused).
++// Row colors (default / hovered / focused). The focused row is filled with
++// the accent and its text turns white.
+ //
+ #define THEME_COLOR_ROW_BG            THEME_COLOR_BG_PANEL
+-#define THEME_COLOR_ROW_BG_HOVER      0x1E2A3C
++#define THEME_COLOR_ROW_BG_HOVER      0x414144
++#define THEME_COLOR_ROW_BG_FOCUSED    THEME_COLOR_ACCENT
+ #define THEME_COLOR_ROW_TEXT          THEME_COLOR_TEXT_PRIMARY
+ #define THEME_COLOR_ROW_TEXT_FOCUSED  0xFFFFFF
+ #define THEME_COLOR_ROW_TEXT_DISABLED THEME_COLOR_TEXT_DISABLED
+ 
+ //
+-// Accent (focus ring + active selection).
++// Accent (focus fill, active selection, switches) and status colors.
+ //
+-#define THEME_COLOR_ACCENT        0x1A6FD8
+-#define THEME_COLOR_ACCENT_HOVER  0x2A85F0
+-#define THEME_COLOR_SUCCESS       0x2BC79F
+-#define THEME_COLOR_WARNING       0xE9A23B
+-#define THEME_COLOR_DANGER        0xE25555
++#define THEME_COLOR_ACCENT        0x007AFF
++#define THEME_COLOR_ACCENT_HOVER  0x409CFF
++#define THEME_COLOR_SUCCESS       0x30D158
++#define THEME_COLOR_WARNING       0xFF9F0A
++#define THEME_COLOR_DANGER        0xFF453A
+ 
+ //
+ // Accent (subtitle / focus highlight) -- LV_PALETTE_* enum value
+@@ -64,15 +74,14 @@
+ //   primary   -- focus outline, checked / selected fill, button background
+ //   secondary -- LVGL's secondary accent
+ //   dark      -- 1: dark widget surfaces with light text, 0: light ones
+-// The values below are LVGL's own defaults (blue, red, light).
+ //
+-#define THEME_COLOR_WIDGET_PRIMARY    0x2196F3
+-#define THEME_COLOR_WIDGET_SECONDARY  0xF44336
+-#define THEME_WIDGETS_DARK            0
++#define THEME_COLOR_WIDGET_PRIMARY    THEME_COLOR_ACCENT
++#define THEME_COLOR_WIDGET_SECONDARY  THEME_COLOR_ACCENT_HOVER
++#define THEME_WIDGETS_DARK            1
+ 
+ //
+ // Fonts -- must be enabled in lv_conf.h. Sizes scale with UiScale via
+-// LvglThemeFont*() (base: title 20, body/popup 16).
++// LvglThemeFont*() (base: title 20, body/popup 16, small 14, icon 24).
+ //
+ #define THEME_FONT_TITLE          LvglThemeFontTitle()
+ #define THEME_FONT_BODY           LvglThemeFontBody()
+@@ -87,9 +96,9 @@
+ #define THEME_PAD_PANEL           LvglThemePx(8)
+ #define THEME_PAD_ROW             LvglThemePx(4)
+ #define THEME_PAD_ROW_TIGHT       LvglThemePx(2)
+-#define THEME_PAD_DIALOG          LvglThemePx(16)
++#define THEME_PAD_DIALOG          LvglThemePx(20)
+ #define THEME_PAD_DIALOG_ROW_GAP  LvglThemePx(10)
+-#define THEME_PAD_DIALOG_COL_GAP  LvglThemePx(8)
++#define THEME_PAD_DIALOG_COL_GAP  LvglThemePx(10)
+ #define THEME_PAD_SCREEN_ROW_GAP  LvglThemePx(6)
+ #define THEME_PAD_PANEL_ROW_GAP   LvglThemePx(4)
+ #define THEME_PAD_LABEL_TOP       LvglThemePx(8)
+@@ -97,88 +106,213 @@
+ #define THEME_OVERLAY_OPA         LV_OPA_50
+ 
+ //
+-// Aptio-style chrome (header / subtitle / footer / wallpaper).
+-// Used by LvglDisplayEngineDxe/LvglAptioChrome.c.
++// Desktop: the flat backdrop behind the windows and the icon grid.
++//
++#define THEME_COLOR_BACKDROP          0x121212
++
+ //
+-#define THEME_COLOR_HEADER_BG_TOP     0x0B1218
+-#define THEME_COLOR_HEADER_BG_BOTTOM  0x16263F
++// Menu bar across the top of the screen: badge, title and model on the
++// left; Secure Boot, battery, date and time on the right.
++//
++#define THEME_MENUBAR_HEIGHT          LvglThemePx(26)
++#define THEME_COLOR_MENUBAR_BG        0x1E1E1E
++#define THEME_COLOR_MENUBAR_BORDER    0x2A2A2A
+ #define THEME_COLOR_HEADER_TEXT       0xFFFFFF
+-#define THEME_COLOR_HEADER_DIM        0x9FB0C8
+-#define THEME_COLOR_SUBTITLE_BG       0x182328
+-#define THEME_COLOR_SUBTITLE_TEXT     0xEAF2FF
+-#define THEME_COLOR_FOOTER_BG         0x0B1218
+-#define THEME_COLOR_FOOTER_TEXT       0xEAF2FF
+-#define THEME_COLOR_FOOTER_DIM        0x6A7B92
+-#define THEME_COLOR_HIGHLIGHT_ROW     THEME_COLOR_ACCENT
++#define THEME_COLOR_HEADER_DIM        THEME_COLOR_TEXT_SECONDARY
++#define THEME_HEADER_BADGE_SYMBOL     LV_SYMBOL_SETTINGS
++#define THEME_PAD_HEADER_X            LvglThemePx(14)
++#define THEME_PAD_HEADER_GAP          LvglThemePx(16)
+ 
+-#define THEME_HEADER_HEIGHT       LvglThemePx(44)
+-#define THEME_SUBTITLE_HEIGHT     LvglThemePx(28)
+-#define THEME_FOOTER_HEIGHT       LvglThemePx(32)
++//
++// Window: rounded, with a light shadow, between the menu bar and the dock.
++//
++#define THEME_RADIUS_FRAME            LvglThemePx(12)
++#define THEME_COLOR_FRAME_BG_TOP      THEME_COLOR_BG_SCREEN
++#define THEME_COLOR_FRAME_BG_BOTTOM   THEME_COLOR_BG_SCREEN
++#define THEME_COLOR_FRAME_BORDER      0x3A3A3C
++#define THEME_FRAME_SHADOW_WIDTH      LvglThemePx(28)
++#define THEME_FRAME_GAP               LvglThemePx(14)
+ 
+ //
+-// Chrome -- help pane (right column).
++// Window title bar: three decorative window controls, a back chevron (ESC),
++// the form title and "Edited" while there are unsaved changes.
++//
++#define THEME_SUBTITLE_HEIGHT         LvglThemePx(44)
++#define THEME_PAD_SUBTITLE_X          LvglThemePx(16)
++#define THEME_COLOR_TITLEBAR_BG       0x3A3A3C
++#define THEME_COLOR_TITLEBAR_BORDER   0x4A4A4C
++#define THEME_TRAFFIC_LIGHT_SIZE      LvglThemePx(12)
++#define THEME_COLOR_LIGHT_CLOSE       0xFF5F57
++#define THEME_COLOR_LIGHT_MINIMIZE    0xFEBC2E
++#define THEME_COLOR_LIGHT_ZOOM        0x28C840
++#define THEME_COLOR_LIGHT_DOT         0x4D0000
++
+ //
+-#define THEME_PAD_HELPPANE_X         LvglThemePx(14)
+-#define THEME_PAD_HELPPANE_Y         LvglThemePx(12)
+-#define THEME_PAD_HELPPANE_ROW_GAP   LvglThemePx(8)
++// Dock: the key hints, on a rounded bar floating above the bottom edge.
++//
++#define THEME_FOOTER_HEIGHT           LvglThemePx(38)
++#define THEME_DOCK_MARGIN             LvglThemePx(12)
++#define THEME_RADIUS_DOCK             LvglThemePx(12)
++#define THEME_COLOR_DOCK_BG           0x2C2C2C
++#define THEME_COLOR_DOCK_BORDER       0x3A3A3C
++#define THEME_DOCK_SHADOW_WIDTH       LvglThemePx(18)
++#define THEME_PAD_FOOTER_X            LvglThemePx(16)
++#define THEME_PAD_FOOTER_Y            LvglThemePx(2)
++#define THEME_PAD_FOOTER_COL_GAP      LvglThemePx(18)
++#define THEME_COLOR_FOOTER_TEXT       THEME_COLOR_TEXT_SECONDARY
+ 
+ //
+-// Chrome -- header / subtitle / content / footer paddings.
++// Key caps in the dock (one per registered hotkey + navigation keys).
+ //
+-#define THEME_PAD_HEADER_X           LvglThemePx(16)
+-#define THEME_PAD_SUBTITLE_X         LvglThemePx(16)
+-#define THEME_PAD_CONTENT_LEFT       LvglThemePx(24)
+-#define THEME_PAD_CONTENT_RIGHT      LvglThemePx(16)
+-#define THEME_PAD_CONTENT_Y          LvglThemePx(12)
+-#define THEME_PAD_CONTENT_ROW_GAP    LvglThemePx(6)
+-#define THEME_PAD_FOOTER_X           LvglThemePx(12)
+-#define THEME_PAD_FOOTER_Y           LvglThemePx(2)
+-#define THEME_PAD_FOOTER_COL_GAP     LvglThemePx(6)
++#define THEME_PAD_CHIP_X              LvglThemePx(7)
++#define THEME_PAD_CHIP_Y              LvglThemePx(2)
++#define THEME_PAD_CHIP_COL_GAP        LvglThemePx(8)
++#define THEME_RADIUS_CHIP             LvglThemePx(6)
++#define THEME_COLOR_KEYCAP_BG         0x3A3A3C
++#define THEME_COLOR_KEYCAP_BORDER     0x4E4E52
++#define THEME_COLOR_KEYCAP_TEXT       THEME_COLOR_TEXT_TITLE
+ 
+ //
+-// Footer "chip" widgets (one per registered hotkey + nav primitives).
++// Help card (inspector, right column of the window).
+ //
+-#define THEME_PAD_CHIP_X             LvglThemePx(8)
+-#define THEME_PAD_CHIP_Y             LvglThemePx(4)
+-#define THEME_PAD_CHIP_COL_GAP       LvglThemePx(6)
+-#define THEME_RADIUS_CHIP            LvglThemePx(4)
++#define THEME_COLOR_HELP_BG           THEME_COLOR_BG_PANEL
++#define THEME_HELP_BADGE_SIZE         LvglThemePx(20)
++#define THEME_PAD_HELPCARD_MARGIN     LvglThemePx(16)
++#define THEME_PAD_HELPPANE_X          LvglThemePx(16)
++#define THEME_PAD_HELPPANE_Y          LvglThemePx(14)
++#define THEME_PAD_HELPPANE_ROW_GAP    LvglThemePx(10)
+ 
+ //
+-// Form rows (StyleRow).
++// Window content.
+ //
+-#define THEME_RADIUS_ROW             LvglThemePx(4)
+-#define THEME_PAD_ROW_X              LvglThemePx(16)
+-#define THEME_PAD_ROW_Y              LvglThemePx(10)
+-#define THEME_BORDER_FOCUS           LvglThemePx(3)
++#define THEME_PAD_CONTENT_LEFT        LvglThemePx(20)
++#define THEME_PAD_CONTENT_RIGHT       LvglThemePx(16)
++#define THEME_PAD_CONTENT_Y           LvglThemePx(10)
++#define THEME_PAD_CONTENT_ROW_GAP     LvglThemePx(8)
+ 
+ //
+-// Generic 1 px separator/border thickness used between panes.
++// Settings cards: the rows that follow a subtitle are grouped on one card,
++// under the subtitle as a small section header.
++//
++#define THEME_COLOR_CARD_BG           THEME_COLOR_BG_PANEL
++#define THEME_COLOR_CARD_BORDER       0x414144
++#define THEME_COLOR_DIVIDER           0x444447
++#define THEME_COLOR_SECTION_TEXT      THEME_COLOR_TEXT_SECONDARY
++#define THEME_COLOR_VALUE_TEXT        THEME_COLOR_TEXT_SECONDARY
++#define THEME_RADIUS_CARD             LvglThemePx(10)
++#define THEME_PAD_CARD                LvglThemePx(4)
++#define THEME_PAD_SECTION_TOP         LvglThemePx(12)
++#define THEME_PAD_SECTION_X           LvglThemePx(12)
++
+ //
+-#define THEME_BORDER_PANE            LvglThemePx(1)
++// Menu symbols: white symbol on a colored rounded square (larger on the
++// front page, where the entries also show their help text).
++//
++#define THEME_ICON_SQUARE             LvglThemePx(22)
++#define THEME_ICON_SQUARE_LARGE       LvglThemePx(32)
++#define THEME_RADIUS_ICON             LvglThemePx(6)
++#define THEME_COLOR_ICON_BLUE         0x007AFF
++#define THEME_COLOR_ICON_GREEN        0x34C759
++#define THEME_COLOR_ICON_RED          0xFF3B30
++#define THEME_COLOR_ICON_ORANGE       0xFF9500
++#define THEME_COLOR_ICON_PURPLE       0xAF52DE
++#define THEME_COLOR_ICON_PINK         0xFF2D55
++#define THEME_COLOR_ICON_TEAL         0x30B0C7
++#define THEME_COLOR_ICON_GRAY         0x8E8E93
+ 
+ //
+-// Confirm/discard dialog card width as a percentage of the screen.
++// Form rows (StyleRow).
++//
++#define THEME_RADIUS_ROW              LvglThemePx(7)
++#define THEME_PAD_ROW_X               LvglThemePx(12)
++#define THEME_PAD_ROW_Y               LvglThemePx(8)
++#define THEME_PAD_ROW_GAP             LvglThemePx(12)
++#define THEME_BORDER_FOCUS            LvglThemePx(3)
++
++//
++// Front page: the overview (a drawing of the laptop, the device model and
++// the banner lines) above the menu, grouped by area in columns.
++//
++#define THEME_ABOUT_LAPTOP_WIDTH      LvglThemePx(132)
++#define THEME_ABOUT_LAPTOP_HEIGHT     LvglThemePx(84)
++#define THEME_COLOR_LAPTOP_LID        0x111113
++#define THEME_COLOR_LAPTOP_EDGE       0x48484C
++#define THEME_COLOR_LAPTOP_SCREEN_TOP 0x2F6FD0
++#define THEME_COLOR_LAPTOP_SCREEN_BOT 0x16243A
++#define THEME_COLOR_LAPTOP_BASE_TOP   0x5A5A5E
++#define THEME_COLOR_LAPTOP_BASE_BOT   0x2C2C2E
++#define THEME_ABOUT_KEY_WIDTH         LvglThemePx(110)
++#define THEME_PAD_ABOUT               LvglThemePx(22)
++#define THEME_PAD_AREA_GAP            LvglThemePx(16)
++#define THEME_PAD_AREA_HEADER_GAP     LvglThemePx(6)
++
+ //
+-#define THEME_DIALOG_WIDTH_PCT       50
++// Front page icon grid, on the desktop: a rounded #2C2C2C square with a
++// light shadow and a colored symbol, the label below it. The keyboard
++// focus is a light-blue ring around the square. The categories of the
++// setup menu and the other settings come first, then (after a divider) the
++// boot entries and reboot; the focused entry's help is shown below.
++//
++#define THEME_TILE_SQUARE             LvglThemePx(72)
++#define THEME_TILE_WIDTH              LvglThemePx(128)
++#define THEME_RADIUS_TILE             LvglThemePx(12)
++#define THEME_COLOR_TILE_BG           0x2C2C2C
++#define THEME_COLOR_TILE_BG_HOVER     0x363638
++#define THEME_COLOR_TILE_BG_PRESSED   0x404042
++#define THEME_COLOR_TILE_BORDER       0x3A3A3C
++#define THEME_TILE_SHADOW_WIDTH       LvglThemePx(14)
++#define THEME_TILE_SHADOW_OFFSET_Y    LvglThemePx(3)
++#define THEME_TILE_FOCUS_BORDER       LvglThemePx(3)
++#define THEME_PAD_TILE_FOCUS_GAP      LvglThemePx(3)
++#define THEME_COLOR_TILE_FOCUS        0x4DA3FF
++#define THEME_COLOR_TILE_LABEL        0xD1D1D6
++#define THEME_PAD_TILE_TOP            LvglThemePx(8)
++#define THEME_PAD_TILE_LABEL_GAP      LvglThemePx(10)
++#define THEME_PAD_TILE_GAP_X          LvglThemePx(20)
++#define THEME_PAD_TILE_GAP_Y          LvglThemePx(16)
++#define THEME_GRID_COLUMNS_MAX        7
++#define THEME_PAD_GRID_SECTION_GAP    LvglThemePx(18)
++#define THEME_PAD_HOME_X              LvglThemePx(48)
++#define THEME_COLOR_HOME_DIVIDER      0x2E2E30
++#define THEME_COLOR_GRID_CAPTION      THEME_COLOR_TEXT_SECONDARY
+ 
++//
++// Switches (checkbox questions), buttons, input fields and the drop-down
++// menu of a list question.
++//
++#define THEME_COLOR_SWITCH_OFF        0x545458
++#define THEME_COLOR_BUTTON_SECONDARY  0x48484A
++#define THEME_COLOR_FIELD_BG          0x1E1E1E
++#define THEME_COLOR_FIELD_BORDER      0x545458
++#define THEME_COLOR_MENU_BG           0x3A3A3C
++#define THEME_MENU_SHADOW_WIDTH       LvglThemePx(16)
+ 
+ //
+-// Content frame sizing (Graphical UI Configuration setup page / PCD defaults):
+-//   CenteredFrameEnabled    -- center UI in an aspect-ratio window
+-//   CenteredFrameHeightPct  -- frame height (% of display height)
+-//   CenteredFrameAspectNum, CenteredFrameAspectDen -- frame width = height * Num / Den
++// Dialogs: centered alert with a symbol, title, message and equal-width
++// buttons.
+ //
+-// Backdrop shown behind the centered content frame (the letterbox bars).
+-// Only used when PcdLvglCenteredFrameEnabled is TRUE.
++#define THEME_DIALOG_WIDTH            LvglThemePx(380)
++#define THEME_DIALOG_ICON_SIZE        LvglThemePx(52)
++#define THEME_DIALOG_SHADOW_WIDTH     LvglThemePx(28)
++
++//
++// Generic 1 px separator/border thickness used between panes.
+ //
+-#define THEME_COLOR_BACKDROP         0x05080B
++#define THEME_BORDER_PANE             LvglThemePx(1)
+ 
+ //
+-// Aptio-style chrome strings and layout overrides (platform DSC / PCD):
+-//   PcdLvglAptioHeaderTitle      -- header bar title (left)
+-//   PcdLvglAptioHeaderVendor     -- header bar vendor string (center)
+-//   PcdLvglHelpPaneWidthPct      -- help pane width (% of content row)
+-//   PcdLvglAptioSubtitleShowsDeviceModel -- device model in subtitle bar vs content
++// Window sizing (Graphical UI Configuration setup page / PCD defaults):
++//   CenteredFrameEnabled    -- center the window with an aspect ratio
++//   CenteredFrameHeightPct  -- window height (% of display height), capped
++//                              to the space between menu bar and dock
++//   CenteredFrameAspectNum, CenteredFrameAspectDen -- width = height * Num / Den
++//
++// Chrome strings and layout overrides (platform DSC / PCD):
++//   PcdLvglAptioHeaderTitle      -- title in the menu bar
++//   PcdLvglAptioHeaderVendor     -- extra text in the menu bar (optional)
++//   PcdLvglHelpPaneWidthPct      -- help card width (% of the window)
++//   PcdLvglAptioSubtitleShowsDeviceModel -- device model as the window
++//                                           title of the front page
+ //
+ #define APTIO_FOOTER_NAV_HINTS    LV_SYMBOL_UP LV_SYMBOL_DOWN " Select   Enter Confirm   Esc Exit   F9 Defaults   F10 Save"
+ #define APTIO_FOOTER_SYSINFO      "QEMU x86_64  |  OVMF"
+diff --git a/Library/LvglThemeLib/LvglThemeLib.c b/Library/LvglThemeLib/LvglThemeLib.c
+index 31a5f66..7d97476 100644
+--- a/Library/LvglThemeLib/LvglThemeLib.c
++++ b/Library/LvglThemeLib/LvglThemeLib.c
+@@ -98,6 +98,75 @@ LvglThemeFontPopup (
+   return LvglThemeFontBody ();
+ }
+ 
++const lv_font_t *
++EFIAPI
++LvglThemeFontSmall (
++  VOID
++  )
++{
++  if ((mScaleNum == 2) && (mScaleDen == 1)) {
++    return &lv_font_montserrat_24;
++  } else if ((mScaleNum == 3) && (mScaleDen == 2)) {
++    return &lv_font_montserrat_20;
++  } else if ((mScaleNum == 5) && (mScaleDen == 4)) {
++    return &lv_font_montserrat_16;
++  }
++
++  return &lv_font_montserrat_14;
++}
++
++const lv_font_t *
++EFIAPI
++LvglThemeFontIcon (
++  VOID
++  )
++{
++  if ((mScaleNum == 2) && (mScaleDen == 1)) {
++#if LV_FONT_MONTSERRAT_40
++    return &lv_font_montserrat_40;
++#endif
++  } else if ((mScaleNum == 3) && (mScaleDen == 2)) {
++#if LV_FONT_MONTSERRAT_32
++    return &lv_font_montserrat_32;
++#endif
++  } else if ((mScaleNum == 5) && (mScaleDen == 4)) {
++#if LV_FONT_MONTSERRAT_30
++    return &lv_font_montserrat_30;
++#endif
++  }
++
++  return &lv_font_montserrat_24;
++}
++
++const lv_font_t *
++EFIAPI
++LvglThemeFontTile (
++  VOID
++  )
++{
++  if (mScaleNum != mScaleDen) {
++#if LV_FONT_MONTSERRAT_40
++    return &lv_font_montserrat_40;
++#endif
++  }
++
++#if LV_FONT_MONTSERRAT_32
++  return &lv_font_montserrat_32;
++#else
++  return &lv_font_montserrat_24;
++#endif
++}
++
++VOID
++EFIAPI
++LvglThemeStyleSwitch (
++  IN lv_obj_t  *Sw
++  )
++{
++  lv_obj_set_size (Sw, (lv_coord_t)LvglThemePx (46), (lv_coord_t)LvglThemePx (24));
++  lv_obj_set_style_pad_all (Sw, (lv_coord_t)LvglThemePx (3), LV_PART_KNOB);
++}
++
+ VOID
+ EFIAPI
+ LvglThemeApplyBodyFont (
+diff --git a/LvglDisplayEngineDxe/LvglAptioChrome.c b/LvglDisplayEngineDxe/LvglAptioChrome.c
+index 16875dc..5aa9499 100644
+--- a/LvglDisplayEngineDxe/LvglAptioChrome.c
++++ b/LvglDisplayEngineDxe/LvglAptioChrome.c
+@@ -1,5 +1,7 @@
+ /** @file
+-  AMI Aptio-style chrome implementation.
++  Setup chrome: the menu bar across the top of the screen, the window (title
++  bar, content and help card) and the dock of key hints at the bottom. The
++  front page, an icon grid, sits on the desktop without a window.
+ 
+   Copyright (c) 2024-2026, Hamit Karaca. All rights reserved.<BR>
+   SPDX-License-Identifier: BSD-2-Clause-Patent
+@@ -10,17 +12,48 @@
+ #include <Library/BaseLib.h>
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
++#include <Library/DevicePathLib.h>
+ #include <Library/LvglUiConfigLib.h>
+ #include <Library/PcdLib.h>
++#include <Library/UefiBootServicesTableLib.h>
+ #include <Library/UefiRuntimeServicesTableLib.h>
+ #include <Library/HiiLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Library/PrintLib.h>
++#include <Guid/GlobalVariable.h>
+ #include <Guid/MdeModuleHii.h>
+-
+-STATIC lv_obj_t   *mClockLabel = NULL;
+-STATIC lv_timer_t *mClockTimer = NULL;
+-STATIC lv_obj_t   *mHelpLabel  = NULL;
++#include <IndustryStandard/SmBios.h>
++#include <Protocol/BatteryStatus.h>
++#include <Protocol/BlockIo.h>
++#include <Protocol/Smbios.h>
++
++//
++// Menu bar items refreshed by the clock timer: the clock every second (the
++// label only changes once a minute) and the battery every few seconds.
++//
++#define CHROME_BATTERY_REFRESH_TICKS  5
++
++STATIC lv_obj_t    *mClockLabel   = NULL;
++STATIC lv_obj_t    *mBatteryLabel = NULL;
++STATIC lv_timer_t  *mClockTimer   = NULL;
++STATIC UINTN       mBatteryTicks  = 0;
++STATIC lv_obj_t    *mHelpTitle    = NULL;
++STATIC lv_obj_t    *mHelpLabel    = NULL;
++STATIC lv_obj_t    *mBackButton   = NULL;
++
++//
++// Device model from SMBIOS, read once.
++//
++STATIC CHAR8    mDeviceModel[64];
++STATIC BOOLEAN  mDeviceModelRead = FALSE;
++
++//
++// UiApp front-page formset GUID. The front page has no help card (its
++// entries show their own help) and no back button.
++//
++STATIC CONST EFI_GUID  mChromeFrontPageFormSetGuid = {
++  0x9e0c30bc, 0x3f06, 0x4ba6, { 0x82, 0x88, 0x09, 0x17, 0x9b, 0x85, 0x5d, 0xbe }
++};
+ 
+ /**
+   UCS-2 -> UTF-8 (caller frees). Local copy to avoid cross-file linkage.
+@@ -68,7 +101,357 @@ ChromeUcs2ToUtf8 (
+ }
+ 
+ /**
+-  Refresh clock label with current EFI runtime time.
++  Create an unstyled, non-scrollable container: the building block of the
++  chrome, styled by the caller.
++**/
++STATIC
++lv_obj_t *
++ChromeBox (
++  IN lv_obj_t  *Parent
++  )
++{
++  lv_obj_t  *Box;
++
++  Box = lv_obj_create (Parent);
++  lv_obj_remove_style_all (Box);
++  lv_obj_clear_flag (Box, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Box, LV_OBJ_FLAG_CLICKABLE);
++  return Box;
++}
++
++/**
++  Create a label with the given font and color.
++**/
++STATIC
++lv_obj_t *
++ChromeLabel (
++  IN lv_obj_t         *Parent,
++  IN CONST CHAR8      *Text,
++  IN CONST lv_font_t  *Font,
++  IN UINT32           Color
++  )
++{
++  lv_obj_t  *Label;
++
++  Label = lv_label_create (Parent);
++  lv_label_set_text (Label, Text);
++  lv_obj_set_style_text_font (Label, Font, 0);
++  lv_obj_set_style_text_color (Label, lv_color_hex (Color), 0);
++  return Label;
++}
++
++/**
++  Create a filled circle.
++**/
++STATIC
++lv_obj_t *
++ChromeDot (
++  IN lv_obj_t  *Parent,
++  IN int32_t   Size,
++  IN UINT32    Color
++  )
++{
++  lv_obj_t  *Dot;
++
++  Dot = ChromeBox (Parent);
++  lv_obj_set_size (Dot, Size, Size);
++  lv_obj_set_style_radius (Dot, LV_RADIUS_CIRCLE, 0);
++  lv_obj_set_style_bg_color (Dot, lv_color_hex (Color), 0);
++  lv_obj_set_style_bg_opa (Dot, LV_OPA_COVER, 0);
++  return Dot;
++}
++
++/**
++  Create a flexible spacer that pushes the following items to the end of a
++  flex row.
++**/
++STATIC
++VOID
++ChromeSpacer (
++  IN lv_obj_t  *Row
++  )
++{
++  lv_obj_t  *Spacer;
++
++  Spacer = ChromeBox (Row);
++  lv_obj_set_height (Spacer, 1);
++  lv_obj_set_flex_grow (Spacer, 1);
++}
++
++/**
++  Set a label's text only when it changes, so that the once-a-second clock
++  refresh does not redraw an unchanged label.
++**/
++STATIC
++VOID
++ChromeSetLabelText (
++  IN lv_obj_t     *Label,
++  IN CONST CHAR8  *Text
++  )
++{
++  if (AsciiStrCmp (lv_label_get_text (Label), Text) != 0) {
++    lv_label_set_text (Label, Text);
++  }
++}
++
++/**
++  Return string number Index of an SMBIOS record, or NULL.
++**/
++STATIC
++CONST CHAR8 *
++ChromeSmbiosString (
++  IN EFI_SMBIOS_TABLE_HEADER  *Record,
++  IN SMBIOS_TABLE_STRING      Index
++  )
++{
++  CONST CHAR8  *Str;
++
++  if (Index == 0) {
++    return NULL;
++  }
++
++  Str = (CONST CHAR8 *)Record + Record->Length;
++  for ( ; Index > 1; Index--) {
++    if (*Str == '\0') {
++      return NULL;
++    }
++
++    Str += AsciiStrLen (Str) + 1;
++  }
++
++  return (*Str != '\0') ? Str : NULL;
++}
++
++CONST CHAR8 *
++EFIAPI
++AptioGetDeviceModel (
++  VOID
++  )
++{
++  EFI_SMBIOS_PROTOCOL      *Smbios;
++  EFI_SMBIOS_HANDLE        Handle;
++  EFI_SMBIOS_TYPE          Type;
++  EFI_SMBIOS_TABLE_HEADER  *Record;
++  SMBIOS_TABLE_TYPE1       *Type1;
++  CONST CHAR8              *Model;
++  CONST CHAR8              *Version;
++  UINTN                    Len;
++
++  if (mDeviceModelRead) {
++    return (mDeviceModel[0] != '\0') ? mDeviceModel : NULL;
++  }
++
++  mDeviceModelRead = TRUE;
++  if (EFI_ERROR (gBS->LocateProtocol (&gEfiSmbiosProtocolGuid, NULL, (VOID **)&Smbios))) {
++    return NULL;
++  }
++
++  Handle = SMBIOS_HANDLE_PI_RESERVED;
++  Type   = EFI_SMBIOS_TYPE_SYSTEM_INFORMATION;
++  if (EFI_ERROR (Smbios->GetNext (Smbios, &Handle, &Type, &Record, NULL))) {
++    return NULL;
++  }
++
++  Type1   = (SMBIOS_TABLE_TYPE1 *)Record;
++  Model   = ChromeSmbiosString (Record, Type1->ProductName);
++  Version = ChromeSmbiosString (Record, Type1->Version);
++
++  //
++  // ThinkPads can report the machine type (for example "20EF...") as the
++  // product name and the model as the version.
++  //
++  if (((Model == NULL) || ((Model[0] >= '0') && (Model[0] <= '9'))) &&
++      (Version != NULL) &&
++      (((Version[0] >= 'A') && (Version[0] <= 'Z')) || ((Version[0] >= 'a') && (Version[0] <= 'z'))))
++  {
++    Model = Version;
++  }
++
++  if (Model == NULL) {
++    return NULL;
++  }
++
++  AsciiStrnCpyS (mDeviceModel, sizeof (mDeviceModel), Model, sizeof (mDeviceModel) - 1);
++  for (Len = AsciiStrLen (mDeviceModel); (Len > 0) && (mDeviceModel[Len - 1] == ' '); Len--) {
++    mDeviceModel[Len - 1] = '\0';
++  }
++
++  return (mDeviceModel[0] != '\0') ? mDeviceModel : NULL;
++}
++
++/**
++  TRUE when this boot runs with Secure Boot enforced.
++**/
++STATIC
++BOOLEAN
++ChromeSecureBootEnabled (
++  VOID
++  )
++{
++  UINT8       Value;
++  UINTN       Size;
++  EFI_STATUS  Status;
++
++  Size   = sizeof (Value);
++  Status = gRT->GetVariable (EFI_SECURE_BOOT_MODE_NAME, &gEfiGlobalVariableGuid, NULL, &Size, &Value);
++  return (BOOLEAN)(!EFI_ERROR (Status) && (Size == sizeof (Value)) && (Value == 1));
++}
++
++/**
++  TRUE when a USB storage device is connected.
++**/
++STATIC
++BOOLEAN
++ChromeUsbStoragePresent (
++  VOID
++  )
++{
++  EFI_STATUS                Status;
++  EFI_HANDLE                *Handles;
++  UINTN                     Count;
++  UINTN                     Idx;
++  EFI_BLOCK_IO_PROTOCOL     *BlockIo;
++  EFI_DEVICE_PATH_PROTOCOL  *Node;
++  BOOLEAN                   Found;
++
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  Found = FALSE;
++  for (Idx = 0; (Idx < Count) && !Found; Idx++) {
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Idx], &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) ||
++        BlockIo->Media->LogicalPartition)
++    {
++      continue;
++    }
++
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Idx], &gEfiDevicePathProtocolGuid, (VOID **)&Node))) {
++      continue;
++    }
++
++    for ( ; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++      if ((DevicePathType (Node) == MESSAGING_DEVICE_PATH) &&
++          ((DevicePathSubType (Node) == MSG_USB_DP) ||
++           (DevicePathSubType (Node) == MSG_USB_CLASS_DP) ||
++           (DevicePathSubType (Node) == MSG_USB_WWID_DP)))
++      {
++        Found = TRUE;
++        break;
++      }
++    }
++  }
++
++  FreePool (Handles);
++  return Found;
++}
++
++/**
++  Read the battery level from the battery status protocol.
++**/
++STATIC
++EFI_STATUS
++ChromeReadBattery (
++  OUT UINT8    *Percent,
++  OUT BOOLEAN  *Charging
++  )
++{
++  EFI_BATTERY_STATUS_PROTOCOL  *Battery;
++  EFI_STATUS                   Status;
++  EFI_TPL                      OldTpl;
++  BOOLEAN                      Present;
++
++  Status = gBS->LocateProtocol (&gEfiBatteryStatusProtocolGuid, NULL, (VOID **)&Battery);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  //
++  // The front page polls the same EC from a TPL_CALLBACK timer: keep the
++  // two from interleaving their EC transactions.
++  //
++  OldTpl = gBS->RaiseTPL (TPL_HIGH_LEVEL);
++  gBS->RestoreTPL (OldTpl);
++  if (OldTpl < TPL_CALLBACK) {
++    OldTpl = gBS->RaiseTPL (TPL_CALLBACK);
++    Status = Battery->GetBatteryInfo (Battery, Percent, &Present, Charging);
++    gBS->RestoreTPL (OldTpl);
++  } else {
++    Status = Battery->GetBatteryInfo (Battery, Percent, &Present, Charging);
++  }
++
++  if (!EFI_ERROR (Status) && (!Present || (*Percent > 100))) {
++    Status = EFI_NOT_FOUND;
++  }
++
++  return Status;
++}
++
++/**
++  Refresh the battery item of the menu bar: level and symbol, hidden when
++  there is no battery.
++**/
++STATIC
++VOID
++ChromeRefreshBattery (
++  VOID
++  )
++{
++  UINT8        Percent;
++  BOOLEAN      Charging;
++  CONST CHAR8  *Symbol;
++  CHAR8        Buf[32];
++
++  if (mBatteryLabel == NULL) {
++    return;
++  }
++
++  if (EFI_ERROR (ChromeReadBattery (&Percent, &Charging))) {
++    lv_obj_add_flag (mBatteryLabel, LV_OBJ_FLAG_HIDDEN);
++    return;
++  }
++
++  if (Percent >= 90) {
++    Symbol = LV_SYMBOL_BATTERY_FULL;
++  } else if (Percent >= 65) {
++    Symbol = LV_SYMBOL_BATTERY_3;
++  } else if (Percent >= 40) {
++    Symbol = LV_SYMBOL_BATTERY_2;
++  } else if (Percent >= 15) {
++    Symbol = LV_SYMBOL_BATTERY_1;
++  } else {
++    Symbol = LV_SYMBOL_BATTERY_EMPTY;
++  }
++
++  AsciiSPrint (Buf, sizeof (Buf), "%d%%  %a%a", Percent, Symbol, Charging ? " " LV_SYMBOL_CHARGE : "");
++  ChromeSetLabelText (mBatteryLabel, Buf);
++  lv_obj_clear_flag (mBatteryLabel, LV_OBJ_FLAG_HIDDEN);
++}
++
++/**
++  Day of the week, 0 = Sunday (Sakamoto's method).
++**/
++STATIC
++UINTN
++ChromeDayOfWeek (
++  IN UINTN  Year,
++  IN UINTN  Month,
++  IN UINTN  Day
++  )
++{
++  STATIC CONST UINT8  Offset[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
++
++  if (Month < 3) {
++    Year--;
++  }
++
++  return (Year + Year / 4 - Year / 100 + Year / 400 + Offset[Month - 1] + Day) % 7;
++}
++
++/**
++  Refresh the date and time of the menu bar ("Fri 9 Oct  21:59") and, every
++  few ticks, the battery.
+ **/
+ STATIC
+ VOID
+@@ -76,76 +459,116 @@ ClockTimerCb (
+   lv_timer_t  *Timer
+   )
+ {
++  STATIC CONST CHAR8  *Days[]   = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
++  STATIC CONST CHAR8  *Months[] = {
++    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
++  };
+   EFI_TIME    Time;
+   EFI_STATUS  Status;
+   CHAR8       Buf[32];
+ 
+-  if ((mClockLabel == NULL) || (gRT == NULL)) {
+-    return;
+-  }
++  (VOID)Timer;
+ 
+-  Status = gRT->GetTime (&Time, NULL);
+-  if (EFI_ERROR (Status)) {
+-    lv_label_set_text (mClockLabel, "--:--:--");
+-    return;
++  if ((mClockLabel != NULL) && (gRT != NULL)) {
++    Status = gRT->GetTime (&Time, NULL);
++    if (EFI_ERROR (Status) || (Time.Month < 1) || (Time.Month > 12) || (Time.Day < 1) || (Time.Year < 1)) {
++      ChromeSetLabelText (mClockLabel, "");
++    } else {
++      AsciiSPrint (
++        Buf,
++        sizeof (Buf),
++        "%a %d %a  %02d:%02d",
++        Days[ChromeDayOfWeek (Time.Year, Time.Month, Time.Day)],
++        Time.Day,
++        Months[Time.Month - 1],
++        Time.Hour,
++        Time.Minute
++        );
++      ChromeSetLabelText (mClockLabel, Buf);
++    }
+   }
+ 
+-  AsciiSPrint (
+-    Buf,
+-    sizeof (Buf),
+-    "%02d:%02d:%02d   %04d-%02d-%02d",
+-    Time.Hour, Time.Minute, Time.Second,
+-    Time.Year, Time.Month, Time.Day
+-    );
+-  lv_label_set_text (mClockLabel, Buf);
++  if (++mBatteryTicks >= CHROME_BATTERY_REFRESH_TICKS) {
++    mBatteryTicks = 0;
++    ChromeRefreshBattery ();
++  }
+ }
+ 
+ /**
+-  Build the gradient header bar with title (left), vendor (center), clock (right).
++  Build the menu bar across the top of the screen: settings symbol, setup
++  title and device model on the left; Secure Boot state, USB storage,
++  battery, date and time on the right.
+ **/
+ STATIC
+ VOID
+-BuildHeader (
++BuildMenuBar (
+   IN lv_obj_t  *Screen
+   )
+ {
+-  lv_obj_t  *Bar;
+-  lv_obj_t  *Title;
+-  lv_obj_t  *Vendor;
+-
+-  Bar = lv_obj_create (Screen);
+-  lv_obj_remove_style_all (Bar);
+-  lv_obj_set_size (Bar, LV_PCT (100), THEME_HEADER_HEIGHT);
+-  lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_HEADER_BG_TOP), 0);
+-  lv_obj_set_style_bg_grad_color (Bar, lv_color_hex (THEME_COLOR_HEADER_BG_BOTTOM), 0);
+-  lv_obj_set_style_bg_grad_dir (Bar, LV_GRAD_DIR_VER, 0);
++  lv_obj_t         *Bar;
++  lv_obj_t         *Item;
++  CONST lv_font_t  *Font;
++  CONST CHAR8      *Model;
++  CONST CHAR8      *Vendor;
++  BOOLEAN          SecureBoot;
++
++  Font = LvglThemeFontSmall ();
++
++  Bar = ChromeBox (Screen);
++  lv_obj_set_size (Bar, LV_PCT (100), THEME_MENUBAR_HEIGHT);
++  lv_obj_align (Bar, LV_ALIGN_TOP_MID, 0, 0);
++  lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_MENUBAR_BG), 0);
+   lv_obj_set_style_bg_opa (Bar, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_side (Bar, LV_BORDER_SIDE_BOTTOM, 0);
++  lv_obj_set_style_border_width (Bar, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_border_color (Bar, lv_color_hex (THEME_COLOR_MENUBAR_BORDER), 0);
+   lv_obj_set_style_pad_left (Bar, THEME_PAD_HEADER_X, 0);
+   lv_obj_set_style_pad_right (Bar, THEME_PAD_HEADER_X, 0);
+-  lv_obj_set_style_pad_top (Bar, 0, 0);
+-  lv_obj_set_style_pad_bottom (Bar, 0, 0);
+-  lv_obj_clear_flag (Bar, LV_OBJ_FLAG_SCROLLABLE);
+-
+-  // Left: brand title
+-  Title = lv_label_create (Bar);
+-  lv_label_set_text (Title, (CONST CHAR8 *)PcdGetPtr (PcdLvglAptioHeaderTitle));
+-  lv_obj_set_style_text_font (Title, THEME_FONT_TITLE, 0);
+-  lv_obj_set_style_text_color (Title, lv_color_hex (THEME_COLOR_HEADER_TEXT), 0);
+-  lv_obj_align (Title, LV_ALIGN_LEFT_MID, 0, 0);
+-
+-  // Center: vendor / version (dimmed)
+-  Vendor = lv_label_create (Bar);
+-  lv_label_set_text (Vendor, (CONST CHAR8 *)PcdGetPtr (PcdLvglAptioHeaderVendor));
+-  THEME_APPLY_BODY_FONT (Vendor);
+-  lv_obj_set_style_text_color (Vendor, lv_color_hex (THEME_COLOR_HEADER_DIM), 0);
+-  lv_obj_align (Vendor, LV_ALIGN_CENTER, 0, 0);
+-
+-  // Right: clock
+-  mClockLabel = lv_label_create (Bar);
+-  THEME_APPLY_BODY_FONT (mClockLabel);
+-  lv_obj_set_style_text_color (mClockLabel, lv_color_hex (THEME_COLOR_HEADER_TEXT), 0);
+-  lv_obj_align (mClockLabel, LV_ALIGN_RIGHT_MID, 0, 0);
+-  lv_label_set_text (mClockLabel, "");
++  lv_obj_set_style_pad_column (Bar, THEME_PAD_HEADER_GAP, 0);
++  lv_obj_set_flex_flow (Bar, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++
++  ChromeLabel (Bar, THEME_HEADER_BADGE_SYMBOL, Font, THEME_COLOR_HEADER_TEXT);
++  ChromeLabel (Bar, (CONST CHAR8 *)PcdGetPtr (PcdLvglAptioHeaderTitle), Font, THEME_COLOR_HEADER_TEXT);
++
++  Model = AptioGetDeviceModel ();
++  if (Model != NULL) {
++    ChromeLabel (Bar, Model, Font, THEME_COLOR_HEADER_DIM);
++  }
++
++  Vendor = (CONST CHAR8 *)PcdGetPtr (PcdLvglAptioHeaderVendor);
++  if ((Vendor != NULL) && (Vendor[0] != '\0')) {
++    ChromeLabel (Bar, Vendor, Font, THEME_COLOR_HEADER_DIM);
++  }
++
++  ChromeSpacer (Bar);
++
++  //
++  // Secure Boot: a green dot when enforced, a gray one when not.
++  //
++  SecureBoot = ChromeSecureBootEnabled ();
++  Item       = ChromeBox (Bar);
++  lv_obj_set_size (Item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_style_pad_column (Item, LvglThemePx (6), 0);
++  lv_obj_set_flex_flow (Item, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++  ChromeDot (Item, LvglThemePx (8), SecureBoot ? THEME_COLOR_SUCCESS : THEME_COLOR_TEXT_DISABLED);
++  ChromeLabel (
++    Item,
++    SecureBoot ? "Secure Boot" : "Secure Boot Off",
++    Font,
++    SecureBoot ? THEME_COLOR_HEADER_TEXT : THEME_COLOR_HEADER_DIM
++    );
++
++  if (ChromeUsbStoragePresent ()) {
++    ChromeLabel (Bar, LV_SYMBOL_USB, Font, THEME_COLOR_HEADER_TEXT);
++  }
++
++  mBatteryLabel = ChromeLabel (Bar, "", Font, THEME_COLOR_HEADER_TEXT);
++  ChromeRefreshBattery ();
++
++  mClockLabel = ChromeLabel (Bar, "", Font, THEME_COLOR_HEADER_TEXT);
++  mBatteryTicks = 0;
+   ClockTimerCb (NULL);
+   mClockTimer = lv_timer_create (ClockTimerCb, 1000, NULL);
+ }
+@@ -225,47 +648,118 @@ FindCenterBannerUtf8 (
+ }
+ 
+ /**
+-  Build the subtitle bar.
+-
+-  When SubtitleShowsDeviceModel is enabled in Graphical UI Configuration, the
+-  centered front-page banner (device model) is shown here; otherwise the form
+-  title is shown.
++  Build the window title bar: a gray bar with the three window controls, a
++  back button (except on the front page) and, centered, the form title,
++  followed by "Edited" while the form has unsaved changes, which also marks
++  the close control.
++
++  The front page, when it is not an icon grid, shows the device model as
++  its title when SubtitleShowsDeviceModel is enabled in Graphical UI
++  Configuration, and no title otherwise (its overview shows the model).
+ **/
+ STATIC
+ VOID
+-BuildSubtitleBar (
+-  IN lv_obj_t                    *Screen,
++BuildTitleBar (
++  IN lv_obj_t                    *Window,
++  IN int32_t                     Width,
+   IN FORM_DISPLAY_ENGINE_FORM    *FormData,
++  IN BOOLEAN                     IsFrontPage,
+   IN BOOLEAN                     SubtitleShowsDeviceModel
+   )
+ {
+   lv_obj_t  *Bar;
++  lv_obj_t  *Strip;
++  lv_obj_t  *Row;
++  lv_obj_t  *Lights;
++  lv_obj_t  *Close;
++  lv_obj_t  *Symbol;
++  lv_obj_t  *TitleBox;
+   lv_obj_t  *Label;
+   CHAR16    *Str16;
+   CHAR8     *Utf8;
++  BOOLEAN   Edited;
++  int32_t   Radius;
++
++  Edited = (BOOLEAN)((FormData != NULL) && FormData->SettingChangedFlag);
++
++  //
++  // The bar follows the rounded top corners of the window (inside its
++  // border); a strip of the same gray squares off its bottom corners, and
++  // a divider separates it from the content.
++  //
++  Radius = (int32_t)(THEME_RADIUS_FRAME - THEME_BORDER_PANE);
+ 
+-  Bar = lv_obj_create (Screen);
+-  lv_obj_remove_style_all (Bar);
++  Bar = ChromeBox (Window);
+   lv_obj_set_size (Bar, LV_PCT (100), THEME_SUBTITLE_HEIGHT);
+-  lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_SUBTITLE_BG), 0);
+-  lv_obj_set_style_bg_opa (Bar, LV_OPA_80, 0);
+-  lv_obj_set_style_border_color (Bar, lv_color_hex (THEME_COLOR_HIGHLIGHT_ROW), 0);
+-  lv_obj_set_style_border_width (Bar, 0, 0);
+-  lv_obj_set_style_border_side (Bar, LV_BORDER_SIDE_LEFT, 0);
+-  lv_obj_set_style_pad_left (Bar, THEME_PAD_SUBTITLE_X, 0);
+-  lv_obj_set_style_pad_right (Bar, THEME_PAD_SUBTITLE_X, 0);
+-  lv_obj_set_style_pad_top (Bar, 0, 0);
+-  lv_obj_set_style_pad_bottom (Bar, 0, 0);
+-  lv_obj_clear_flag (Bar, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_set_style_radius (Bar, Radius, 0);
++  lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_TITLEBAR_BG), 0);
++  lv_obj_set_style_bg_opa (Bar, LV_OPA_COVER, 0);
+ 
+-  Str16 = NULL;
+-  Utf8  = NULL;
++  Strip = ChromeBox (Bar);
++  lv_obj_set_size (Strip, LV_PCT (100), Radius);
++  lv_obj_align (Strip, LV_ALIGN_BOTTOM_MID, 0, 0);
++  lv_obj_set_style_bg_color (Strip, lv_color_hex (THEME_COLOR_TITLEBAR_BG), 0);
++  lv_obj_set_style_bg_opa (Strip, LV_OPA_COVER, 0);
++
++  Strip = ChromeBox (Bar);
++  lv_obj_set_size (Strip, LV_PCT (100), THEME_BORDER_PANE);
++  lv_obj_align (Strip, LV_ALIGN_BOTTOM_MID, 0, 0);
++  lv_obj_set_style_bg_color (Strip, lv_color_hex (THEME_COLOR_TITLEBAR_BORDER), 0);
++  lv_obj_set_style_bg_opa (Strip, LV_OPA_COVER, 0);
++
++  Row = ChromeBox (Bar);
++  lv_obj_set_size (Row, LV_PCT (100), LV_PCT (100));
++  lv_obj_set_style_pad_left (Row, THEME_PAD_SUBTITLE_X, 0);
++  lv_obj_set_style_pad_right (Row, THEME_PAD_SUBTITLE_X, 0);
++  lv_obj_set_style_pad_column (Row, LvglThemePx (12), 0);
++  lv_obj_set_flex_flow (Row, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++
++  //
++  // Window controls (decorative).
++  //
++  Lights = ChromeBox (Row);
++  lv_obj_set_size (Lights, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_style_pad_column (Lights, LvglThemePx (8), 0);
++  lv_obj_set_style_margin_right (Lights, LvglThemePx (10), 0);
++  lv_obj_set_flex_flow (Lights, LV_FLEX_FLOW_ROW);
++
++  Close = ChromeDot (Lights, THEME_TRAFFIC_LIGHT_SIZE, THEME_COLOR_LIGHT_CLOSE);
++  if (Edited) {
++    lv_obj_center (ChromeDot (Close, LvglThemePx (4), THEME_COLOR_LIGHT_DOT));
++  }
++
++  ChromeDot (Lights, THEME_TRAFFIC_LIGHT_SIZE, THEME_COLOR_LIGHT_MINIMIZE);
++  ChromeDot (Lights, THEME_TRAFFIC_LIGHT_SIZE, THEME_COLOR_LIGHT_ZOOM);
+ 
+-  if (SubtitleShowsDeviceModel) {
+-    Utf8 = FindCenterBannerUtf8 (FormData);
++  //
++  // Back button: ESC, also usable with a pointer (the renderer binds it).
++  //
++  if (!IsFrontPage) {
++    mBackButton = lv_obj_create (Row);
++    lv_obj_remove_style_all (mBackButton);
++    lv_obj_set_size (mBackButton, LvglThemePx (30), LvglThemePx (26));
++    lv_obj_clear_flag (mBackButton, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_style_radius (mBackButton, THEME_RADIUS_CHIP, 0);
++    lv_obj_set_style_bg_color (mBackButton, lv_color_hex (THEME_COLOR_BUTTON_SECONDARY), 0);
++    lv_obj_set_style_bg_opa (mBackButton, LV_OPA_TRANSP, 0);
++    lv_obj_set_style_bg_opa (mBackButton, LV_OPA_COVER, LV_STATE_HOVERED);
++    lv_obj_set_style_bg_opa (mBackButton, LV_OPA_COVER, LV_STATE_PRESSED);
++
++    Symbol = ChromeLabel (mBackButton, LV_SYMBOL_LEFT, LvglThemeFontSmall (), THEME_COLOR_TEXT_SECONDARY);
++    lv_obj_center (Symbol);
+   }
+ 
+-  if (Utf8 == NULL) {
++  //
++  // Title.
++  //
++  Str16 = NULL;
++  Utf8  = NULL;
++  if (IsFrontPage) {
++    if (SubtitleShowsDeviceModel) {
++      Utf8 = FindCenterBannerUtf8 (FormData);
++    }
++  } else {
+     if ((FormData != NULL) && (FormData->FormTitle != 0)) {
+       Str16 = HiiGetString (FormData->HiiHandle, FormData->FormTitle, NULL);
+     }
+@@ -276,65 +770,82 @@ BuildSubtitleBar (
+     }
+   }
+ 
+-  Label = lv_label_create (Bar);
+-  lv_label_set_text (Label, Utf8 != NULL ? Utf8 : "Setup");
+-  THEME_APPLY_BODY_FONT (Label);
+-  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_SUBTITLE_TEXT), 0);
+-  lv_obj_align (
+-    Label,
+-    SubtitleShowsDeviceModel ? LV_ALIGN_CENTER : LV_ALIGN_LEFT_MID,
+-    0,
+-    0
+-    );
++  //
++  // Title, centered in the bar like in a macOS window.
++  //
++  TitleBox = ChromeBox (Bar);
++  lv_obj_set_size (TitleBox, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_style_pad_column (TitleBox, LvglThemePx (8), 0);
++  lv_obj_set_flex_flow (TitleBox, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (TitleBox, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++  lv_obj_align (TitleBox, LV_ALIGN_CENTER, 0, 0);
+ 
+   if (Utf8 != NULL) {
++    Label = ChromeLabel (TitleBox, Utf8, THEME_FONT_TITLE, THEME_COLOR_TEXT_TITLE);
++    lv_label_set_long_mode (Label, LV_LABEL_LONG_DOT);
++    lv_obj_set_style_max_width (Label, (Width * 55) / 100, 0);
+     FreePool (Utf8);
+   }
++
++  if (Edited) {
++    ChromeLabel (TitleBox, "Edited", LvglThemeFontSmall (), THEME_COLOR_TEXT_SECONDARY);
++  }
+ }
+ 
+ /**
+-  Append a single chip (label-on-pill) to the hotkey bar.
++  Append a key hint to the dock: one or two keys drawn as key caps,
++  followed by the description.
+ **/
+ STATIC
+ VOID
+ AddHotKeyChip (
+-  IN lv_obj_t       *Parent,
+-  IN CONST CHAR8    *KeyText,
+-  IN CONST CHAR8    *LabelText
++  IN lv_obj_t     *Parent,
++  IN CONST CHAR8  *KeyText,
++  IN CONST CHAR8  *KeyText2 OPTIONAL,
++  IN CONST CHAR8  *LabelText
+   )
+ {
+-  lv_obj_t  *Chip;
+-  lv_obj_t  *KeyLbl;
+-  lv_obj_t  *DescLbl;
++  lv_obj_t     *Chip;
++  lv_obj_t     *Cap;
++  CONST CHAR8  *Keys[2];
++  UINTN        Idx;
+ 
+-  Chip = lv_obj_create (Parent);
+-  lv_obj_remove_style_all (Chip);
++  Chip = ChromeBox (Parent);
+   lv_obj_set_size (Chip, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+   lv_obj_set_flex_flow (Chip, LV_FLEX_FLOW_ROW);
+-  lv_obj_set_style_pad_left (Chip, THEME_PAD_CHIP_X, 0);
+-  lv_obj_set_style_pad_right (Chip, THEME_PAD_CHIP_X, 0);
+-  lv_obj_set_style_pad_top (Chip, THEME_PAD_CHIP_Y, 0);
+-  lv_obj_set_style_pad_bottom (Chip, THEME_PAD_CHIP_Y, 0);
++  lv_obj_set_flex_align (Chip, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+   lv_obj_set_style_pad_column (Chip, THEME_PAD_CHIP_COL_GAP, 0);
+-  lv_obj_set_style_radius (Chip, THEME_RADIUS_CHIP, 0);
+-  lv_obj_set_style_bg_color (Chip, lv_color_hex (THEME_COLOR_BG_PANEL), 0);
+-  lv_obj_set_style_bg_opa (Chip, LV_OPA_COVER, 0);
+-  lv_obj_clear_flag (Chip, LV_OBJ_FLAG_SCROLLABLE);
+-
+-  KeyLbl = lv_label_create (Chip);
+-  lv_label_set_text (KeyLbl, KeyText);
+-  THEME_APPLY_BODY_FONT (KeyLbl);
+-  lv_obj_set_style_text_color (KeyLbl, lv_color_hex (THEME_COLOR_ACCENT_HOVER), 0);
+-
+-  DescLbl = lv_label_create (Chip);
+-  lv_label_set_text (DescLbl, LabelText);
+-  THEME_APPLY_BODY_FONT (DescLbl);
+-  lv_obj_set_style_text_color (DescLbl, lv_color_hex (THEME_COLOR_FOOTER_TEXT), 0);
++
++  Keys[0] = KeyText;
++  Keys[1] = KeyText2;
++  for (Idx = 0; Idx < ARRAY_SIZE (Keys); Idx++) {
++    if (Keys[Idx] == NULL) {
++      continue;
++    }
++
++    Cap = ChromeBox (Chip);
++    lv_obj_set_size (Cap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++    lv_obj_set_style_min_width (Cap, LvglThemePx (24), 0);
++    lv_obj_set_style_pad_left (Cap, THEME_PAD_CHIP_X, 0);
++    lv_obj_set_style_pad_right (Cap, THEME_PAD_CHIP_X, 0);
++    lv_obj_set_style_pad_top (Cap, THEME_PAD_CHIP_Y, 0);
++    lv_obj_set_style_pad_bottom (Cap, THEME_PAD_CHIP_Y, 0);
++    lv_obj_set_style_radius (Cap, THEME_RADIUS_CHIP, 0);
++    lv_obj_set_style_bg_color (Cap, lv_color_hex (THEME_COLOR_KEYCAP_BG), 0);
++    lv_obj_set_style_bg_opa (Cap, LV_OPA_COVER, 0);
++    lv_obj_set_style_border_color (Cap, lv_color_hex (THEME_COLOR_KEYCAP_BORDER), 0);
++    lv_obj_set_style_border_width (Cap, THEME_BORDER_PANE, 0);
++    lv_obj_set_style_text_align (Cap, LV_TEXT_ALIGN_CENTER, 0);
++
++    ChromeLabel (Cap, Keys[Idx], LvglThemeFontSmall (), THEME_COLOR_KEYCAP_TEXT);
++  }
++
++  ChromeLabel (Chip, LabelText, LvglThemeFontSmall (), THEME_COLOR_FOOTER_TEXT);
+ }
+ 
+ /**
+-  Map an EFI scan code to a short chip label like "F9".
+-  Returns NULL if unsupported (chip is skipped).
++  Map an EFI scan code to a short key cap label like "F9".
++  Returns NULL if unsupported (the hint is skipped).
+ **/
+ STATIC
+ CONST CHAR8 *
+@@ -362,60 +873,84 @@ ScanCodeToChipKey (
+ }
+ 
+ /**
+-  Build the footer: chip row of registered hotkeys plus standard nav chips.
++  Append a short vertical separator to the dock.
+ **/
+ STATIC
+ VOID
+-BuildFooter (
++AddDockSeparator (
++  IN lv_obj_t  *Dock
++  )
++{
++  lv_obj_t  *Sep;
++
++  Sep = ChromeBox (Dock);
++  lv_obj_set_size (Sep, THEME_BORDER_PANE, LV_PCT (50));
++  lv_obj_set_style_bg_color (Sep, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++  lv_obj_set_style_bg_opa (Sep, LV_OPA_COVER, 0);
++}
++
++/**
++  Build the dock: a rounded bar floating above the bottom edge of the
++  screen, with the navigation keys and, after a separator, the hotkeys
++  registered for the form.
++**/
++STATIC
++VOID
++BuildDock (
+   IN lv_obj_t                    *Screen,
+-  IN FORM_DISPLAY_ENGINE_FORM    *FormData
++  IN FORM_DISPLAY_ENGINE_FORM    *FormData,
++  IN BOOLEAN                     IsFrontPage,
++  IN BOOLEAN                     GroupedMenu
+   )
+ {
+-  lv_obj_t         *Bar;
++  lv_obj_t         *Dock;
+   LIST_ENTRY       *Link;
+   BROWSER_HOT_KEY  *HotKey;
+   CONST CHAR8      *KeyLabel;
+   CHAR8            *Utf8;
+-
+-  Bar = lv_obj_create (Screen);
+-  lv_obj_remove_style_all (Bar);
+-  lv_obj_set_size (Bar, LV_PCT (100), THEME_FOOTER_HEIGHT);
+-  lv_obj_set_style_bg_color (Bar, lv_color_hex (THEME_COLOR_FOOTER_BG), 0);
+-  lv_obj_set_style_bg_opa (Bar, LV_OPA_COVER, 0);
+-  lv_obj_set_style_pad_left (Bar, THEME_PAD_FOOTER_X, 0);
+-  lv_obj_set_style_pad_right (Bar, THEME_PAD_FOOTER_X, 0);
+-  lv_obj_set_style_pad_top (Bar, THEME_PAD_FOOTER_Y, 0);
+-  lv_obj_set_style_pad_bottom (Bar, THEME_PAD_FOOTER_Y, 0);
+-  lv_obj_set_style_pad_column (Bar, THEME_PAD_FOOTER_COL_GAP, 0);
+-  lv_obj_set_flex_flow (Bar, LV_FLEX_FLOW_ROW);
+-  lv_obj_set_flex_align (Bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+-  lv_obj_clear_flag (Bar, LV_OBJ_FLAG_SCROLLABLE);
++  CONST CHAR8      *Desc;
++  UINTN            KeyLen;
++  BOOLEAN          First;
++
++  Dock = ChromeBox (Screen);
++  lv_obj_set_size (Dock, LV_SIZE_CONTENT, THEME_FOOTER_HEIGHT);
++  lv_obj_align (Dock, LV_ALIGN_BOTTOM_MID, 0, -(int32_t)THEME_DOCK_MARGIN);
++  lv_obj_set_style_radius (Dock, THEME_RADIUS_DOCK, 0);
++  lv_obj_set_style_bg_color (Dock, lv_color_hex (THEME_COLOR_DOCK_BG), 0);
++  lv_obj_set_style_bg_opa (Dock, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_color (Dock, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++  lv_obj_set_style_border_width (Dock, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_shadow_width (Dock, THEME_DOCK_SHADOW_WIDTH, 0);
++  lv_obj_set_style_shadow_offset_y (Dock, LvglThemePx (4), 0);
++  lv_obj_set_style_shadow_color (Dock, lv_color_black (), 0);
++  lv_obj_set_style_shadow_opa (Dock, LV_OPA_50, 0);
++  lv_obj_set_style_pad_left (Dock, THEME_PAD_FOOTER_X, 0);
++  lv_obj_set_style_pad_right (Dock, THEME_PAD_FOOTER_X, 0);
++  lv_obj_set_style_pad_top (Dock, THEME_PAD_FOOTER_Y, 0);
++  lv_obj_set_style_pad_bottom (Dock, THEME_PAD_FOOTER_Y, 0);
++  lv_obj_set_style_pad_column (Dock, THEME_PAD_FOOTER_COL_GAP, 0);
++  lv_obj_set_flex_flow (Dock, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Dock, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+ 
+   //
+-  // "Unsaved changes" notice -- prepended when any question on the form
+-  // has been modified since the form opened. SetupBrowserDxe maintains
+-  // FormData->SettingChangedFlag.
++  // Navigation. Menus laid out in columns also move between the columns
++  // with LEFT/RIGHT. ESC does nothing on the front page.
+   //
+-  if ((FormData != NULL) && FormData->SettingChangedFlag) {
+-    lv_obj_t  *Notice;
+-
+-    Notice = lv_label_create (Bar);
+-    lv_label_set_text (Notice, LV_SYMBOL_WARNING "  Unsaved changes -- press F10 to save");
+-    THEME_APPLY_BODY_FONT (Notice);
+-    lv_obj_set_style_text_color (Notice, lv_color_hex (THEME_COLOR_WARNING), 0);
+-    lv_obj_set_style_pad_right (Notice, THEME_PAD_FOOTER_X, 0);
++  AddHotKeyChip (
++    Dock,
++    LV_SYMBOL_UP " " LV_SYMBOL_DOWN,
++    GroupedMenu ? LV_SYMBOL_LEFT " " LV_SYMBOL_RIGHT : NULL,
++    "Move"
++    );
++  AddHotKeyChip (Dock, "Enter", NULL, "Select");
++  if (!IsFrontPage) {
++    AddHotKeyChip (Dock, "Esc", NULL, "Back");
+   }
+ 
+-  //
+-  // Standard navigation chips (always present).
+-  //
+-  AddHotKeyChip (Bar, LV_SYMBOL_UP LV_SYMBOL_DOWN, "Move");
+-  AddHotKeyChip (Bar, "Enter", "Select");
+-  AddHotKeyChip (Bar, "Esc",   "Exit");
+-
+   //
+   // Driver-registered hotkeys from FormData->HotKeyListHead.
+   //
++  First = TRUE;
+   if ((FormData != NULL) && !IsListEmpty (&FormData->HotKeyListHead)) {
+     for (Link = FormData->HotKeyListHead.ForwardLink;
+          Link != &FormData->HotKeyListHead;
+@@ -425,12 +960,34 @@ BuildFooter (
+       if ((HotKey->KeyData == NULL) || (HotKey->HelpString == NULL)) {
+         continue;
+       }
++
+       KeyLabel = ScanCodeToChipKey (HotKey->KeyData->ScanCode);
+       if (KeyLabel == NULL) {
+         continue;
+       }
++
+       Utf8 = ChromeUcs2ToUtf8 (HotKey->HelpString);
+-      AddHotKeyChip (Bar, KeyLabel, Utf8 != NULL ? Utf8 : "");
++      Desc = Utf8;
++      //
++      // Help strings such as "F10=Save" repeat the key that the key cap
++      // already shows: drop a leading "<key>=".
++      //
++      if (Desc != NULL) {
++        KeyLen = AsciiStrLen (KeyLabel);
++        if ((AsciiStrnCmp (Desc, KeyLabel, KeyLen) == 0) && (Desc[KeyLen] == '=')) {
++          Desc += KeyLen + 1;
++          while (*Desc == ' ') {
++            Desc++;
++          }
++        }
++      }
++
++      if (First) {
++        AddDockSeparator (Dock);
++        First = FALSE;
++      }
++
++      AddHotKeyChip (Dock, KeyLabel, NULL, Desc != NULL ? Desc : "");
+       if (Utf8 != NULL) {
+         FreePool (Utf8);
+       }
+@@ -438,164 +995,233 @@ BuildFooter (
+   }
+ }
+ 
++/**
++  Build the help card: a rounded card in the right column of the window
++  with a badge, the focused question as heading and its help text.
++**/
++STATIC
++VOID
++BuildHelpCard (
++  IN lv_obj_t  *Middle
++  )
++{
++  lv_obj_t  *Card;
++  lv_obj_t  *Head;
++  lv_obj_t  *Badge;
++  lv_obj_t  *Rule;
++
++  Card = ChromeBox (Middle);
++  lv_obj_set_width (Card, LV_PCT (PcdGet8 (PcdLvglHelpPaneWidthPct)));
++  lv_obj_set_height (Card, LV_PCT (100));
++  lv_obj_set_style_margin_top (Card, THEME_PAD_HELPCARD_MARGIN, 0);
++  lv_obj_set_style_margin_bottom (Card, THEME_PAD_HELPCARD_MARGIN, 0);
++  lv_obj_set_style_margin_right (Card, THEME_PAD_HELPCARD_MARGIN, 0);
++  lv_obj_set_style_bg_color (Card, lv_color_hex (THEME_COLOR_HELP_BG), 0);
++  lv_obj_set_style_bg_opa (Card, LV_OPA_COVER, 0);
++  lv_obj_set_style_radius (Card, THEME_RADIUS_CARD, 0);
++  lv_obj_set_style_border_color (Card, lv_color_hex (THEME_COLOR_CARD_BORDER), 0);
++  lv_obj_set_style_border_width (Card, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_pad_left (Card, THEME_PAD_HELPPANE_X, 0);
++  lv_obj_set_style_pad_right (Card, THEME_PAD_HELPPANE_X, 0);
++  lv_obj_set_style_pad_top (Card, THEME_PAD_HELPPANE_Y, 0);
++  lv_obj_set_style_pad_bottom (Card, THEME_PAD_HELPPANE_Y, 0);
++  lv_obj_set_style_pad_row (Card, THEME_PAD_HELPPANE_ROW_GAP, 0);
++  lv_obj_set_flex_flow (Card, LV_FLEX_FLOW_COLUMN);
++
++  Head = ChromeBox (Card);
++  lv_obj_set_size (Head, LV_PCT (100), LV_SIZE_CONTENT);
++  lv_obj_set_style_pad_column (Head, THEME_PAD_CHIP_COL_GAP, 0);
++  lv_obj_set_flex_flow (Head, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
++
++  //
++  // Round "i" badge: there is no information symbol in the built-in fonts.
++  //
++  Badge = ChromeDot (Head, THEME_HELP_BADGE_SIZE, THEME_COLOR_ACCENT);
++  lv_obj_center (ChromeLabel (Badge, "i", LvglThemeFontSmall (), THEME_COLOR_HEADER_TEXT));
++
++  mHelpTitle = lv_label_create (Head);
++  lv_label_set_long_mode (mHelpTitle, LV_LABEL_LONG_WRAP);
++  lv_obj_set_flex_grow (mHelpTitle, 1);
++  THEME_APPLY_BODY_FONT (mHelpTitle);
++  lv_obj_set_style_text_color (mHelpTitle, lv_color_hex (THEME_COLOR_TEXT_TITLE), 0);
++  lv_label_set_text (mHelpTitle, "Help");
++
++  Rule = ChromeBox (Card);
++  lv_obj_set_size (Rule, LV_PCT (100), THEME_BORDER_PANE);
++  lv_obj_set_style_bg_color (Rule, lv_color_hex (THEME_COLOR_DIVIDER), 0);
++  lv_obj_set_style_bg_opa (Rule, LV_OPA_COVER, 0);
++
++  mHelpLabel = lv_label_create (Card);
++  lv_label_set_long_mode (mHelpLabel, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width (mHelpLabel, LV_PCT (100));
++  lv_obj_set_style_text_font (mHelpLabel, LvglThemeFontSmall (), 0);
++  lv_obj_set_style_text_color (mHelpLabel, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), 0);
++  lv_obj_set_style_text_line_space (mHelpLabel, LvglThemePx (3), 0);
++  lv_label_set_text (mHelpLabel, "");
++}
++
++/**
++  Create the scrollable panel that receives the form widgets, a flex
++  column: in the window, or on the desktop for the front-page icon grid.
++**/
++STATIC
++lv_obj_t *
++CreateContentPanel (
++  IN lv_obj_t  *Parent
++  )
++{
++  lv_obj_t  *Content;
++
++  Content = lv_obj_create (Parent);
++  lv_obj_remove_style_all (Content);
++  lv_obj_set_flex_flow (Content, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_style_pad_row (Content, THEME_PAD_CONTENT_ROW_GAP, 0);
++  lv_obj_set_style_bg_opa (Content, LV_OPA_TRANSP, 0);
++  lv_obj_add_flag (Content, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Content, LV_OBJ_FLAG_SCROLL_ELASTIC);
++  lv_obj_clear_flag (Content, LV_OBJ_FLAG_SCROLL_MOMENTUM);
++  lv_obj_set_scrollbar_mode (Content, LV_SCROLLBAR_MODE_AUTO);
++  lv_obj_set_style_bg_color (Content, lv_color_hex (THEME_COLOR_TEXT_DISABLED), LV_PART_SCROLLBAR);
++  lv_obj_set_style_bg_opa (Content, LV_OPA_COVER, LV_PART_SCROLLBAR);
++  lv_obj_set_style_width (Content, LvglThemePx (4), LV_PART_SCROLLBAR);
++  lv_obj_set_style_radius (Content, LvglThemePx (2), LV_PART_SCROLLBAR);
++  LvglThemeApplyBodyFont (Content);
++  return Content;
++}
++
+ lv_obj_t *
+ EFIAPI
+ AptioBuildChrome (
+   IN lv_obj_t                    *Screen,
+-  IN FORM_DISPLAY_ENGINE_FORM    *FormData
++  IN FORM_DISPLAY_ENGINE_FORM    *FormData,
++  IN BOOLEAN                     GroupedMenu
+   )
+ {
+   lv_obj_t                       *Content;
+-  lv_obj_t                       *ChromeRoot;
+-  lv_obj_t                       *Frame;
++  lv_obj_t                       *Window;
++  lv_obj_t                       *Middle;
+   LVGL_UI_CONFIG_VARSTORE_DATA   UiConfig;
++  BOOLEAN                        IsFrontPage;
+   int32_t                        HorRes;
+   int32_t                        VerRes;
++  int32_t                        Top;
++  int32_t                        AvailW;
++  int32_t                        AvailH;
+   int32_t                        FrameW;
+   int32_t                        FrameH;
+ 
+-  ChromeRoot = Screen;
++  IsFrontPage = (FormData != NULL) &&
++                CompareGuid (&FormData->FormSetGuid, &mChromeFrontPageFormSetGuid);
++  mHelpTitle  = NULL;
++  mHelpLabel  = NULL;
++  mBackButton = NULL;
+   LvglUiConfigLoad (&UiConfig);
+ 
+-  if (UiConfig.CenteredFrameEnabled != 0) {
+-    //
+-    // Screen is the full-display backdrop. The UI itself lives in a centered
+-    // "Frame" sized from the Graphical UI Configuration settings (PCD defaults
+-    // on first boot).
+-    //
+-    lv_obj_remove_style_all (Screen);
+-    lv_obj_set_style_bg_color (Screen, lv_color_hex (THEME_COLOR_BACKDROP), 0);
+-    lv_obj_set_style_bg_opa (Screen, LV_OPA_COVER, 0);
+-    lv_obj_set_style_pad_all (Screen, 0, 0);
+-    lv_obj_clear_flag (Screen, LV_OBJ_FLAG_SCROLLABLE);
+-
+-    HorRes = LV_HOR_RES;
+-    VerRes = LV_VER_RES;
++  //
++  // Desktop: a flat backdrop behind the window or the icon grid.
++  //
++  lv_obj_remove_style_all (Screen);
++  lv_obj_set_style_bg_color (Screen, lv_color_hex (THEME_COLOR_BACKDROP), 0);
++  lv_obj_set_style_bg_opa (Screen, LV_OPA_COVER, 0);
++  lv_obj_clear_flag (Screen, LV_OBJ_FLAG_SCROLLABLE);
++
++  BuildMenuBar (Screen);
++
++  HorRes = LV_HOR_RES;
++  VerRes = LV_VER_RES;
++
++  //
++  // The front page laid out as a menu is an icon grid on the desktop,
++  // between the menu bar and the dock, without a window.
++  //
++  if (IsFrontPage && GroupedMenu) {
++    Content = CreateContentPanel (Screen);
++    lv_obj_set_pos (Content, 0, THEME_MENUBAR_HEIGHT);
++    lv_obj_set_size (
++      Content,
++      HorRes,
++      VerRes - (int32_t)(THEME_MENUBAR_HEIGHT + THEME_FOOTER_HEIGHT + 2 * THEME_DOCK_MARGIN)
++      );
++    lv_obj_set_flex_align (Content, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++    lv_obj_set_style_pad_left (Content, THEME_PAD_HOME_X, 0);
++    lv_obj_set_style_pad_right (Content, THEME_PAD_HOME_X, 0);
++    lv_obj_set_style_pad_top (Content, THEME_FRAME_GAP, 0);
++    lv_obj_set_style_pad_bottom (Content, THEME_FRAME_GAP, 0);
++    BuildDock (Screen, FormData, IsFrontPage, GroupedMenu);
++    return Content;
++  }
++
++  //
++  // The window fills the space between the menu bar and the dock. With the
++  // centered frame enabled (Graphical UI Configuration, PCD defaults on
++  // first boot) it keeps its aspect ratio, capped to that space.
++  //
++  Top    = (int32_t)(THEME_MENUBAR_HEIGHT + THEME_FRAME_GAP);
++  AvailW = HorRes - 2 * (int32_t)THEME_FRAME_GAP;
++  AvailH = VerRes - Top - (int32_t)(THEME_FRAME_GAP + THEME_FOOTER_HEIGHT + THEME_DOCK_MARGIN);
++  if (AvailH < VerRes / 2) {
++    AvailH = VerRes / 2;
++  }
++
++  FrameW = AvailW;
++  FrameH = AvailH;
++  if ((UiConfig.CenteredFrameEnabled != 0) && (UiConfig.CenteredFrameAspectDen != 0)) {
+     FrameH = (VerRes * UiConfig.CenteredFrameHeightPct) / 100;
+-    if ((FrameH <= 0) || (FrameH > VerRes)) {
+-      FrameH = VerRes;
++    if ((FrameH <= 0) || (FrameH > AvailH)) {
++      FrameH = AvailH;
+     }
+ 
+     FrameW = (FrameH * UiConfig.CenteredFrameAspectNum) / UiConfig.CenteredFrameAspectDen;
+-    if ((FrameW <= 0) || (FrameW > HorRes)) {
+-      FrameW = HorRes;
++    if ((FrameW <= 0) || (FrameW > AvailW)) {
++      FrameW = AvailW;
+     }
++  }
+ 
+-    //
+-    // Frame is a vertical flex column with an Aptio-style gradient background
+-    // (dark navy top -> mid navy bottom). The compiled-in RGB565 wallpaper
+-    // image is bypassed -- LVGL's decoder doesn't render it cleanly with
+-    // LV_COLOR_DEPTH=32 and the asset is also smaller than a typical GOP
+-    // framebuffer (800x600 vs 1280x800), so it wouldn't tile/scale correctly.
+-    //
+-    Frame = lv_obj_create (Screen);
+-    lv_obj_remove_style_all (Frame);
+-    lv_obj_set_size (Frame, FrameW, FrameH);
+-    lv_obj_center (Frame);
+-    lv_obj_set_style_bg_color (Frame, lv_color_hex (THEME_COLOR_BG_SCREEN), 0);
+-    lv_obj_set_style_bg_grad_color (Frame, lv_color_hex (THEME_COLOR_BG_SCREEN), 0);
+-    lv_obj_set_style_bg_grad_dir (Frame, LV_GRAD_DIR_VER, 0);
+-    lv_obj_set_style_bg_opa (Frame, LV_OPA_COVER, 0);
+-    lv_obj_set_style_border_color (Frame, lv_color_hex (THEME_COLOR_BG_SEPARATOR), 0);
+-    lv_obj_set_style_border_width (Frame, THEME_BORDER_PANE, 0);
+-    lv_obj_set_flex_flow (Frame, LV_FLEX_FLOW_COLUMN);
+-    lv_obj_set_style_pad_all (Frame, 0, 0);
+-    lv_obj_set_style_pad_row (Frame, 0, 0);
+-    lv_obj_clear_flag (Frame, LV_OBJ_FLAG_SCROLLABLE);
+-
+-    ChromeRoot = Frame;
+-  } else {
+-    //
+-    // Screen is a vertical flex column with an Aptio-style gradient
+-    // background (dark navy top -> mid navy bottom). The compiled-in
+-    // RGB565 wallpaper image is bypassed -- LVGL's decoder doesn't render
+-    // it cleanly with LV_COLOR_DEPTH=32 and the asset is also smaller
+-    // than a typical GOP framebuffer (800x600 vs 1280x800), so it
+-    // wouldn't tile/scale correctly anyway.
+-    //
+-    lv_obj_remove_style_all (Screen);
+-    lv_obj_set_style_bg_color (Screen, lv_color_hex (THEME_COLOR_BG_SCREEN), 0);
+-    lv_obj_set_style_bg_grad_color (Screen, lv_color_hex (THEME_COLOR_BG_SCREEN), 0);
+-    lv_obj_set_style_bg_grad_dir (Screen, LV_GRAD_DIR_VER, 0);
+-    lv_obj_set_style_bg_opa (Screen, LV_OPA_COVER, 0);
+-    lv_obj_set_flex_flow (Screen, LV_FLEX_FLOW_COLUMN);
+-    lv_obj_set_style_pad_all (Screen, 0, 0);
+-    lv_obj_set_style_pad_row (Screen, 0, 0);
+-    lv_obj_clear_flag (Screen, LV_OBJ_FLAG_SCROLLABLE);
+-  }
+-
+-  // Header / subtitle / [content row | help pane] / footer in flex order.
+-  BuildHeader (ChromeRoot);
+-  BuildSubtitleBar (ChromeRoot, FormData, (UiConfig.SubtitleShowsDeviceModel != 0));
++  Window = ChromeBox (Screen);
++  lv_obj_set_size (Window, FrameW, FrameH);
++  lv_obj_set_pos (Window, (HorRes - FrameW) / 2, Top + (AvailH - FrameH) / 2);
++  lv_obj_set_style_radius (Window, THEME_RADIUS_FRAME, 0);
++  lv_obj_set_style_bg_color (Window, lv_color_hex (THEME_COLOR_FRAME_BG_TOP), 0);
++#if THEME_COLOR_FRAME_BG_BOTTOM != THEME_COLOR_FRAME_BG_TOP
++  lv_obj_set_style_bg_grad_color (Window, lv_color_hex (THEME_COLOR_FRAME_BG_BOTTOM), 0);
++  lv_obj_set_style_bg_grad_dir (Window, LV_GRAD_DIR_VER, 0);
++#endif
++  lv_obj_set_style_bg_opa (Window, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_color (Window, lv_color_hex (THEME_COLOR_FRAME_BORDER), 0);
++  lv_obj_set_style_border_width (Window, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_shadow_width (Window, THEME_FRAME_SHADOW_WIDTH, 0);
++  lv_obj_set_style_shadow_offset_y (Window, LvglThemePx (6), 0);
++  lv_obj_set_style_shadow_color (Window, lv_color_black (), 0);
++  lv_obj_set_style_shadow_opa (Window, LV_OPA_50, 0);
++  lv_obj_set_style_pad_all (Window, 0, 0);
++  lv_obj_set_style_pad_row (Window, 0, 0);
++  lv_obj_set_flex_flow (Window, LV_FLEX_FLOW_COLUMN);
++
++  BuildTitleBar (Window, FrameW, FormData, IsFrontPage, (UiConfig.SubtitleShowsDeviceModel != 0));
+ 
+   //
+-  // Middle band: horizontal flex with rows panel on the left and help pane
+-  // on the right. The middle band itself fills the vertical space between
+-  // the subtitle bar and the footer.
++  // Middle band: scrollable form content on the left and, except on the
++  // front page, the help card on the right.
+   //
+-  {
+-    lv_obj_t  *Middle;
+-    lv_obj_t  *HelpPane;
+-    lv_obj_t  *HelpHeader;
+-
+-    Middle = lv_obj_create (ChromeRoot);
+-    lv_obj_remove_style_all (Middle);
+-    lv_obj_set_width (Middle, LV_PCT (100));
+-    lv_obj_set_flex_grow (Middle, 1);
+-    lv_obj_set_flex_flow (Middle, LV_FLEX_FLOW_ROW);
+-    lv_obj_set_style_pad_all (Middle, 0, 0);
+-    lv_obj_set_style_pad_column (Middle, 0, 0);
+-    lv_obj_set_style_bg_opa (Middle, LV_OPA_TRANSP, 0);
+-    lv_obj_clear_flag (Middle, LV_OBJ_FLAG_SCROLLABLE);
+-
+-    // Left: scrollable form rows (transparent column).
+-    Content = lv_obj_create (Middle);
+-    lv_obj_remove_style_all (Content);
+-    lv_obj_set_height (Content, LV_PCT (100));
+-    lv_obj_set_flex_grow (Content, 1);
+-    lv_obj_set_flex_flow (Content, LV_FLEX_FLOW_COLUMN);
+-    lv_obj_set_style_pad_left (Content, THEME_PAD_CONTENT_LEFT, 0);
+-    lv_obj_set_style_pad_right (Content, THEME_PAD_CONTENT_RIGHT, 0);
+-    lv_obj_set_style_pad_top (Content, THEME_PAD_CONTENT_Y, 0);
+-    lv_obj_set_style_pad_bottom (Content, THEME_PAD_CONTENT_Y, 0);
+-    lv_obj_set_style_pad_row (Content, THEME_PAD_CONTENT_ROW_GAP, 0);
+-    lv_obj_set_style_bg_opa (Content, LV_OPA_TRANSP, 0);
+-    lv_obj_add_flag (Content, LV_OBJ_FLAG_SCROLLABLE);
+-    lv_obj_clear_flag (Content, LV_OBJ_FLAG_SCROLL_ELASTIC);
+-    lv_obj_clear_flag (Content, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+-    LvglThemeApplyBodyFont (Content);
+-
+-    // Right: help pane (percentage width). Header label "Help" + body label.
+-    HelpPane = lv_obj_create (Middle);
+-    lv_obj_remove_style_all (HelpPane);
+-    lv_obj_set_size (HelpPane, LV_PCT (PcdGet8 (PcdLvglHelpPaneWidthPct)), LV_PCT (100));
+-    lv_obj_set_style_bg_color (HelpPane, lv_color_hex (THEME_COLOR_BG_PANEL), 0);
+-    lv_obj_set_style_bg_opa (HelpPane, LV_OPA_COVER, 0);
+-    lv_obj_set_style_border_color (HelpPane, lv_color_hex (THEME_COLOR_BG_SEPARATOR), 0);
+-    lv_obj_set_style_border_side (HelpPane, LV_BORDER_SIDE_LEFT, 0);
+-    lv_obj_set_style_border_width (HelpPane, THEME_BORDER_PANE, 0);
+-    lv_obj_set_style_pad_left (HelpPane, THEME_PAD_HELPPANE_X, 0);
+-    lv_obj_set_style_pad_right (HelpPane, THEME_PAD_HELPPANE_X, 0);
+-    lv_obj_set_style_pad_top (HelpPane, THEME_PAD_HELPPANE_Y, 0);
+-    lv_obj_set_style_pad_bottom (HelpPane, THEME_PAD_HELPPANE_Y, 0);
+-    lv_obj_set_style_pad_row (HelpPane, THEME_PAD_HELPPANE_ROW_GAP, 0);
+-    lv_obj_set_flex_flow (HelpPane, LV_FLEX_FLOW_COLUMN);
+-    lv_obj_clear_flag (HelpPane, LV_OBJ_FLAG_SCROLLABLE);
+-
+-    HelpHeader = lv_label_create (HelpPane);
+-    lv_label_set_text (HelpHeader, "Help");
+-    THEME_APPLY_BODY_FONT (HelpHeader);
+-    lv_obj_set_style_text_color (HelpHeader, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), 0);
+-
+-    mHelpLabel = lv_label_create (HelpPane);
+-    lv_label_set_long_mode (mHelpLabel, LV_LABEL_LONG_WRAP);
+-    lv_obj_set_width (mHelpLabel, LV_PCT (100));
+-    THEME_APPLY_BODY_FONT (mHelpLabel);
+-    lv_obj_set_style_text_color (mHelpLabel, lv_color_hex (THEME_COLOR_TEXT_PRIMARY), 0);
+-    lv_label_set_text (mHelpLabel, "");
+-  }
+-
+-  BuildFooter (ChromeRoot, FormData);
++  Middle = ChromeBox (Window);
++  lv_obj_set_width (Middle, LV_PCT (100));
++  lv_obj_set_flex_grow (Middle, 1);
++  lv_obj_set_flex_flow (Middle, LV_FLEX_FLOW_ROW);
++
++  Content = CreateContentPanel (Middle);
++  lv_obj_set_height (Content, LV_PCT (100));
++  lv_obj_set_flex_grow (Content, 1);
++  lv_obj_set_style_pad_left (Content, THEME_PAD_CONTENT_LEFT, 0);
++  lv_obj_set_style_pad_right (Content, IsFrontPage ? THEME_PAD_CONTENT_LEFT : THEME_PAD_CONTENT_RIGHT, 0);
++  lv_obj_set_style_pad_top (Content, THEME_PAD_HELPCARD_MARGIN, 0);
++  lv_obj_set_style_pad_bottom (Content, THEME_PAD_HELPCARD_MARGIN, 0);
++
++  if (!IsFrontPage) {
++    BuildHelpCard (Middle);
++  }
++
++  BuildDock (Screen, FormData, IsFrontPage, GroupedMenu);
+ 
+   return Content;
+ }
+@@ -610,8 +1236,11 @@ AptioChromeTeardown (
+     lv_timer_delete (mClockTimer);
+     mClockTimer = NULL;
+   }
+-  mClockLabel = NULL;
+-  mHelpLabel  = NULL;
++  mClockLabel   = NULL;
++  mBatteryLabel = NULL;
++  mHelpTitle    = NULL;
++  mHelpLabel    = NULL;
++  mBackButton   = NULL;
+ }
+ 
+ VOID
+@@ -625,3 +1254,24 @@ AptioSetHelpText (
+   }
+   lv_label_set_text (mHelpLabel, (Utf8 != NULL) ? Utf8 : "");
+ }
++
++VOID
++EFIAPI
++AptioSetHelpTitle (
++  IN CONST CHAR8  *Utf8
++  )
++{
++  if (mHelpTitle == NULL) {
++    return;
++  }
++  lv_label_set_text (mHelpTitle, ((Utf8 != NULL) && (Utf8[0] != '\0')) ? Utf8 : "Help");
++}
++
++lv_obj_t *
++EFIAPI
++AptioGetBackButton (
++  VOID
++  )
++{
++  return mBackButton;
++}
+diff --git a/LvglDisplayEngineDxe/LvglAptioChrome.h b/LvglDisplayEngineDxe/LvglAptioChrome.h
+index 901b0a5..9fc1167 100644
+--- a/LvglDisplayEngineDxe/LvglAptioChrome.h
++++ b/LvglDisplayEngineDxe/LvglAptioChrome.h
+@@ -1,6 +1,6 @@
+ /** @file
+-  AMI Aptio-style chrome (header bar, subtitle bar, footer bar, wallpaper)
+-  for LvglDisplayEngineDxe.
++  Setup chrome (menu bar, window, help card and dock) for
++  LvglDisplayEngineDxe.
+ 
+   Copyright (c) 2024-2026, Hamit Karaca. All rights reserved.<BR>
+   SPDX-License-Identifier: BSD-2-Clause-Patent
+@@ -14,18 +14,26 @@
+ #include <Protocol/DisplayProtocol.h>
+ 
+ /**
+-  Build the full Aptio chrome under Screen and return the inner content
+-  panel into which the form widgets should be appended.
++  Build the setup chrome under Screen and return the inner content panel
++  into which the form widgets should be appended.
+ 
+-  Layout (top to bottom):
+-    Wallpaper (full-screen, behind everything)
+-    Header bar          THEME_HEADER_HEIGHT px,  gradient
+-    Subtitle bar        THEME_SUBTITLE_HEIGHT px
+-    Content panel       fills remaining space, transparent
+-    Footer bar          THEME_FOOTER_HEIGHT px
++  Layout:
++    Menu bar   THEME_MENUBAR_HEIGHT px across the top of the screen: setup
++               title and device model on the left; Secure Boot, USB
++               storage, battery, date and time on the right
++    Window     rounded, between the menu bar and the dock: a gray title bar
++               (window controls, back button, centered form title), the
++               scrollable content and, except on the front page, the help
++               card. The front page laid out as a menu (GroupedMenu) has no
++               window: its content, an icon grid, is on the desktop.
++    Dock       THEME_FOOTER_HEIGHT px, floating above the bottom edge: the
++               key hints
+ 
+-  @param[in]  Screen    LVGL root screen (must already be created).
+-  @param[in]  FormData  Current form (used for subtitle text).
++  @param[in]  Screen       LVGL root screen (must already be created).
++  @param[in]  FormData     Current form (used for the title, hotkeys and the
++                           front-page layout).
++  @param[in]  GroupedMenu  TRUE when the renderer lays the form out as a
++                           menu in columns (LEFT/RIGHT move between them).
+ 
+   @return  The content panel object. Form widgets should be created as
+            children of this object. Returned pointer is owned by Screen
+@@ -35,7 +43,8 @@ lv_obj_t *
+ EFIAPI
+ AptioBuildChrome (
+   IN lv_obj_t                    *Screen,
+-  IN FORM_DISPLAY_ENGINE_FORM    *FormData
++  IN FORM_DISPLAY_ENGINE_FORM    *FormData,
++  IN BOOLEAN                     GroupedMenu
+   );
+ 
+ /**
+@@ -49,7 +58,7 @@ AptioChromeTeardown (
+   );
+ 
+ /**
+-  Update the help pane text. Caller-owned UTF-8 string is copied by LVGL.
++  Update the help card text. Caller-owned UTF-8 string is copied by LVGL.
+   Pass NULL or "" to clear.
+ **/
+ VOID
+@@ -58,4 +67,34 @@ AptioSetHelpText (
+   IN CONST CHAR8  *Utf8
+   );
+ 
++/**
++  Update the help card heading, normally the prompt of the focused
++  question. Pass NULL or "" to show the generic "Help" heading.
++**/
++VOID
++EFIAPI
++AptioSetHelpTitle (
++  IN CONST CHAR8  *Utf8
++  );
++
++/**
++  Return the back button of the window title bar (the renderer binds it to
++  the form exit), or NULL on the front page.
++**/
++lv_obj_t *
++EFIAPI
++AptioGetBackButton (
++  VOID
++  );
++
++/**
++  Return the device model from SMBIOS (for example "ThinkPad W541"), or
++  NULL when it is not available. The string is owned by the chrome.
++**/
++CONST CHAR8 *
++EFIAPI
++AptioGetDeviceModel (
++  VOID
++  );
++
+ #endif // LVGL_APTIO_CHROME_H_
+diff --git a/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf b/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
+index 76e075c..eb8d738 100644
+--- a/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
++++ b/LvglDisplayEngineDxe/LvglDisplayEngineDxe.inf
+@@ -39,6 +39,7 @@
+   PrintLib
+   BaseMemoryLib
+   BaseLib
++  DevicePathLib
+   MemoryAllocationLib
+   HiiLib
+   PcdLib
+@@ -49,12 +50,17 @@
+ [Guids]
+   gEfiIfrTianoGuid                      ## CONSUMES ## GUID (Identify front-page banner opcodes)
+   gLvglUiConfigFormSetGuid              ## CONSUMES
++  gEfiGlobalVariableGuid                ## CONSUMES ## Variable:L"SecureBoot" (menu bar status)
+ 
+ [Protocols]
+   gEdkiiFormDisplayEngineProtocolGuid   ## PRODUCES
+   gEfiHiiPopupProtocolGuid              ## PRODUCES
+   gEfiGraphicsOutputProtocolGuid        ## CONSUMES
+   gEdkiiFormBrowserExProtocolGuid       ## CONSUMES
++  gEfiSmbiosProtocolGuid                ## SOMETIMES_CONSUMES ## Device model (menu bar)
++  gEfiBatteryStatusProtocolGuid         ## SOMETIMES_CONSUMES ## Battery level (menu bar)
++  gEfiBlockIoProtocolGuid               ## SOMETIMES_CONSUMES ## USB storage (menu bar)
++  gEfiDevicePathProtocolGuid            ## SOMETIMES_CONSUMES ## USB storage (menu bar)
+ 
+ [Depex]
+   gEfiHiiDatabaseProtocolGuid AND gEfiHiiConfigRoutingProtocolGuid AND gEfiGraphicsOutputProtocolGuid
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index 189b477..bd091be 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -44,6 +44,71 @@ STATIC lv_obj_t  *mContentPanel = NULL;
+ //
+ STATIC BOOLEAN  mSubtitleShowsDeviceModel = FALSE;
+ 
++//
++// Layout state while a form is built: the card that collects the rows of
++// the current section (a new one starts after each subtitle). Cards carry
++// LV_OBJ_FLAG_USER_1 so that scrolling targets their rows.
++//
++STATIC lv_obj_t  *mSectionCard = NULL;
++
++//
++// The last subtitle, until it is known whether rows follow it: then it
++// becomes a section header, otherwise it stays a plain note (for example
++// "Press ESC to exit." at the end of a form).
++//
++STATIC lv_obj_t  *mPendingSection = NULL;
++
++//
++// Menus (System Configuration and the front page, whose entries all open
++// other forms) are laid out as areas -- "Boot Options", "Security", ... --
++// each a titled card, placed in columns; the front page is an icon grid
++// instead (see below). The front page also shows an overview of the
++// machine (mAboutInfo holds its key/value lines).
++//
++#define LVGL_AREA_COLUMNS_MAX  3
++#define LVGL_AREA_MAX          8
++
++typedef enum {
++  LvglAreaBoot,
++  LvglAreaSystem,
++  LvglAreaGeneral,
++  LvglAreaSecurity,
++  LvglAreaDisplay,
++  LvglAreaDevices,
++  LvglAreaPower,
++  LvglAreaMore
++} LVGL_MENU_AREA;
++
++typedef struct {
++  LVGL_MENU_AREA  Area;
++  UINTN           Column;
++  lv_obj_t        *Card;
++} LVGL_AREA_ENTRY;
++
++STATIC BOOLEAN          mGroupedMenu = FALSE;
++STATIC lv_obj_t         *mAreaRow    = NULL;
++STATIC lv_obj_t         *mAreaColumns[LVGL_AREA_COLUMNS_MAX];
++STATIC UINTN            mAreaColumnWeight[LVGL_AREA_COLUMNS_MAX];
++STATIC UINTN            mAreaColumnCount = 0;
++STATIC LVGL_AREA_ENTRY  mAreas[LVGL_AREA_MAX];
++STATIC UINTN            mAreaCount = 0;
++STATIC lv_obj_t         *mAboutInfo = NULL;
++
++//
++// The front page is a grid of icons on the desktop, like System
++// Preferences (THEME_TILE_*): the settings first, then -- after a divider
++// -- the boot entries and reboot. Each group is a section of tiles that
++// wraps after the same number of columns, so that the columns line up. The
++// help of the focused entry is shown below the grid, and the arrow keys
++// move between the tiles in all four directions.
++//
++#define LVGL_GRID_SECTIONS  2
++
++STATIC BOOLEAN   mGridMenu = FALSE;
++STATIC UINTN     mGridCount[LVGL_GRID_SECTIONS];
++STATIC lv_obj_t  *mGridSection[LVGL_GRID_SECTIONS];
++STATIC lv_obj_t  *mGridCaption = NULL;
++
+ //
+ // Editable field registry -- commit dirty values when leaving a field via
+ // Tab/arrows or when exiting the form (ESC), not only on Enter.
+@@ -106,6 +171,11 @@ typedef struct {
+   lv_obj_t        *Label;
+   EFI_HII_HANDLE  HiiHandle;
+   EFI_STRING_ID   StringId;
++  //
++  // The front-page overview shows "Key: Value" lines as a key and a value:
++  // ValueOnly keeps the label to the value part.
++  //
++  BOOLEAN         ValueOnly;
+ } LVGL_BANNER_ENTRY;
+ 
+ STATIC LVGL_BANNER_ENTRY  mBannerRegistry[LVGL_BANNER_MAX];
+@@ -136,6 +206,12 @@ STATIC BOOLEAN    mPopupHasDiscard    = FALSE;
+ STATIC lv_obj_t   *mPopupPrevFocus    = NULL;
+ STATIC UINT32     mNoneAction         = BROWSER_ACTION_NONE;
+ 
++//
++// Group holding the popup buttons: the form group for the F9/F10 popups,
++// a dedicated one for the unsaved-changes popup (LvglRunConfirmPopup).
++//
++STATIC lv_group_t  *mPopupGroup = NULL;
++
+ //
+ // EFI_HII_POPUP_PROTOCOL popup state
+ // Allows a driver callback to raise a modal Yes/No while a form is displayed.
+@@ -157,6 +233,13 @@ STATIC CONST EFI_GUID  mFrontPageFormSetGuid = {
+   0x9e0c30bc, 0x3f06, 0x4ba6, { 0x82, 0x88, 0x09, 0x17, 0x9b, 0x85, 0x5d, 0xbe }
+ };
+ 
++//
++// DeviceManagerUiLib formset GUID ("System Configuration" on the front page).
++//
++STATIC CONST EFI_GUID  mDeviceManagerFormSetGuid = {
++  0x3ebfa8e6, 0x511d, 0x4b5b, { 0xa9, 0x5f, 0xfb, 0x38, 0x26, 0x0f, 0x1c, 0x27 }
++};
++
+ //
+ // Forward declarations for widget builders.
+ //
+@@ -175,6 +258,7 @@ STATIC VOID CreateDateTimeWidget      (lv_obj_t *Parent, FORM_DISPLAY_ENGINE_STA
+ STATIC VOID RequestUserExit (IN UINT32 Action, IN UINT16 DefaultId, IN FORM_DISPLAY_ENGINE_STATEMENT *Statement OPTIONAL);
+ STATIC BOOLEAN CompletePendingLeaveIfReady (VOID);
+ STATIC BOOLEAN TryCommitFocusedThenNav (IN UINTN DestNavIdx);
++STATIC VOID StyleSecondaryButton (IN lv_obj_t *Btn);
+ 
+ //
+ // ---- Helper: UCS-2 string to UTF-8 for LVGL ----
+@@ -269,7 +353,64 @@ GetPromptUtf8 (
+ }
+ 
+ /**
+-  Get help text for a statement as UTF-8. Caller must FreePool().
++  Join the lines of a help text where a sentence goes on: help strings are
++  often broken for the 80-column text UI, while the help card wraps the
++  text itself. A line break stays after the end of a sentence or a colon,
++  around an empty line and before a list item ("-" or "*").
++
++  @param[in, out] Text  NUL-terminated UTF-8 text, changed in place.
++**/
++STATIC
++VOID
++ReflowHelpText (
++  IN OUT CHAR8  *Text
++  )
++{
++  CHAR8  *Read;
++  CHAR8  *Write;
++  CHAR8  *Back;
++  CHAR8  Next;
++
++  //
++  // CR LF -> LF
++  //
++  for (Read = Text, Write = Text; *Read != '\0'; Read++) {
++    if (*Read != '\r') {
++      *Write++ = *Read;
++    }
++  }
++
++  *Write = '\0';
++
++  for (Read = Text; *Read != '\0'; Read++) {
++    if (*Read != '\n') {
++      continue;
++    }
++
++    Back = Read;
++    while ((Back > Text) && (Back[-1] == ' ')) {
++      Back--;
++    }
++
++    if (Back == Text) {
++      continue;
++    }
++
++    Next = Read[1];
++    if ((Back[-1] == '.') || (Back[-1] == ':') || (Back[-1] == '!') ||
++        (Back[-1] == '?') || (Back[-1] == '\n') || (Next == '\n') ||
++        (Next == '-') || (Next == '*') || (Next == '\0'))
++    {
++      continue;
++    }
++
++    *Read = ' ';
++  }
++}
++
++/**
++  Get help text for a statement as UTF-8, with the lines of its sentences
++  joined (ReflowHelpText). Caller must FreePool().
+   STATEMENT_HEADER.Help is shared by every opcode that embeds it.
+ **/
+ STATIC
+@@ -295,9 +436,351 @@ GetHelpUtf8 (
+ 
+   Utf8 = Ucs2ToUtf8 (Str16);
+   FreePool (Str16);
++  if (Utf8 != NULL) {
++    ReflowHelpText (Utf8);
++  }
++
+   return Utf8;
+ }
+ 
++/**
++  TRUE when Text is NULL, empty or only blanks (the "empty line" subtitles
++  that forms use as spacers).
++**/
++STATIC
++BOOLEAN
++IsBlankUtf8 (
++  IN CONST CHAR8  *Text
++  )
++{
++  if (Text == NULL) {
++    return TRUE;
++  }
++
++  for ( ; *Text != '\0'; Text++) {
++    if ((*Text != ' ') && (*Text != '\t')) {
++      return FALSE;
++    }
++  }
++
++  return TRUE;
++}
++
++/**
++  Symbol and color of the rounded square shown in front of a menu entry,
++  chosen from words in its prompt. The first match wins, so more specific
++  words come first.
++
++  @param[in]  Prompt  Prompt of the entry.
++  @param[out] Color   Color of the square.
++
++  @return An LV_SYMBOL_* string, or NULL when no word matches.
++**/
++STATIC
++CONST CHAR8 *
++LookupPromptIcon (
++  IN  CONST CHAR8  *Prompt,
++  OUT UINT32       *Color
++  )
++{
++  STATIC CONST struct {
++    CONST CHAR8    *Word;
++    CONST CHAR8    *Symbol;
++    UINT32         Color;
++  } Map[] = {
++    { "Default Boot",         LV_SYMBOL_PLAY,      THEME_COLOR_ICON_GREEN  },
++    { "Boot Menu",            LV_SYMBOL_LIST,      THEME_COLOR_ICON_BLUE   },
++    { "Boot Manager",         LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "Boot Order",           LV_SYMBOL_SHUFFLE,   THEME_COLOR_ICON_PURPLE },
++    { "Add Boot",             LV_SYMBOL_PLUS,      THEME_COLOR_ICON_GREEN  },
++    { "Delete Boot",          LV_SYMBOL_TRASH,     THEME_COLOR_ICON_RED    },
++    { "From File",            LV_SYMBOL_DIRECTORY, THEME_COLOR_ICON_BLUE   },
++    { "System Configuration", LV_SYMBOL_BARS,      THEME_COLOR_ICON_GRAY   },
++    { "Platform Setup",       LV_SYMBOL_SETTINGS,  THEME_COLOR_ICON_BLUE   },
++    //
++    // Categories of the setup menu.
++    //
++    { "General",              LV_SYMBOL_SETTINGS,     THEME_COLOR_ICON_GRAY   },
++    { "Energy",               LV_SYMBOL_BATTERY_FULL, THEME_COLOR_ICON_GREEN  },
++    { "Security",             LV_SYMBOL_EYE_CLOSE,    THEME_COLOR_ICON_BLUE   },
++    { "Keyboard",             LV_SYMBOL_KEYBOARD,     THEME_COLOR_ICON_TEAL   },
++    { "Hardware",             LV_SYMBOL_SD_CARD,      THEME_COLOR_ICON_PURPLE },
++    { "Voltage",              LV_SYMBOL_CHARGE,       THEME_COLOR_ICON_ORANGE },
++    { "Console",              LV_SYMBOL_FILE,         THEME_COLOR_ICON_GRAY   },
++    { "Sound",                LV_SYMBOL_VOLUME_MAX,   THEME_COLOR_ICON_PINK   },
++    { "Graphics",             LV_SYMBOL_IMAGE,        THEME_COLOR_ICON_TEAL   },
++    { "Reboot",               LV_SYMBOL_POWER,     THEME_COLOR_ICON_RED    },
++    { "Commit",               LV_SYMBOL_OK,        THEME_COLOR_ICON_GREEN  },
++    { "Discard",              LV_SYMBOL_CLOSE,     THEME_COLOR_ICON_RED    },
++    { "Reset",                LV_SYMBOL_REFRESH,   THEME_COLOR_ICON_ORANGE },
++    { "Time and Date",        LV_SYMBOL_BELL,      THEME_COLOR_ICON_ORANGE },
++    { "Password",             LV_SYMBOL_EYE_CLOSE, THEME_COLOR_ICON_PINK   },
++    { "Secure Boot",          LV_SYMBOL_OK,        THEME_COLOR_ICON_BLUE   },
++    { "Splash",               LV_SYMBOL_IMAGE,     THEME_COLOR_ICON_TEAL   },
++    { "Graphical UI",         LV_SYMBOL_TINT,      THEME_COLOR_ICON_PURPLE },
++    { "Shell",                LV_SYMBOL_KEYBOARD,  THEME_COLOR_ICON_GRAY   },
++    { "USB",                  LV_SYMBOL_USB,       THEME_COLOR_ICON_BLUE   },
++    { "CD",                   LV_SYMBOL_EJECT,     THEME_COLOR_ICON_GRAY   },
++    { "DVD",                  LV_SYMBOL_EJECT,     THEME_COLOR_ICON_GRAY   },
++    { "PXE",                  LV_SYMBOL_DOWNLOAD,  THEME_COLOR_ICON_TEAL   },
++    { "Network",              LV_SYMBOL_DOWNLOAD,  THEME_COLOR_ICON_TEAL   },
++    { "HTTP",                 LV_SYMBOL_DOWNLOAD,  THEME_COLOR_ICON_TEAL   },
++    { "NVMe",                 LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "SATA",                 LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "HARDDISK",             LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "Disk",                 LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "SSD",                  LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++    { "eMMC",                 LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
++  };
++  UINTN  Idx;
++
++  *Color = THEME_COLOR_ICON_GRAY;
++  if (Prompt == NULL) {
++    return NULL;
++  }
++
++  for (Idx = 0; Idx < ARRAY_SIZE (Map); Idx++) {
++    if (AsciiStrStr (Prompt, Map[Idx].Word) != NULL) {
++      *Color = Map[Idx].Color;
++      return Map[Idx].Symbol;
++    }
++  }
++
++  return NULL;
++}
++
++/**
++  Area of a menu entry, chosen from words in its prompt. The first match
++  wins: "Reboot", "Secure Boot" and "Boot Splash" must not land in the boot
++  area, "Graphical UI Configuration" not in the system one.
++**/
++STATIC
++LVGL_MENU_AREA
++LookupMenuArea (
++  IN CONST CHAR8  *Prompt
++  )
++{
++  STATIC CONST struct {
++    CONST CHAR8       *Word;
++    LVGL_MENU_AREA    Area;
++  } Map[] = {
++    { "Reboot",        LvglAreaPower    },
++    { "Shutdown",      LvglAreaPower    },
++    { "Power Off",     LvglAreaPower    },
++    { "Restart",       LvglAreaPower    },
++    { "Secure Boot",   LvglAreaSecurity },
++    { "Password",      LvglAreaSecurity },
++    { "TPM",           LvglAreaSecurity },
++    { "Tcg",           LvglAreaSecurity },
++    { "Splash",        LvglAreaDisplay  },
++    { "Graphical",     LvglAreaDisplay  },
++    { "Display",       LvglAreaDisplay  },
++    { "Boot",          LvglAreaBoot     },
++    { "Shell",         LvglAreaBoot     },
++    { "Time",          LvglAreaGeneral  },
++    { "Date",          LvglAreaGeneral  },
++    { "Language",      LvglAreaGeneral  },
++    { "Configuration", LvglAreaSystem   },
++    { "Platform",      LvglAreaDevices  },
++    { "Device",        LvglAreaDevices  },
++    { "Network",       LvglAreaDevices  },
++    { "Driver",        LvglAreaDevices  },
++  };
++  UINTN  Idx;
++
++  if (Prompt != NULL) {
++    for (Idx = 0; Idx < ARRAY_SIZE (Map); Idx++) {
++      if (AsciiStrStr (Prompt, Map[Idx].Word) != NULL) {
++        return Map[Idx].Area;
++      }
++    }
++  }
++
++  return LvglAreaMore;
++}
++
++/**
++  Title of a menu area.
++**/
++STATIC
++CONST CHAR8 *
++MenuAreaTitle (
++  IN LVGL_MENU_AREA  Area
++  )
++{
++  switch (Area) {
++    case LvglAreaBoot:
++      return "Boot Options";
++    case LvglAreaSystem:
++      return "System";
++    case LvglAreaGeneral:
++      return "General";
++    case LvglAreaSecurity:
++      return "Security";
++    case LvglAreaDisplay:
++      return "Display";
++    case LvglAreaDevices:
++      return "Devices";
++    case LvglAreaPower:
++      return "Power";
++    default:
++      return "More";
++  }
++}
++
++/**
++  Section of the front-page grid for a menu area: the boot entries and
++  reboot go after the divider, all other entries before it.
++**/
++STATIC
++UINTN
++GridSectionOfArea (
++  IN LVGL_MENU_AREA  Area
++  )
++{
++  return ((Area == LvglAreaBoot) || (Area == LvglAreaPower)) ? 1 : 0;
++}
++
++/**
++  Create a rounded square of the given color with a white symbol, the icon
++  of a menu entry.
++**/
++STATIC
++lv_obj_t *
++CreateIconSquare (
++  IN lv_obj_t         *Parent,
++  IN CONST CHAR8      *Symbol,
++  IN UINT32           Color,
++  IN int32_t          Size,
++  IN CONST lv_font_t  *Font
++  )
++{
++  lv_obj_t  *Square;
++  lv_obj_t  *Label;
++
++  Square = lv_obj_create (Parent);
++  lv_obj_remove_style_all (Square);
++  lv_obj_set_size (Square, Size, Size);
++  lv_obj_set_style_radius (Square, THEME_RADIUS_ICON, 0);
++  lv_obj_set_style_bg_color (Square, lv_color_hex (Color), 0);
++  lv_obj_set_style_bg_opa (Square, LV_OPA_COVER, 0);
++  lv_obj_clear_flag (Square, LV_OBJ_FLAG_CLICKABLE);
++  lv_obj_clear_flag (Square, LV_OBJ_FLAG_SCROLLABLE);
++
++  Label = lv_label_create (Square);
++  lv_label_set_text (Label, Symbol);
++  lv_obj_set_style_text_font (Label, Font, 0);
++  lv_obj_set_style_text_color (Label, lv_color_white (), 0);
++  lv_obj_center (Label);
++  return Square;
++}
++
++/**
++  Symbol of a menu entry: the matching symbol, or for entries without one
++  the first letter of the prompt, written to Letter.
++
++  @param[in]  Prompt  Prompt of the entry.
++  @param[out] Letter  Buffer of two characters for the letter.
++  @param[out] Color   Color of the symbol.
++
++  @return The symbol: a constant string or Letter.
++**/
++STATIC
++CONST CHAR8 *
++PromptSymbol (
++  IN  CONST CHAR8  *Prompt,
++  OUT CHAR8        *Letter,
++  OUT UINT32       *Color
++  )
++{
++  CONST CHAR8  *Symbol;
++  CONST CHAR8  *Walk;
++
++  Symbol = LookupPromptIcon (Prompt, Color);
++  if (Symbol != NULL) {
++    return Symbol;
++  }
++
++  Letter[0] = '?';
++  Letter[1] = '\0';
++  for (Walk = Prompt; (Walk != NULL) && (*Walk != '\0'); Walk++) {
++    if (((*Walk >= 'A') && (*Walk <= 'Z')) || ((*Walk >= '0') && (*Walk <= '9'))) {
++      Letter[0] = *Walk;
++      break;
++    }
++
++    if ((*Walk >= 'a') && (*Walk <= 'z')) {
++      Letter[0] = (CHAR8)(*Walk - 'a' + 'A');
++      break;
++    }
++  }
++
++  return Letter;
++}
++
++/**
++  Create the icon of a menu entry: the matching symbol, or for entries
++  without one the first letter of the prompt, on a rounded square.
++**/
++STATIC
++lv_obj_t *
++CreatePromptIcon (
++  IN lv_obj_t         *Parent,
++  IN CONST CHAR8      *Prompt,
++  IN int32_t          Size,
++  IN CONST lv_font_t  *Font
++  )
++{
++  CONST CHAR8  *Symbol;
++  UINT32       Color;
++  CHAR8        Letter[2];
++
++  Symbol = PromptSymbol (Prompt, Letter, &Color);
++
++  //
++  // lv_label_set_text() copies the text, so a stack buffer is fine.
++  //
++  return CreateIconSquare (Parent, Symbol, Color, Size, Font);
++}
++
++/**
++  Split a front-page banner line of the form "Key: Value" (for example
++  " FW: <version> <date>"). Leading blanks are skipped.
++
++  @param[in]  Text    Banner text.
++  @param[out] Key     Start of the key (not terminated), or NULL.
++  @param[out] KeyLen  Length of the key.
++
++  @return Start of the value: the whole (trimmed) text when there is no
++          short "Key: " prefix.
++**/
++STATIC
++CONST CHAR8 *
++SplitBannerText (
++  IN  CONST CHAR8  *Text,
++  OUT CONST CHAR8  **Key,
++  OUT UINTN        *KeyLen
++  )
++{
++  CONST CHAR8  *Colon;
++
++  while ((*Text == ' ') || (*Text == '\t')) {
++    Text++;
++  }
++
++  *Key    = NULL;
++  *KeyLen = 0;
++
++  Colon = AsciiStrStr (Text, ": ");
++  if ((Colon == NULL) || (Colon == Text) || ((UINTN)(Colon - Text) > 12)) {
++    return Text;
++  }
++
++  *Key    = Text;
++  *KeyLen = (UINTN)(Colon - Text);
++  return Colon + 2;
++}
++
+ //
+ // ---- Ordered list array helpers (mirror of DisplayEngineDxe ProcessOptions.c) ----
+ //
+@@ -577,6 +1060,27 @@ OnDropdownOpened (
+   if (List != NULL) {
+     lv_obj_set_width (List, LV_SIZE_CONTENT);
+     LvglThemeStyleDropdownList (List);
++
++    //
++    // A menu: rounded, with a light shadow; the selected option has the
++    // accent fill.
++    //
++    lv_obj_set_style_bg_color (List, lv_color_hex (THEME_COLOR_MENU_BG), 0);
++    lv_obj_set_style_bg_opa (List, LV_OPA_COVER, 0);
++    lv_obj_set_style_border_color (List, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++    lv_obj_set_style_border_width (List, THEME_BORDER_PANE, 0);
++    lv_obj_set_style_radius (List, THEME_RADIUS_ROW, 0);
++    lv_obj_set_style_shadow_width (List, THEME_MENU_SHADOW_WIDTH, 0);
++    lv_obj_set_style_shadow_offset_y (List, LvglThemePx (4), 0);
++    lv_obj_set_style_shadow_color (List, lv_color_black (), 0);
++    lv_obj_set_style_shadow_opa (List, LV_OPA_50, 0);
++    lv_obj_set_style_text_color (List, lv_color_hex (THEME_COLOR_TEXT_PRIMARY), 0);
++    lv_obj_set_style_bg_color (List, lv_color_hex (THEME_COLOR_ACCENT), LV_PART_SELECTED | LV_STATE_CHECKED);
++    lv_obj_set_style_bg_opa (List, LV_OPA_COVER, LV_PART_SELECTED | LV_STATE_CHECKED);
++    lv_obj_set_style_text_color (List, lv_color_white (), LV_PART_SELECTED | LV_STATE_CHECKED);
++    lv_obj_set_style_bg_color (List, lv_color_hex (THEME_COLOR_ACCENT_HOVER), LV_PART_SELECTED | LV_STATE_PRESSED);
++    lv_obj_set_style_bg_opa (List, LV_OPA_COVER, LV_PART_SELECTED | LV_STATE_PRESSED);
++    lv_obj_set_style_text_color (List, lv_color_white (), LV_PART_SELECTED | LV_STATE_PRESSED);
+   }
+ }
+ 
+@@ -778,17 +1282,21 @@ OnPopupKey (
+     return;
+   }
+ 
++  if (mPopupGroup == NULL) {
++    return;
++  }
++
+   if ((Key == LV_KEY_LEFT) || (Key == LV_KEY_UP)) {
+-    Focused = lv_group_get_focused (mSession.Group);
++    Focused = lv_group_get_focused (mPopupGroup);
+     if (Focused != mPopupFirstObj) {
+-      lv_group_focus_prev (mSession.Group);
++      lv_group_focus_prev (mPopupGroup);
+     }
+ 
+     lv_event_stop_processing (Event);
+   } else if ((Key == LV_KEY_RIGHT) || (Key == LV_KEY_DOWN)) {
+-    Focused = lv_group_get_focused (mSession.Group);
++    Focused = lv_group_get_focused (mPopupGroup);
+     if (Focused != mPopupLastObj) {
+-      lv_group_focus_next (mSession.Group);
++      lv_group_focus_next (mPopupGroup);
+     }
+ 
+     lv_event_stop_processing (Event);
+@@ -802,24 +1310,30 @@ typedef struct {
+ } LVGL_DIALOG_SHELL;
+ 
+ /**
+-  Shared modal shell: dimmed overlay, dialog card, title, separator, button row.
++  Shared modal shell, an alert: dimmed overlay and a rounded card with a
++  symbol on a colored square, the title and the button row (the message is
++  added above it by CreateDialogMessageLabel). With StackButtons the buttons
++  fill the width one above the other, otherwise they share a row.
+ **/
+ STATIC
+ VOID
+ CreateDialogShell (
+   OUT LVGL_DIALOG_SHELL  *Shell,
+-  IN  CONST CHAR8        *Title
++  IN  CONST CHAR8        *Title,
++  IN  CONST CHAR8        *Symbol,
++  IN  UINT32             SymbolColor,
++  IN  BOOLEAN            StackButtons
+   )
+ {
++  lv_obj_t  *Icon;
+   lv_obj_t  *TitleLbl;
+-  lv_obj_t  *Sep;
+ 
+   Shell->Overlay = lv_obj_create (lv_layer_top ());
++  lv_obj_remove_style_all (Shell->Overlay);
+   lv_obj_set_size (Shell->Overlay, LV_PCT (100), LV_PCT (100));
+   lv_obj_set_style_bg_color (Shell->Overlay, lv_color_black (), 0);
+   lv_obj_set_style_bg_opa (Shell->Overlay, THEME_OVERLAY_OPA, 0);
+-  lv_obj_set_style_border_width (Shell->Overlay, 0, 0);
+-  lv_obj_set_style_pad_all (Shell->Overlay, 0, 0);
++  lv_obj_clear_flag (Shell->Overlay, LV_OBJ_FLAG_SCROLLABLE);
+   lv_obj_set_flex_flow (Shell->Overlay, LV_FLEX_FLOW_COLUMN);
+   lv_obj_set_flex_align (
+     Shell->Overlay,
+@@ -829,39 +1343,44 @@ CreateDialogShell (
+     );
+ 
+   Shell->Card = lv_obj_create (Shell->Overlay);
+-  lv_obj_set_width (Shell->Card, LV_PCT (THEME_DIALOG_WIDTH_PCT));
++  lv_obj_remove_style_all (Shell->Card);
++  lv_obj_set_width (Shell->Card, THEME_DIALOG_WIDTH);
+   lv_obj_set_height (Shell->Card, LV_SIZE_CONTENT);
++  lv_obj_clear_flag (Shell->Card, LV_OBJ_FLAG_SCROLLABLE);
+   lv_obj_set_flex_flow (Shell->Card, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_flex_align (Shell->Card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+   lv_obj_set_style_pad_all (Shell->Card, THEME_PAD_DIALOG, 0);
+   lv_obj_set_style_pad_row (Shell->Card, THEME_PAD_DIALOG_ROW_GAP, 0);
+   lv_obj_set_style_bg_color (Shell->Card, lv_color_hex (THEME_COLOR_BG_DIALOG), 0);
+-  lv_obj_set_style_radius (Shell->Card, THEME_RADIUS, 0);
+-  lv_obj_set_style_border_width (Shell->Card, 0, 0);
++  lv_obj_set_style_bg_opa (Shell->Card, LV_OPA_COVER, 0);
++  lv_obj_set_style_radius (Shell->Card, THEME_RADIUS_FRAME, 0);
++  lv_obj_set_style_border_color (Shell->Card, lv_color_hex (THEME_COLOR_DOCK_BORDER), 0);
++  lv_obj_set_style_border_width (Shell->Card, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_shadow_width (Shell->Card, THEME_DIALOG_SHADOW_WIDTH, 0);
++  lv_obj_set_style_shadow_offset_y (Shell->Card, LvglThemePx (8), 0);
++  lv_obj_set_style_shadow_color (Shell->Card, lv_color_black (), 0);
++  lv_obj_set_style_shadow_opa (Shell->Card, LV_OPA_60, 0);
++  lv_obj_set_style_text_align (Shell->Card, LV_TEXT_ALIGN_CENTER, 0);
++
++  Icon = CreateIconSquare (Shell->Card, Symbol, SymbolColor, THEME_DIALOG_ICON_SIZE, LvglThemeFontIcon ());
++  lv_obj_set_style_radius (Icon, THEME_RADIUS_FRAME, 0);
++  lv_obj_set_style_margin_bottom (Icon, LvglThemePx (4), 0);
+ 
+   TitleLbl = lv_label_create (Shell->Card);
++  lv_label_set_long_mode (TitleLbl, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width (TitleLbl, LV_PCT (100));
+   lv_label_set_text (TitleLbl, Title);
+-  THEME_APPLY_POPUP_FONT (TitleLbl);
++  lv_obj_set_style_text_font (TitleLbl, THEME_FONT_TITLE, 0);
+   lv_obj_set_style_text_color (TitleLbl, lv_color_hex (THEME_COLOR_TEXT_TITLE), 0);
+ 
+-  Sep = lv_obj_create (Shell->Card);
+-  lv_obj_set_size (Sep, LV_PCT (100), THEME_BORDER_PANE);
+-  lv_obj_set_style_bg_color (Sep, lv_color_hex (THEME_COLOR_BG_SEPARATOR), 0);
+-  lv_obj_set_style_border_width (Sep, 0, 0);
+-  lv_obj_set_style_pad_all (Sep, 0, 0);
+-
+   Shell->BtnRow = lv_obj_create (Shell->Card);
++  lv_obj_remove_style_all (Shell->BtnRow);
+   lv_obj_set_size (Shell->BtnRow, LV_PCT (100), LV_SIZE_CONTENT);
+-  lv_obj_set_flex_flow (Shell->BtnRow, LV_FLEX_FLOW_ROW);
+-  lv_obj_set_flex_align (
+-    Shell->BtnRow,
+-    LV_FLEX_ALIGN_END,
+-    LV_FLEX_ALIGN_CENTER,
+-    LV_FLEX_ALIGN_CENTER
+-    );
+-  lv_obj_set_style_pad_all (Shell->BtnRow, 0, 0);
+-  lv_obj_set_style_border_width (Shell->BtnRow, 0, 0);
+-  lv_obj_set_style_bg_opa (Shell->BtnRow, LV_OPA_TRANSP, 0);
++  lv_obj_clear_flag (Shell->BtnRow, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_set_flex_flow (Shell->BtnRow, StackButtons ? LV_FLEX_FLOW_COLUMN : LV_FLEX_FLOW_ROW);
+   lv_obj_set_style_pad_column (Shell->BtnRow, THEME_PAD_DIALOG_COL_GAP, 0);
++  lv_obj_set_style_pad_row (Shell->BtnRow, THEME_PAD_DIALOG_COL_GAP, 0);
++  lv_obj_set_style_margin_top (Shell->BtnRow, LvglThemePx (8), 0);
+ }
+ 
+ STATIC
+@@ -874,18 +1393,54 @@ CreateDialogMessageLabel (
+ {
+   lv_obj_t  *MsgLbl;
+ 
+-  MsgLbl = lv_label_create (Card);
+-  if (Wrap) {
+-    lv_label_set_long_mode (MsgLbl, LV_LABEL_LONG_WRAP);
+-    lv_obj_set_width (MsgLbl, LV_PCT (100));
+-  }
++  (VOID)Wrap;
+ 
++  MsgLbl = lv_label_create (Card);
++  lv_label_set_long_mode (MsgLbl, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width (MsgLbl, LV_PCT (100));
+   lv_label_set_text (MsgLbl, Text);
+   lv_obj_set_style_text_color (MsgLbl, lv_color_hex (THEME_COLOR_TEXT_POPUP), 0);
+-  THEME_APPLY_BODY_FONT (MsgLbl);
++  lv_obj_set_style_text_font (MsgLbl, LvglThemeFontSmall (), 0);
++  lv_obj_set_style_text_line_space (MsgLbl, LvglThemePx (3), 0);
++
++  //
++  // The shell already holds the button row: show the message above it.
++  //
++  lv_obj_move_to_index (MsgLbl, (int32_t)lv_obj_get_child_count (Card) - 2);
+   return MsgLbl;
+ }
+ 
++/**
++  Add a button to a dialog: gray, accent-filled while focused (ENTER acts
++  on the focused button). Buttons in a row share its width.
++**/
++STATIC
++lv_obj_t *
++AddDialogButton (
++  IN lv_obj_t     *BtnRow,
++  IN CONST CHAR8  *Text,
++  IN BOOLEAN      Stacked
++  )
++{
++  lv_obj_t  *Btn;
++  lv_obj_t  *Lbl;
++
++  Btn = lv_btn_create (BtnRow);
++  Lbl = lv_label_create (Btn);
++  lv_label_set_text (Lbl, Text);
++  LvglThemeStyleButtonLabel (Btn, Lbl);
++  StyleSecondaryButton (Btn);
++  lv_obj_center (Lbl);
++
++  if (Stacked) {
++    lv_obj_set_width (Btn, LV_PCT (100));
++  } else {
++    lv_obj_set_flex_grow (Btn, 1);
++  }
++
++  return Btn;
++}
++
+ /**
+   Create a modal confirmation popup on top of the current screen.
+ 
+@@ -908,33 +1463,34 @@ ShowPopup (
+   lv_obj_t           *ConfirmBtn;
+   lv_obj_t           *DiscardBtn;
+   lv_obj_t           *CancelBtn;
+-  lv_obj_t           *Lbl;
++  BOOLEAN            IsLoad;
++  CHAR8              ConfirmText[64];
+ 
+   mPopupConfirmAction = ConfirmAction;
+   mPopupResult        = LVGL_POPUP_PENDING;
+   mPopupHasDiscard    = ShowDiscard;
++  mPopupGroup         = Group;
+   mPopupPrevFocus     = (Group != NULL) ? lv_group_get_focused (Group) : NULL;
++  IsLoad              = (BOOLEAN)(AsciiStrCmp (ConfirmLabel, "Load") == 0);
+ 
+-  CreateDialogShell (&Shell, Title);
+-  mPopupOverlay = Shell.Overlay;
++  if (ShowDiscard) {
++    CreateDialogShell (&Shell, Title, LV_SYMBOL_WARNING, THEME_COLOR_ICON_ORANGE, TRUE);
++    CreateDialogMessageLabel (Shell.Card, "Do you want to save the changes you made?", TRUE);
++  } else if (IsLoad) {
++    CreateDialogShell (&Shell, Title, LV_SYMBOL_REFRESH, THEME_COLOR_ICON_ORANGE, FALSE);
++    CreateDialogMessageLabel (Shell.Card, "The default values will be loaded. Press F10 to save them.", TRUE);
++  } else {
++    CreateDialogShell (&Shell, Title, LV_SYMBOL_SAVE, THEME_COLOR_ICON_BLUE, FALSE);
++    CreateDialogMessageLabel (Shell.Card, "The modified settings will be saved.", TRUE);
++  }
+ 
+-  CreateDialogMessageLabel (
+-    Shell.Card,
+-    ShowDiscard ? "You have unsaved changes." : "Save the current settings?",
+-    FALSE
+-    );
++  mPopupOverlay = Shell.Overlay;
+ 
+   //
+   // Confirm (Save / Load) button.
+   //
+-  ConfirmBtn = lv_btn_create (Shell.BtnRow);
+-  Lbl        = lv_label_create (ConfirmBtn);
+-  {
+-    CHAR8  ConfirmText[64];
+-    AsciiSPrint (ConfirmText, sizeof (ConfirmText), "%a (Y)", ConfirmLabel);
+-    lv_label_set_text (Lbl, ConfirmText);
+-  }
+-  LvglThemeStyleButtonLabel (ConfirmBtn, Lbl);
++  AsciiSPrint (ConfirmText, sizeof (ConfirmText), "%a (Y)", ConfirmLabel);
++  ConfirmBtn = AddDialogButton (Shell.BtnRow, ConfirmText, ShowDiscard);
+   lv_obj_add_event_cb (ConfirmBtn, OnPopupBtn, LV_EVENT_CLICKED, &mPopupConfirmAction);
+   lv_obj_add_event_cb (ConfirmBtn, OnPopupKey, LV_EVENT_KEY, NULL);
+   lv_group_add_obj (Group, ConfirmBtn);
+@@ -945,10 +1501,7 @@ ShowPopup (
+   // Optional Discard button (shown for "unsaved changes" popup only).
+   //
+   if (ShowDiscard) {
+-    DiscardBtn = lv_btn_create (Shell.BtnRow);
+-    Lbl        = lv_label_create (DiscardBtn);
+-    lv_label_set_text (Lbl, "Discard (N)");
+-    LvglThemeStyleButtonLabel (DiscardBtn, Lbl);
++    DiscardBtn = AddDialogButton (Shell.BtnRow, "Discard (N)", TRUE);
+     lv_obj_add_event_cb (DiscardBtn, OnPopupBtn, LV_EVENT_CLICKED, &mDiscardAction);
+     lv_obj_add_event_cb (DiscardBtn, OnPopupKey, LV_EVENT_KEY, NULL);
+     lv_group_add_obj (Group, DiscardBtn);
+@@ -958,10 +1511,7 @@ ShowPopup (
+   //
+   // Cancel button.
+   //
+-  CancelBtn = lv_btn_create (Shell.BtnRow);
+-  Lbl       = lv_label_create (CancelBtn);
+-  lv_label_set_text (Lbl, "Cancel (Esc)");
+-  LvglThemeStyleButtonLabel (CancelBtn, Lbl);
++  CancelBtn = AddDialogButton (Shell.BtnRow, "Cancel (Esc)", ShowDiscard);
+   lv_obj_add_event_cb (CancelBtn, OnPopupBtn, LV_EVENT_CLICKED, &mNoneAction);
+   lv_obj_add_event_cb (CancelBtn, OnPopupKey, LV_EVENT_KEY, NULL);
+   lv_group_add_obj (Group, CancelBtn);
+@@ -1020,11 +1570,188 @@ HandleFunctionKey (
+         RequestUserExit (HotKey->Action, HotKey->DefaultId, NULL);
+       }
+ 
+-      return TRUE;
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  In a menu laid out in columns, find the entry to focus for LEFT/RIGHT: in
++  the nearest column on that side, the entry closest to the focused one.
++
++  @return The entry, or NULL when there is no column on that side.
++**/
++STATIC
++lv_obj_t *
++FindNavInNextColumn (
++  IN lv_obj_t  *Focused,
++  IN BOOLEAN   Right
++  )
++{
++  lv_area_t  From;
++  lv_area_t  To;
++  int32_t    Dx;
++  int32_t    Dy;
++  int32_t    BestDx;
++  int32_t    BestDy;
++  lv_obj_t   *Best;
++  UINTN      Idx;
++
++  if (Focused == NULL) {
++    return NULL;
++  }
++
++  lv_obj_get_coords (Focused, &From);
++  Best   = NULL;
++  BestDx = 0;
++  BestDy = 0;
++  for (Idx = 0; Idx < mNavCount; Idx++) {
++    lv_obj_get_coords (mNavList[Idx], &To);
++
++    //
++    // Only entries of another column, on the requested side.
++    //
++    if (Right ? (To.x1 <= From.x2) : (To.x2 >= From.x1)) {
++      continue;
++    }
++
++    Dx = Right ? (To.x1 - From.x1) : (From.x1 - To.x1);
++    Dy = ((To.y1 + To.y2) / 2) - ((From.y1 + From.y2) / 2);
++    if (Dy < 0) {
++      Dy = -Dy;
++    }
++
++    if ((Best == NULL) || (Dx < BestDx) || ((Dx == BestDx) && (Dy < BestDy))) {
++      Best   = mNavList[Idx];
++      BestDx = Dx;
++      BestDy = Dy;
++    }
++  }
++
++  return Best;
++}
++
++/**
++  In the front-page grid, find the tile to focus for an arrow key.
++
++  LEFT/RIGHT move along the row and, at its ends, on to the previous or
++  next tile in reading order (the navigation list is sorted by rows).
++  UP/DOWN move to the nearest row above or below, onto the tile closest to
++  the focused one, and wrap around from the last row to the first and back.
++  Tiles of a row share their top edge.
++
++  @return The tile, or NULL to keep the focus.
++**/
++STATIC
++lv_obj_t *
++FindNavInGrid (
++  IN lv_obj_t  *Focused,
++  IN lv_key_t  Key
++  )
++{
++  lv_area_t  From;
++  lv_area_t  To;
++  BOOLEAN    Horizontal;
++  BOOLEAN    Forward;
++  int32_t    Primary;
++  int32_t    Secondary;
++  int32_t    BestPrimary;
++  int32_t    BestSecondary;
++  lv_obj_t   *Best;
++  UINTN      Idx;
++  UINTN      Pass;
++
++  if (mNavCount == 0) {
++    return NULL;
++  }
++
++  for (Idx = 0; Idx < mNavCount; Idx++) {
++    if (mNavList[Idx] == Focused) {
++      break;
++    }
++  }
++
++  if ((Focused == NULL) || (Idx == mNavCount)) {
++    return mNavList[0];
++  }
++
++  Horizontal = (BOOLEAN)((Key == LV_KEY_LEFT) || (Key == LV_KEY_RIGHT));
++  Forward    = (BOOLEAN)((Key == LV_KEY_RIGHT) || (Key == LV_KEY_DOWN));
++  lv_obj_get_coords (Focused, &From);
++
++  //
++  // Pass 0: the nearest tile on that side. Pass 1 (UP/DOWN): wrap around
++  // to the row farthest on the other side.
++  //
++  Best          = NULL;
++  BestPrimary   = 0;
++  BestSecondary = 0;
++  for (Pass = 0; (Pass < 2) && (Best == NULL); Pass++) {
++    if (Horizontal && (Pass > 0)) {
++      break;
++    }
++
++    for (Idx = 0; Idx < mNavCount; Idx++) {
++      if (mNavList[Idx] == Focused) {
++        continue;
++      }
++
++      lv_obj_get_coords (mNavList[Idx], &To);
++      if (Horizontal) {
++        if (To.y1 != From.y1) {
++          continue;
++        }
++
++        Primary   = Forward ? (To.x1 - From.x1) : (From.x1 - To.x1);
++        Secondary = 0;
++      } else {
++        Primary   = Forward ? (To.y1 - From.y1) : (From.y1 - To.y1);
++        Secondary = (To.x1 > From.x1) ? (To.x1 - From.x1) : (From.x1 - To.x1);
++        if (Pass > 0) {
++          //
++          // Wrapping: the farthest row on the other side comes first.
++          //
++          if (Primary >= 0) {
++            continue;
++          }
++
++          Primary = MAX_INT32 + Primary;
++        }
++      }
++
++      if (Primary <= 0) {
++        continue;
++      }
++
++      if ((Best == NULL) || (Primary < BestPrimary) ||
++          ((Primary == BestPrimary) && (Secondary < BestSecondary)))
++      {
++        Best          = mNavList[Idx];
++        BestPrimary   = Primary;
++        BestSecondary = Secondary;
++      }
++    }
++  }
++
++  if ((Best == NULL) && Horizontal) {
++    for (Idx = 0; Idx < mNavCount; Idx++) {
++      if (mNavList[Idx] == Focused) {
++        break;
++      }
+     }
++
++    if (Forward) {
++      Idx = (Idx + 1) % mNavCount;
++    } else {
++      Idx = (Idx == 0) ? (mNavCount - 1) : (Idx - 1);
++    }
++
++    Best = mNavList[Idx];
+   }
+ 
+-  return FALSE;
++  return (Best != Focused) ? Best : NULL;
+ }
+ 
+ /**
+@@ -1056,6 +1783,38 @@ OnIndevFallbackKey (
+ 
+   Focused = (mSession.Group != NULL) ? lv_group_get_focused (mSession.Group) : NULL;
+ 
++  //
++  // Front-page grid: the arrow keys move between the tiles.
++  //
++  if (mGridMenu &&
++      ((Key == LV_KEY_LEFT) || (Key == LV_KEY_RIGHT) ||
++       (Key == LV_KEY_UP) || (Key == LV_KEY_DOWN)))
++  {
++    lv_obj_t  *Tile;
++
++    Tile = FindNavInGrid (Focused, Key);
++    if (Tile != NULL) {
++      lv_group_focus_obj (Tile);
++    }
++
++    return;
++  }
++
++  //
++  // Menus in columns: LEFT/RIGHT move to the nearest entry of the column on
++  // that side.
++  //
++  if (mGroupedMenu && ((Key == LV_KEY_LEFT) || (Key == LV_KEY_RIGHT))) {
++    lv_obj_t  *Target;
++
++    Target = FindNavInNextColumn (Focused, (BOOLEAN)(Key == LV_KEY_RIGHT));
++    if (Target != NULL) {
++      lv_group_focus_obj (Target);
++    }
++
++    return;
++  }
++
+   //
+   // UP/DOWN: walk mNavList (so grayed rows stay reachable). LVGL does not
+   // hard-advance on these keys -- it sends them to the focused object.
+@@ -1841,6 +2600,16 @@ OnNavKey (
+         lv_dropdown_is_open (Focused))
+     {
+       lv_dropdown_close (Focused);
++
++      //
++      // Like ESC during keyboard-edit below: revert the selection and end
++      // the edit, so that leaving the row later does not commit it.
++      //
++      if (Focused == mEditingDropdown) {
++        lv_dropdown_set_selected (mEditingDropdown, mEditingDropdownOrigSel);
++        mEditingDropdown = NULL;
++      }
++
+       if (Editing) {
+         lv_group_set_editing (mSession.Group, false);
+       }
+@@ -1970,6 +2739,35 @@ OnNavKey (
+   }
+ }
+ 
++/**
++  Show a statement in the help card: its prompt as heading, its Help string
++  as text.
++**/
++STATIC
++VOID
++ShowStatementHelp (
++  IN FORM_DISPLAY_ENGINE_STATEMENT  *Statement
++  )
++{
++  CHAR8  *Utf8;
++
++  Utf8 = GetPromptUtf8 (Statement, mSession.FormData->HiiHandle);
++  AptioSetHelpTitle (Utf8);
++  if (Utf8 != NULL) {
++    FreePool (Utf8);
++  }
++
++  Utf8 = GetHelpUtf8 (Statement, mSession.FormData->HiiHandle);
++  AptioSetHelpText (Utf8 != NULL ? Utf8 : "");
++  if (mGridCaption != NULL) {
++    lv_label_set_text (mGridCaption, IsBlankUtf8 (Utf8) ? "" : Utf8);
++  }
++
++  if (Utf8 != NULL) {
++    FreePool (Utf8);
++  }
++}
++
+ /**
+   LV_EVENT_FOCUSED handler -- push the focused statement's Help string into
+   the chrome's help pane.
+@@ -1981,22 +2779,18 @@ OnFocusUpdateHelp (
+   )
+ {
+   LVGL_STATEMENT_CONTEXT  *Ctx;
+-  CHAR8                   *Utf8;
+ 
+   Ctx = (LVGL_STATEMENT_CONTEXT *)lv_event_get_user_data (Event);
+ 
+   if ((Ctx == NULL) || (Ctx->Statement == NULL) ||
+       (mSession.FormData == NULL) || (mSession.FormData->HiiHandle == NULL))
+   {
++    AptioSetHelpTitle (NULL);
+     AptioSetHelpText ("");
+     return;
+   }
+ 
+-  Utf8 = GetHelpUtf8 (Ctx->Statement, mSession.FormData->HiiHandle);
+-  AptioSetHelpText (Utf8 != NULL ? Utf8 : "");
+-  if (Utf8 != NULL) {
+-    FreePool (Utf8);
+-  }
++  ShowStatementHelp (Ctx->Statement);
+ }
+ 
+ /**
+@@ -2016,7 +2810,6 @@ OnHoverUpdateHelp (
+   )
+ {
+   LVGL_STATEMENT_CONTEXT  *Ctx;
+-  CHAR8                   *Utf8;
+ 
+   Ctx = (LVGL_STATEMENT_CONTEXT *)lv_event_get_user_data (Event);
+   if ((Ctx == NULL) || (Ctx->Statement == NULL) ||
+@@ -2025,16 +2818,13 @@ OnHoverUpdateHelp (
+     return;
+   }
+ 
+-  Utf8 = GetHelpUtf8 (Ctx->Statement, mSession.FormData->HiiHandle);
+-  AptioSetHelpText (Utf8 != NULL ? Utf8 : "");
+-  if (Utf8 != NULL) {
+-    FreePool (Utf8);
+-  }
++  ShowStatementHelp (Ctx->Statement);
+ }
+ 
+ /**
+-  Return the content-panel child that should drive scroll positioning for a
+-  nav widget (the row container when the widget is nested inside one).
++  Return the object that should drive scroll positioning for a nav widget:
++  the row that holds it, which is a child of a settings card
++  (LV_OBJ_FLAG_USER_1) or of the content panel.
+ **/
+ STATIC
+ lv_obj_t *
+@@ -2043,21 +2833,21 @@ NavScrollTarget (
+   )
+ {
+   lv_obj_t  *Obj;
++  lv_obj_t  *Parent;
+ 
+   if (mContentPanel == NULL) {
+     return NavWidget;
+   }
+ 
+-  Obj = NavWidget;
+-  while ((Obj != NULL) &&
+-         (lv_obj_get_parent (Obj) != NULL) &&
+-         (lv_obj_get_parent (Obj) != mContentPanel))
+-  {
+-    Obj = lv_obj_get_parent (Obj);
+-  }
++  for (Obj = NavWidget; Obj != NULL; Obj = Parent) {
++    Parent = lv_obj_get_parent (Obj);
++    if (Parent == NULL) {
++      break;
++    }
+ 
+-  if ((Obj != NULL) && (lv_obj_get_parent (Obj) == mContentPanel)) {
+-    return Obj;
++    if ((Parent == mContentPanel) || lv_obj_has_flag (Parent, LV_OBJ_FLAG_USER_1)) {
++      return Obj;
++    }
+   }
+ 
+   return NavWidget;
+@@ -2074,32 +2864,41 @@ ScrollNavIntoView (
+   IN lv_obj_t  *NavWidget
+   )
+ {
+-  lv_obj_t  *Target;
+-  int32_t   ItemY;
+-  int32_t   ItemH;
+-  int32_t   ViewH;
++  lv_obj_t   *Target;
++  lv_area_t  Item;
++  lv_area_t  Panel;
++  int32_t    PadTop;
++  int32_t    ItemTop;
++  int32_t    ItemBottom;
++  int32_t    ViewH;
+ 
+   Target = NavScrollTarget (NavWidget);
+ 
+   if (mContentPanel == NULL) {
+-    lv_obj_scroll_to_view (Target, LV_ANIM_OFF);
++    lv_obj_scroll_to_view_recursive (Target, LV_ANIM_OFF);
+     return;
+   }
+ 
+   lv_obj_update_layout (mContentPanel);
+ 
+-  ItemY = lv_obj_get_y (Target);
+-  ItemH = lv_obj_get_height (Target);
+-  ViewH = lv_obj_get_height (mContentPanel);
+-  ViewH -= lv_obj_get_style_pad_top (mContentPanel, LV_PART_MAIN);
+-  ViewH -= lv_obj_get_style_pad_bottom (mContentPanel, LV_PART_MAIN);
+-
+-  if ((ItemY >= 0) && (ItemY + ItemH <= ViewH)) {
++  //
++  // Rows can sit inside cards, so work in screen coordinates: the position
++  // of the row in the content area when the panel is scrolled to the top.
++  //
++  lv_obj_get_coords (Target, &Item);
++  lv_obj_get_coords (mContentPanel, &Panel);
++  PadTop     = lv_obj_get_style_pad_top (mContentPanel, LV_PART_MAIN);
++  ItemTop    = Item.y1 - (Panel.y1 + PadTop) + lv_obj_get_scroll_y (mContentPanel);
++  ItemBottom = ItemTop + lv_area_get_height (&Item);
++  ViewH      = lv_area_get_height (&Panel) - PadTop -
++               lv_obj_get_style_pad_bottom (mContentPanel, LV_PART_MAIN);
++
++  if ((ItemTop >= 0) && (ItemBottom <= ViewH)) {
+     lv_obj_scroll_to_y (mContentPanel, 0, LV_ANIM_OFF);
+     return;
+   }
+ 
+-  lv_obj_scroll_to_view (Target, LV_ANIM_OFF);
++  lv_obj_scroll_to_view_recursive (Target, LV_ANIM_OFF);
+ }
+ 
+ STATIC
+@@ -2136,13 +2935,120 @@ AddToNavGroup (
+ }
+ 
+ //
+-// ---- Row styling: Aptio-style focus highlight ----
++// ---- Row styling ----
+ //
+-// All statement rows share one visual: a flush, full-width container
+-// with a subtle bottom separator. The focused row turns solid blue
+-// (THEME_COLOR_HIGHLIGHT_ROW) with white text.
++// Rows sit on rounded cards (RowParent), separated by dividers inset from
++// the edges: transparent by default, a lighter fill under the pointer, and
++// when focused an accent fill with white text. Prompt, icon and control are
++// vertically centered.
+ //
+ 
++/**
++  Create a rounded card: the container of a group of rows.
++**/
++STATIC
++lv_obj_t *
++CreateCard (
++  IN lv_obj_t  *Parent
++  )
++{
++  lv_obj_t  *Card;
++
++  Card = lv_obj_create (Parent);
++  lv_obj_remove_style_all (Card);
++  lv_obj_set_size (Card, LV_PCT (100), LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Card, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_style_bg_color (Card, lv_color_hex (THEME_COLOR_CARD_BG), 0);
++  lv_obj_set_style_bg_opa (Card, LV_OPA_COVER, 0);
++  lv_obj_set_style_radius (Card, THEME_RADIUS_CARD, 0);
++  lv_obj_set_style_border_color (Card, lv_color_hex (THEME_COLOR_CARD_BORDER), 0);
++  lv_obj_set_style_border_width (Card, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_pad_all (Card, THEME_PAD_CARD, 0);
++  lv_obj_set_style_pad_row (Card, 0, 0);
++  lv_obj_clear_flag (Card, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Card, LV_OBJ_FLAG_CLICKABLE);
++  lv_obj_add_flag (Card, LV_OBJ_FLAG_USER_1);
++  return Card;
++}
++
++/**
++  Append a divider to a card, inset from both edges like the row content.
++**/
++STATIC
++VOID
++AddCardDivider (
++  IN lv_obj_t  *Card
++  )
++{
++  lv_obj_t  *Inset;
++  lv_obj_t  *Line;
++
++  Inset = lv_obj_create (Card);
++  lv_obj_remove_style_all (Inset);
++  lv_obj_set_size (Inset, LV_PCT (100), THEME_BORDER_PANE);
++  lv_obj_set_style_pad_left (Inset, THEME_PAD_ROW_X, 0);
++  lv_obj_set_style_pad_right (Inset, THEME_PAD_ROW_X, 0);
++  lv_obj_clear_flag (Inset, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Inset, LV_OBJ_FLAG_CLICKABLE);
++
++  Line = lv_obj_create (Inset);
++  lv_obj_remove_style_all (Line);
++  lv_obj_set_size (Line, LV_PCT (100), LV_PCT (100));
++  lv_obj_set_style_bg_color (Line, lv_color_hex (THEME_COLOR_DIVIDER), 0);
++  lv_obj_set_style_bg_opa (Line, LV_OPA_COVER, 0);
++  lv_obj_clear_flag (Line, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Line, LV_OBJ_FLAG_CLICKABLE);
++}
++
++/**
++  Return the card that receives the next row of the current section,
++  creating it after a subtitle, and add a divider between rows.
++**/
++STATIC
++lv_obj_t *
++RowParent (
++  IN lv_obj_t  *Parent
++  )
++{
++  if (mSectionCard == NULL) {
++    //
++    // Rows follow the last subtitle: it becomes the header of their card.
++    //
++    if (mPendingSection != NULL) {
++      lv_obj_set_style_text_color (mPendingSection, lv_color_hex (THEME_COLOR_SECTION_TEXT), 0);
++      mPendingSection = NULL;
++    }
++
++    mSectionCard = CreateCard (Parent);
++    return mSectionCard;
++  }
++
++  AddCardDivider (mSectionCard);
++  return mSectionCard;
++}
++
++/**
++  Style a button (dialog buttons, ordered-list moves): a gray fill, the
++  accent fill while focused (ENTER acts on the focused button).
++**/
++STATIC
++VOID
++StyleSecondaryButton (
++  IN lv_obj_t  *Btn
++  )
++{
++  lv_obj_set_style_radius (Btn, THEME_RADIUS_CHIP, 0);
++  lv_obj_set_style_bg_color (Btn, lv_color_hex (THEME_COLOR_BUTTON_SECONDARY), 0);
++  lv_obj_set_style_bg_opa (Btn, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_width (Btn, 0, 0);
++  lv_obj_set_style_shadow_width (Btn, 0, 0);
++  lv_obj_set_style_text_color (Btn, lv_color_hex (THEME_COLOR_TEXT_TITLE), 0);
++  lv_obj_set_style_outline_width (Btn, 0, LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_bg_color (Btn, lv_color_hex (THEME_COLOR_SWITCH_OFF), LV_STATE_HOVERED);
++  lv_obj_set_style_bg_color (Btn, lv_color_hex (THEME_COLOR_ACCENT), LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_color (Btn, lv_color_hex (THEME_COLOR_ACCENT), LV_STATE_FOCUSED | LV_STATE_HOVERED);
++}
++
+ STATIC
+ VOID
+ StyleRow (
+@@ -2151,14 +3057,14 @@ StyleRow (
+ {
+   lv_obj_set_size (Row, LV_PCT (100), LV_SIZE_CONTENT);
+   lv_obj_set_flex_flow (Row, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (Row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++  lv_obj_set_style_pad_column (Row, THEME_PAD_ROW_GAP, 0);
+   lv_obj_clear_flag (Row, LV_OBJ_FLAG_SCROLLABLE);
+ 
+-  // default: panel-tinted capsule
++  // default: transparent on the card
+   lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_ROW_BG), 0);
+-  lv_obj_set_style_bg_opa (Row, LV_OPA_COVER, 0);
++  lv_obj_set_style_bg_opa (Row, LV_OPA_TRANSP, 0);
+   lv_obj_set_style_border_width (Row, 0, 0);
+-  lv_obj_set_style_border_side (Row, LV_BORDER_SIDE_LEFT, 0);
+-  lv_obj_set_style_border_color (Row, lv_color_hex (THEME_COLOR_ACCENT), 0);
+   lv_obj_set_style_radius (Row, THEME_RADIUS_ROW, 0);
+   lv_obj_set_style_pad_left (Row, THEME_PAD_ROW_X, 0);
+   lv_obj_set_style_pad_right (Row, THEME_PAD_ROW_X, 0);
+@@ -2166,29 +3072,31 @@ StyleRow (
+   lv_obj_set_style_pad_bottom (Row, THEME_PAD_ROW_Y, 0);
+   lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_ROW_TEXT), 0);
+   lv_obj_set_style_shadow_width (Row, 0, 0);
++  lv_obj_set_style_outline_width (Row, 0, LV_STATE_FOCUS_KEY);
+   LvglThemeApplyBodyFont (Row);
+ 
+-  // hovered: slight elevation, no border -- shows intent before click/focus
++  // hovered (pointer): a slightly lighter fill
+   lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_ROW_BG_HOVER), LV_STATE_HOVERED);
+   lv_obj_set_style_bg_opa (Row, LV_OPA_COVER, LV_STATE_HOVERED);
+-  lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_ROW_TEXT_FOCUSED), LV_STATE_HOVERED);
+-  lv_obj_set_style_shadow_width (Row, 0, LV_STATE_HOVERED);
+ 
+-  // focused: elevated panel + accent left bar + brighter text
+-  lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_BG_PANEL_ELEV), LV_STATE_FOCUSED);
++  // focused (keyboard): accent fill and white text, also under the pointer
++  lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED);
+   lv_obj_set_style_bg_opa (Row, LV_OPA_COVER, LV_STATE_FOCUSED);
+-  lv_obj_set_style_border_width (Row, THEME_BORDER_FOCUS, LV_STATE_FOCUSED);
+   lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_ROW_TEXT_FOCUSED), LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_ROW_BG_FOCUSED), LV_STATE_FOCUSED | LV_STATE_HOVERED);
++  lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_ROW_TEXT_FOCUSED), LV_STATE_FOCUSED | LV_STATE_HOVERED);
+   lv_obj_set_style_shadow_width (Row, 0, LV_STATE_FOCUSED);
+ 
+-  // disabled: whole-row muted text, no opacity fade.
++  // disabled: muted text; grayed rows stay reachable, with a neutral fill
+   lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_ROW_TEXT_DISABLED), LV_STATE_DISABLED);
++  lv_obj_set_style_bg_color (Row, lv_color_hex (THEME_COLOR_BG_PANEL_ELEV), LV_STATE_DISABLED | LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_opa (Row, LV_OPA_COVER, LV_STATE_DISABLED | LV_STATE_FOCUSED);
++  lv_obj_set_style_text_color (Row, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), LV_STATE_DISABLED | LV_STATE_FOCUSED);
+ }
+ 
+ //
+ // Decorate a row whose underlying question has been modified since the form
+-// opened: solid amber left bar in the default state. The focused-state
+-// border (StyleRow above) overrides this when the row gains focus.
++// opened: a small dot in the left padding of the row.
+ //
+ STATIC
+ VOID
+@@ -2196,9 +3104,20 @@ MarkRowChanged (
+   lv_obj_t  *Row
+   )
+ {
+-  lv_obj_set_style_border_color (Row, lv_color_hex (THEME_COLOR_WARNING), 0);
+-  lv_obj_set_style_border_side  (Row, LV_BORDER_SIDE_LEFT, 0);
+-  lv_obj_set_style_border_width (Row, THEME_BORDER_FOCUS, 0);
++  lv_obj_t  *Dot;
++  int32_t   Size;
++
++  Size = (int32_t)LvglThemePx (6);
++  Dot  = lv_obj_create (Row);
++  lv_obj_remove_style_all (Dot);
++  lv_obj_set_size (Dot, Size, Size);
++  lv_obj_set_style_radius (Dot, LV_RADIUS_CIRCLE, 0);
++  lv_obj_set_style_bg_color (Dot, lv_color_hex (THEME_COLOR_WARNING), 0);
++  lv_obj_set_style_bg_opa (Dot, LV_OPA_COVER, 0);
++  lv_obj_add_flag (Dot, LV_OBJ_FLAG_IGNORE_LAYOUT);
++  lv_obj_clear_flag (Dot, LV_OBJ_FLAG_CLICKABLE);
++  lv_obj_clear_flag (Dot, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_align (Dot, LV_ALIGN_LEFT_MID, -(((int32_t)THEME_PAD_ROW_X + Size) / 2), 0);
+ }
+ 
+ STATIC
+@@ -2300,21 +3219,87 @@ CreateSubtitleWidget (
+   lv_obj_t  *Label;
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+-  if (Text == NULL) {
++
++  //
++  // Empty subtitles are spacers between entries in the text UI: keep the
++  // entries on one card instead.
++  //
++  if (IsBlankUtf8 (Text)) {
++    if (Text != NULL) {
++      FreePool (Text);
++    }
++
++    return;
++  }
++
++  //
++  // Menus in areas have their own headers: the subtitles ("Menu List",
++  // "Press ESC to exit.") would only repeat them and the dock.
++  //
++  if (mGroupedMenu) {
++    FreePool (Text);
+     return;
+   }
+ 
++  //
++  // A subtitle starts a section: the rows that follow go on a new card. It
++  // is drawn as a note until RowParent() turns it into the section header.
++  //
++  mSectionCard = NULL;
++
+   Label = lv_label_create (Parent);
+   lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_width (Label, LV_PCT (100));
+   lv_label_set_text (Label, Text);
+-  THEME_APPLY_BODY_FONT (Label);
+-  lv_obj_set_style_text_color (Label, lv_palette_main (THEME_ACCENT_PALETTE), 0);
+-  lv_obj_set_style_pad_top (Label, THEME_PAD_LABEL_TOP, 0);
++  lv_obj_set_style_text_font (Label, LvglThemeFontSmall (), 0);
++  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), 0);
++  lv_obj_set_style_pad_top (Label, THEME_PAD_SECTION_TOP, 0);
++  lv_obj_set_style_pad_left (Label, THEME_PAD_SECTION_X, 0);
++  mPendingSection = Label;
+ 
+   FreePool (Text);
+ }
+ 
++/**
++  Create a row that shows a prompt and, on the right, a value that cannot
++  be changed: text lines and read-only strings.
++
++  @param[in] Parent  Container of the form.
++  @param[in] Prompt  Prompt.
++  @param[in] Value   Value, or NULL for a line of text.
++**/
++STATIC
++VOID
++CreateValueRow (
++  IN lv_obj_t     *Parent,
++  IN CONST CHAR8  *Prompt,
++  IN CONST CHAR8  *Value OPTIONAL
++  )
++{
++  lv_obj_t  *Row;
++  lv_obj_t  *PromptLabel;
++  lv_obj_t  *ValueLabel;
++
++  Row = lv_obj_create (RowParent (Parent));
++  StyleRow (Row);
++
++  PromptLabel = lv_label_create (Row);
++  lv_label_set_text (PromptLabel, Prompt);
++  lv_label_set_long_mode (PromptLabel, LV_LABEL_LONG_WRAP);
++  lv_obj_set_flex_grow (PromptLabel, 1);
++  LvglThemeApplyBodyFont (PromptLabel);
++
++  if (Value != NULL) {
++    ValueLabel = lv_label_create (Row);
++    lv_label_set_text (ValueLabel, Value);
++    lv_label_set_long_mode (ValueLabel, LV_LABEL_LONG_WRAP);
++    lv_obj_set_style_max_width (ValueLabel, LV_PCT (65), 0);
++    LvglThemeApplyBodyFont (ValueLabel);
++    lv_obj_set_style_text_color (ValueLabel, lv_color_hex (THEME_COLOR_VALUE_TEXT), 0);
++    lv_obj_set_style_text_align (ValueLabel, LV_TEXT_ALIGN_RIGHT, 0);
++  }
++}
++
+ STATIC
+ VOID
+ CreateTextWidget (
+@@ -2327,9 +3312,6 @@ CreateTextWidget (
+   CHAR8         *ValueUtf8;
+   CHAR16        *ValueUcs2;
+   EFI_IFR_TEXT  *TextOp;
+-  lv_obj_t      *Row;
+-  lv_obj_t      *PromptLabel;
+-  lv_obj_t      *ValueLabel;
+ 
+   Prompt = GetPromptUtf8 (Statement, HiiHandle);
+   if (Prompt == NULL) {
+@@ -2346,32 +3328,232 @@ CreateTextWidget (
+     }
+   }
+ 
+-  Row = lv_obj_create (Parent);
+-  StyleRow (Row);
++  //
++  // A text line without prompt or value is a spacer: skip it, like empty
++  // subtitles.
++  //
++  if (IsBlankUtf8 (Prompt) && IsBlankUtf8 (ValueUtf8)) {
++    if (ValueUtf8 != NULL) {
++      FreePool (ValueUtf8);
++    }
+ 
+-  PromptLabel = lv_label_create (Row);
+-  lv_label_set_text (PromptLabel, Prompt);
+-  lv_obj_set_flex_grow (PromptLabel, 1);
+-  LvglThemeApplyBodyFont (PromptLabel);
++    FreePool (Prompt);
++    return;
++  }
+ 
++  CreateValueRow (Parent, Prompt, ValueUtf8);
+   if (ValueUtf8 != NULL) {
+-    ValueLabel = lv_label_create (Row);
+-    lv_label_set_text (ValueLabel, ValueUtf8);
+-    LvglThemeApplyBodyFont (ValueLabel);
+     FreePool (ValueUtf8);
+   }
+ 
+   FreePool (Prompt);
+ }
+ 
++/**
++  Create a plain, non-interactive container.
++**/
++STATIC
++lv_obj_t *
++CreateBox (
++  IN lv_obj_t  *Parent
++  )
++{
++  lv_obj_t  *Box;
++
++  Box = lv_obj_create (Parent);
++  lv_obj_remove_style_all (Box);
++  lv_obj_clear_flag (Box, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_clear_flag (Box, LV_OBJ_FLAG_CLICKABLE);
++  return Box;
++}
++
++/**
++  Create a box filled with a color.
++**/
++STATIC
++lv_obj_t *
++CreateFilledBox (
++  IN lv_obj_t  *Parent,
++  IN int32_t   Width,
++  IN int32_t   Height,
++  IN int32_t   Radius,
++  IN UINT32    Color,
++  IN lv_opa_t  Opa
++  )
++{
++  lv_obj_t  *Box;
++
++  Box = CreateBox (Parent);
++  lv_obj_set_size (Box, Width, Height);
++  lv_obj_set_style_radius (Box, Radius, 0);
++  lv_obj_set_style_bg_color (Box, lv_color_hex (Color), 0);
++  lv_obj_set_style_bg_opa (Box, Opa, 0);
++  return Box;
++}
++
++/**
++  Build the overview at the top of the front page: a drawing of the laptop
++  -- whose screen shows this UI in miniature -- next to the device model
++  and the banner lines as keys and values.
++
++  @return The column that receives the key/value lines.
++**/
++STATIC
++lv_obj_t *
++CreateAboutSection (
++  IN lv_obj_t  *Parent
++  )
++{
++  lv_obj_t     *About;
++  lv_obj_t     *Laptop;
++  lv_obj_t     *Lid;
++  lv_obj_t     *Display;
++  lv_obj_t     *Base;
++  lv_obj_t     *Info;
++  lv_obj_t     *Model;
++  lv_obj_t     *Grid;
++  CONST CHAR8  *ModelText;
++  int32_t      Width;
++  int32_t      Height;
++  UINTN        Idx;
++
++  About = CreateBox (Parent);
++  lv_obj_set_size (About, LV_PCT (100), LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (About, LV_FLEX_FLOW_ROW);
++  lv_obj_set_flex_align (About, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++  lv_obj_set_style_pad_column (About, 2 * THEME_PAD_ABOUT, 0);
++  lv_obj_set_style_pad_top (About, THEME_PAD_ABOUT, 0);
++  lv_obj_set_style_pad_bottom (About, THEME_PAD_ABOUT, 0);
++  lv_obj_move_to_index (About, 0);
++
++  //
++  // Laptop: a black lid around the display, and the base below it.
++  //
++  Width  = (int32_t)THEME_ABOUT_LAPTOP_WIDTH;
++  Height = (int32_t)THEME_ABOUT_LAPTOP_HEIGHT;
++
++  Laptop = CreateBox (About);
++  lv_obj_set_size (Laptop, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Laptop, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_flex_align (Laptop, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++
++  Lid = CreateFilledBox (Laptop, Width, Height, (int32_t)LvglThemePx (8), THEME_COLOR_LAPTOP_LID, LV_OPA_COVER);
++  lv_obj_set_style_border_color (Lid, lv_color_hex (THEME_COLOR_LAPTOP_EDGE), 0);
++  lv_obj_set_style_border_width (Lid, (int32_t)LvglThemePx (2), 0);
++  lv_obj_set_style_pad_all (Lid, (int32_t)LvglThemePx (5), 0);
++
++  Display = CreateFilledBox (Lid, LV_PCT (100), LV_PCT (100), (int32_t)LvglThemePx (3), THEME_COLOR_LAPTOP_SCREEN_TOP, LV_OPA_COVER);
++  lv_obj_set_style_bg_grad_color (Display, lv_color_hex (THEME_COLOR_LAPTOP_SCREEN_BOT), 0);
++  lv_obj_set_style_bg_grad_dir (Display, LV_GRAD_DIR_VER, 0);
++
++  //
++  // This UI in miniature: menu bar, the icon grid and the dock.
++  //
++  CreateFilledBox (Display, LV_PCT (100), (int32_t)LvglThemePx (4), 0, 0xFFFFFF, LV_OPA_20);
++  Grid = CreateBox (Display);
++  lv_obj_set_size (Grid, (int32_t)LvglThemePx (54), LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Grid, LV_FLEX_FLOW_ROW_WRAP);
++  lv_obj_set_style_pad_column (Grid, (int32_t)LvglThemePx (5), 0);
++  lv_obj_set_style_pad_row (Grid, (int32_t)LvglThemePx (5), 0);
++  for (Idx = 0; Idx < 8; Idx++) {
++    CreateFilledBox (Grid, (int32_t)LvglThemePx (9), (int32_t)LvglThemePx (9), (int32_t)LvglThemePx (2), THEME_COLOR_TILE_BG, LV_OPA_COVER);
++  }
++
++  lv_obj_align (Grid, LV_ALIGN_CENTER, 0, -(int32_t)LvglThemePx (2));
++  lv_obj_align (
++    CreateFilledBox (Display, LV_PCT (40), (int32_t)LvglThemePx (5), (int32_t)LvglThemePx (2), 0xFFFFFF, LV_OPA_30),
++    LV_ALIGN_BOTTOM_MID,
++    0,
++    -(int32_t)LvglThemePx (3)
++    );
++
++  Base = CreateFilledBox (
++           Laptop,
++           Width + (int32_t)LvglThemePx (20),
++           (int32_t)LvglThemePx (7),
++           (int32_t)LvglThemePx (3),
++           THEME_COLOR_LAPTOP_BASE_TOP,
++           LV_OPA_COVER
++           );
++  lv_obj_set_style_bg_grad_color (Base, lv_color_hex (THEME_COLOR_LAPTOP_BASE_BOT), 0);
++  lv_obj_set_style_bg_grad_dir (Base, LV_GRAD_DIR_VER, 0);
++  lv_obj_align (
++    CreateFilledBox (Base, (int32_t)LvglThemePx (26), (int32_t)LvglThemePx (2), (int32_t)LvglThemePx (1), THEME_COLOR_LAPTOP_LID, LV_OPA_COVER),
++    LV_ALIGN_TOP_MID,
++    0,
++    0
++    );
++
++  //
++  // Device model and the key/value lines.
++  //
++  Info = CreateBox (About);
++  lv_obj_set_size (Info, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Info, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_style_pad_row (Info, (int32_t)LvglThemePx (4), 0);
++
++  ModelText = AptioGetDeviceModel ();
++  Model     = lv_label_create (Info);
++  lv_label_set_text (Model, (ModelText != NULL) ? ModelText : "");
++  lv_obj_set_style_text_font (Model, LvglThemeFontIcon (), 0);
++  lv_obj_set_style_text_color (Model, lv_color_hex (THEME_COLOR_TEXT_TITLE), 0);
++  lv_obj_set_style_margin_bottom (Model, (int32_t)LvglThemePx (6), 0);
++
++  //
++  // Without a model from SMBIOS the centered banner fills it in; it stays
++  // hidden when the window title shows the model (the icon grid has no
++  // window).
++  //
++  if ((ModelText == NULL) || (mSubtitleShowsDeviceModel && !mGridMenu)) {
++    lv_obj_add_flag (Model, LV_OBJ_FLAG_HIDDEN);
++  }
++
++  return Info;
++}
++
++/**
++  Append a key/value line to the overview.
++
++  @return The value label.
++**/
++STATIC
++lv_obj_t *
++AddAboutLine (
++  IN lv_obj_t     *Info,
++  IN CONST CHAR8  *Key,
++  IN CONST CHAR8  *Value
++  )
++{
++  lv_obj_t  *Line;
++  lv_obj_t  *KeyLbl;
++  lv_obj_t  *ValueLbl;
++
++  Line = CreateBox (Info);
++  lv_obj_set_size (Line, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Line, LV_FLEX_FLOW_ROW);
++  lv_obj_set_style_pad_column (Line, (int32_t)LvglThemePx (12), 0);
++
++  KeyLbl = lv_label_create (Line);
++  lv_label_set_text (KeyLbl, Key);
++  lv_obj_set_width (KeyLbl, THEME_ABOUT_KEY_WIDTH);
++  LvglThemeApplyBodyFont (KeyLbl);
++  lv_obj_set_style_text_color (KeyLbl, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), 0);
++
++  ValueLbl = lv_label_create (Line);
++  lv_label_set_text (ValueLbl, Value);
++  LvglThemeApplyBodyFont (ValueLbl);
++  lv_obj_set_style_text_color (ValueLbl, lv_color_hex (THEME_COLOR_TEXT_PRIMARY), 0);
++  return ValueLbl;
++}
++
+ /**
+   Render a front-page banner line (device model / BIOS version / CPU / memory /
+   battery). These arrive as Tiano GUIDed EFI_IFR_EXTEND_OP_BANNER opcodes, which
+   the text-mode engine drew via CustomizedDisplayLib's PrintBannerInfo().
+ 
+-  When SubtitleShowsDeviceModel is enabled in Graphical UI Configuration, the
+-  centered line (device model) is shown in the subtitle bar instead and is
+-  skipped here.
++  They make up the overview at the top of the front page: the centered line
++  (device model) is its heading when SMBIOS has no model of its own, the
++  "Key: Value" lines its keys and values.
+ **/
+ STATIC
+ VOID
+@@ -2385,18 +3567,19 @@ CreateBannerWidget (
+   CHAR16               *Ucs2;
+   CHAR8                *Utf8;
+   lv_obj_t             *Label;
++  lv_obj_t             *Model;
++  BOOLEAN              ValueOnly;
++  CONST CHAR8          *Value;
++  CONST CHAR8          *Key;
++  UINTN                KeyLen;
++  CONST CHAR8          *Caption;
++  CHAR8                KeyBuf[16];
+ 
+   Banner = (EFI_IFR_GUID_BANNER *)Statement->OpCode;
+   if (Banner->Title == 0) {
+     return;
+   }
+ 
+-  if (mSubtitleShowsDeviceModel &&
+-      (Banner->Alignment == EFI_IFR_BANNER_ALIGN_CENTER))
+-  {
+-    return;
+-  }
+-
+   Ucs2 = HiiGetString (HiiHandle, Banner->Title, NULL);
+   if (Ucs2 == NULL) {
+     return;
+@@ -2411,38 +3594,53 @@ CreateBannerWidget (
+   //
+   // Skip placeholder/empty banner lines (e.g. an unpopulated battery row).
+   //
+-  if (Utf8[0] == '\0') {
++  if (IsBlankUtf8 (Utf8)) {
+     FreePool (Utf8);
+     return;
+   }
+ 
+-  Label = lv_label_create (Parent);
+-  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+-  lv_obj_set_width (Label, LV_PCT (100));
+-  lv_label_set_text (Label, Utf8);
+-  THEME_APPLY_BODY_FONT (Label);
+-  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_TEXT_PRIMARY), 0);
++  if (mAboutInfo == NULL) {
++    mAboutInfo = CreateAboutSection (Parent);
++  }
+ 
+-  switch (Banner->Alignment) {
+-    case EFI_IFR_BANNER_ALIGN_CENTER:
+-      lv_obj_set_style_text_align (Label, LV_TEXT_ALIGN_CENTER, 0);
+-      //
+-      // The centered line is the device model; give it the title font and
+-      // accent color so it reads as the banner heading.
+-      //
+-      lv_obj_set_style_text_font (Label, THEME_FONT_TITLE, 0);
+-      lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_ACCENT_HOVER), 0);
+-      break;
++  if (Banner->Alignment == EFI_IFR_BANNER_ALIGN_CENTER) {
++    //
++    // Device model: the heading of the overview, unless SMBIOS provided it
++    // already or the window title shows it.
++    //
++    Model = lv_obj_get_child (mAboutInfo, 0);
++    if ((!mSubtitleShowsDeviceModel || mGridMenu) && lv_obj_has_flag (Model, LV_OBJ_FLAG_HIDDEN)) {
++      lv_label_set_text (Model, Utf8);
++      lv_obj_clear_flag (Model, LV_OBJ_FLAG_HIDDEN);
++    }
+ 
+-    case EFI_IFR_BANNER_ALIGN_RIGHT:
+-      lv_obj_set_style_text_align (Label, LV_TEXT_ALIGN_RIGHT, 0);
+-      break;
++    FreePool (Utf8);
++    return;
++  }
+ 
+-    default:
+-      lv_obj_set_style_text_align (Label, LV_TEXT_ALIGN_LEFT, 0);
+-      break;
++  //
++  // "FW: ...", "CPU: ...", "RAM: ...", "BAT: ..." lines: key and value.
++  //
++  Value   = SplitBannerText (Utf8, &Key, &KeyLen);
++  Caption = "";
++  if (Key != NULL) {
++    if ((KeyLen == 2) && (AsciiStrnCmp (Key, "FW", 2) == 0)) {
++      Caption = "Firmware";
++    } else if ((KeyLen == 3) && (AsciiStrnCmp (Key, "CPU", 3) == 0)) {
++      Caption = "Processor";
++    } else if ((KeyLen == 3) && (AsciiStrnCmp (Key, "RAM", 3) == 0)) {
++      Caption = "Memory";
++    } else if ((KeyLen == 3) && (AsciiStrnCmp (Key, "BAT", 3) == 0)) {
++      Caption = "Battery";
++    } else {
++      AsciiStrnCpyS (KeyBuf, sizeof (KeyBuf), Key, MIN (KeyLen, sizeof (KeyBuf) - 1));
++      Caption = KeyBuf;
++    }
+   }
+ 
++  Label     = AddAboutLine (mAboutInfo, Caption, Value);
++  ValueOnly = (BOOLEAN)(Key != NULL);
++
+   //
+   // Register the label so BannerRefreshTimerCb can keep it in sync with its
+   // (possibly changing) HII string, e.g. live battery status.
+@@ -2451,6 +3649,7 @@ CreateBannerWidget (
+     mBannerRegistry[mBannerCount].Label     = Label;
+     mBannerRegistry[mBannerCount].HiiHandle = HiiHandle;
+     mBannerRegistry[mBannerCount].StringId  = Banner->Title;
++    mBannerRegistry[mBannerCount].ValueOnly = ValueOnly;
+     mBannerCount++;
+   }
+ 
+@@ -2469,9 +3668,12 @@ BannerRefreshTimerCb (
+   lv_timer_t  *Timer
+   )
+ {
+-  UINTN   Idx;
+-  CHAR16  *Ucs2;
+-  CHAR8   *Utf8;
++  UINTN        Idx;
++  CHAR16       *Ucs2;
++  CHAR8        *Utf8;
++  CONST CHAR8  *Text;
++  CONST CHAR8  *Key;
++  UINTN        KeyLen;
+ 
+   (VOID)Timer;
+ 
+@@ -2491,10 +3693,15 @@ BannerRefreshTimerCb (
+       continue;
+     }
+ 
+-    if ((Utf8[0] != '\0') &&
+-        (AsciiStrCmp (lv_label_get_text (mBannerRegistry[Idx].Label), Utf8) != 0))
++    Text = Utf8;
++    if (mBannerRegistry[Idx].ValueOnly) {
++      Text = SplitBannerText (Utf8, &Key, &KeyLen);
++    }
++
++    if ((Text[0] != '\0') &&
++        (AsciiStrCmp (lv_label_get_text (mBannerRegistry[Idx].Label), Text) != 0))
+     {
+-      lv_label_set_text (mBannerRegistry[Idx].Label, Utf8);
++      lv_label_set_text (mBannerRegistry[Idx].Label, Text);
+     }
+ 
+     FreePool (Utf8);
+@@ -2518,31 +3725,44 @@ CreateCheckboxWidget (
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Row = lv_obj_create (Parent);
++  Row = lv_obj_create (RowParent (Parent));
+   StyleRow (Row);
+   if (Statement->SettingChangedFlag) {
+     MarkRowChanged (Row);
+   }
+ 
+   //
+-  // Prompt label on the left, growing to fill the row so the checkbox
+-  // control aligns to the right edge, consistent with ONE_OF and numeric
+-  // rows.
++  // Prompt label on the left, growing to fill the row so the switch aligns
++  // to the right edge, consistent with ONE_OF and numeric rows.
+   //
+   Label = lv_label_create (Row);
+   lv_label_set_text (Label, Text != NULL ? Text : "Checkbox");
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_flex_grow (Label, 1);
+   LvglThemeApplyBodyFont (Label);
+ 
+   //
+-  // The checkbox itself renders the indicator only; its prompt text is
+-  // provided by the label above rather than by the checkbox widget.
++  // Boolean questions are drawn as on/off switches. Like a check box, the
++  // switch toggles LV_STATE_CHECKED and sends LV_EVENT_VALUE_CHANGED on a
++  // click or ENTER.
++  //
++  Cb = lv_switch_create (Row);
++  LvglThemeStyleSwitch (Cb);
++  lv_obj_set_style_bg_color (Cb, lv_color_hex (THEME_COLOR_SWITCH_OFF), LV_PART_MAIN);
++  lv_obj_set_style_bg_opa (Cb, LV_OPA_COVER, LV_PART_MAIN);
++  lv_obj_set_style_bg_color (Cb, lv_color_hex (THEME_COLOR_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
++  lv_obj_set_style_bg_color (Cb, lv_color_hex (THEME_COLOR_TEXT_TITLE), LV_PART_KNOB);
++
++  //
++  // On the focused row (accent fill) the track is translucent, so that it
++  // stands out from the fill: darker when off, lighter when on. The knob
++  // stays white.
+   //
+-  Cb = lv_checkbox_create (Row);
+-  lv_checkbox_set_text (Cb, "");
+-  lv_obj_set_style_bg_opa (Cb, LV_OPA_TRANSP, LV_PART_MAIN);
+-  lv_obj_set_style_border_width (Cb, 0, LV_PART_MAIN);
+-  LvglThemeStyleCheckbox (Cb);
++  lv_obj_set_style_outline_width (Cb, 0, LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_bg_color (Cb, lv_color_black (), LV_PART_MAIN | LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_opa (Cb, LV_OPA_30, LV_PART_MAIN | LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_color (Cb, lv_color_white (), LV_PART_INDICATOR | LV_STATE_CHECKED | LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_opa (Cb, LV_OPA_50, LV_PART_INDICATOR | LV_STATE_CHECKED | LV_STATE_FOCUSED);
+ 
+   if (Statement->CurrentValue.Value.b) {
+     lv_obj_add_state (Cb, LV_STATE_CHECKED);
+@@ -2564,9 +3784,61 @@ CreateCheckboxWidget (
+   BindRowFocus (Cb, Row);
+   BindRowHover (Cb, Row, Ctx);
+ 
+-  if (Text != NULL) {
+-    FreePool (Text);
+-  }
++  if (Text != NULL) {
++    FreePool (Text);
++  }
++}
++
++/**
++  Style an input field (numeric, string, date and time): a dark field with
++  a thin border, and a white ring while it has the keyboard focus.
++**/
++STATIC
++VOID
++StyleTextField (
++  IN lv_obj_t  *Ta
++  )
++{
++  lv_obj_set_style_radius (Ta, THEME_RADIUS_CHIP, 0);
++  lv_obj_set_style_bg_color (Ta, lv_color_hex (THEME_COLOR_FIELD_BG), 0);
++  lv_obj_set_style_bg_opa (Ta, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_color (Ta, lv_color_hex (THEME_COLOR_FIELD_BORDER), 0);
++  lv_obj_set_style_border_width (Ta, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_text_color (Ta, lv_color_hex (THEME_COLOR_TEXT_PRIMARY), 0);
++  lv_obj_set_style_outline_color (Ta, lv_color_white (), LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_width (Ta, LvglThemePx (2), LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_pad (Ta, LvglThemePx (1), LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_color (Ta, lv_color_white (), LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_outline_width (Ta, LvglThemePx (2), LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_outline_pad (Ta, LvglThemePx (1), LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_outline_color (Ta, lv_color_white (), LV_STATE_EDITED);
++  lv_obj_set_style_outline_width (Ta, LvglThemePx (2), LV_STATE_EDITED);
++  lv_obj_set_style_outline_pad (Ta, LvglThemePx (1), LV_STATE_EDITED);
++}
++
++/**
++  Style the button of a list question (a pop-up button): a gray fill, a
++  translucent white one on the focused row, a white ring while the
++  selection is being changed.
++**/
++STATIC
++VOID
++StyleDropdownButton (
++  IN lv_obj_t  *Dd
++  )
++{
++  lv_obj_set_style_radius (Dd, THEME_RADIUS_CHIP, 0);
++  lv_obj_set_style_bg_color (Dd, lv_color_hex (THEME_COLOR_BUTTON_SECONDARY), 0);
++  lv_obj_set_style_bg_opa (Dd, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_width (Dd, 0, 0);
++  lv_obj_set_style_shadow_width (Dd, 0, 0);
++  lv_obj_set_style_text_color (Dd, lv_color_hex (THEME_COLOR_TEXT_TITLE), 0);
++  lv_obj_set_style_bg_color (Dd, lv_color_white (), LV_STATE_FOCUSED);
++  lv_obj_set_style_bg_opa (Dd, LV_OPA_20, LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_width (Dd, 0, LV_STATE_FOCUS_KEY);
++  lv_obj_set_style_outline_color (Dd, lv_color_white (), LV_STATE_EDITED);
++  lv_obj_set_style_outline_width (Dd, LvglThemePx (2), LV_STATE_EDITED);
++  lv_obj_set_style_outline_pad (Dd, LvglThemePx (1), LV_STATE_EDITED);
+ }
+ 
+ STATIC
+@@ -2592,7 +3864,7 @@ CreateNumericWidget (
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Row = lv_obj_create (Parent);
++  Row = lv_obj_create (RowParent (Parent));
+   StyleRow (Row);
+   if (Statement->SettingChangedFlag) {
+     MarkRowChanged (Row);
+@@ -2600,6 +3872,7 @@ CreateNumericWidget (
+ 
+   Label = lv_label_create (Row);
+   lv_label_set_text (Label, Text != NULL ? Text : "Numeric");
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_flex_grow (Label, 1);
+   LvglThemeApplyBodyFont (Label);
+ 
+@@ -2634,6 +3907,8 @@ CreateNumericWidget (
+   Uint64ToAsciiDecimal (CurVal, Initial, sizeof (Initial));
+   lv_textarea_set_text (Ta, Initial);
+   LvglThemeStyleTextarea (Ta);
++  StyleTextField (Ta);
++  lv_obj_set_width (Ta, (lv_coord_t)LvglThemeDateTimeFieldWidth (AsciiStrLen (MaxStr) + 3));
+ 
+   if (Statement->Attribute & HII_DISPLAY_GRAYOUT) {
+     lv_obj_add_state (Row, LV_STATE_DISABLED);
+@@ -2696,6 +3971,7 @@ CreateDateTimeField (
+   //
+   lv_obj_set_width (Ta, (lv_coord_t)LvglThemeDateTimeFieldWidth (Digits));
+   LvglThemeStyleTextarea (Ta);
++  StyleTextField (Ta);
+ 
+   lv_obj_add_event_cb (Ta, OnDateTimeReady, LV_EVENT_READY, DtCtx);
+ 
+@@ -2739,7 +4015,7 @@ CreateDateTimeWidget (
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Row = lv_obj_create (Parent);
++  Row = lv_obj_create (RowParent (Parent));
+   StyleRow (Row);
+   if (Statement->SettingChangedFlag) {
+     MarkRowChanged (Row);
+@@ -2747,6 +4023,7 @@ CreateDateTimeWidget (
+ 
+   Label = lv_label_create (Row);
+   lv_label_set_text (Label, Text != NULL ? Text : (IsDate ? "Date" : "Time"));
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_flex_grow (Label, 1);
+   LvglThemeApplyBodyFont (Label);
+ 
+@@ -2868,7 +4145,7 @@ CreateOneOfWidget (
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Row = lv_obj_create (Parent);
++  Row = lv_obj_create (RowParent (Parent));
+   StyleRow (Row);
+   if (Statement->SettingChangedFlag) {
+     MarkRowChanged (Row);
+@@ -2876,6 +4153,7 @@ CreateOneOfWidget (
+ 
+   Label = lv_label_create (Row);
+   lv_label_set_text (Label, Text != NULL ? Text : "OneOf");
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_flex_grow (Label, 1);
+   LvglThemeApplyBodyFont (Label);
+ 
+@@ -2955,6 +4233,7 @@ CreateOneOfWidget (
+   lv_dropdown_set_options (Dd, OptBuf);
+   lv_dropdown_set_selected (Dd, SelectedIdx);
+   LvglThemeStyleDropdown (Dd);
++  StyleDropdownButton (Dd);
+ 
+   //
+   // Pixel-width estimate so the closed button fits its longest option:
+@@ -3018,6 +4297,7 @@ CreateOrderedListWidget (
+   CHAR8                    *OptStr8;
+   LVGL_ORDERED_MOVE_CTX    *UpCtx;
+   LVGL_ORDERED_MOVE_CTX    *DownCtx;
++  LVGL_STATEMENT_CONTEXT   *HelpCtx;
+   BOOLEAN                  Grayout;
+ 
+   if (IsListEmpty (&Statement->OptionListHead)) {
+@@ -3048,19 +4328,30 @@ CreateOrderedListWidget (
+   //
+   // Outer panel -- vertical flex column holding header + one row per entry.
+   //
+-  Panel = lv_obj_create (Parent);
++  Panel = lv_obj_create (RowParent (Parent));
+   lv_obj_set_size (Panel, LV_PCT (100), LV_SIZE_CONTENT);
+   lv_obj_set_flex_flow (Panel, LV_FLEX_FLOW_COLUMN);
+-  lv_obj_set_style_pad_all (Panel, THEME_PAD_ROW, 0);
++  lv_obj_set_style_pad_left (Panel, THEME_PAD_ROW_X, 0);
++  lv_obj_set_style_pad_right (Panel, THEME_PAD_ROW_X, 0);
++  lv_obj_set_style_pad_top (Panel, THEME_PAD_ROW_Y, 0);
++  lv_obj_set_style_pad_bottom (Panel, THEME_PAD_ROW_Y, 0);
++  lv_obj_set_style_pad_row (Panel, LvglThemePx (4), 0);
+   lv_obj_set_style_border_width (Panel, 0, 0);
+   lv_obj_set_style_bg_opa (Panel, LV_OPA_TRANSP, 0);
++  lv_obj_clear_flag (Panel, LV_OBJ_FLAG_SCROLLABLE);
++
++  HelpCtx = AllocateZeroPool (sizeof (LVGL_STATEMENT_CONTEXT));
++  if (HelpCtx != NULL) {
++    HelpCtx->Statement = Statement;
++  }
+   lv_obj_set_style_text_color (Panel, lv_color_hex (
+       Grayout ? THEME_COLOR_ROW_TEXT_DISABLED : THEME_COLOR_TEXT_PRIMARY), 0);
+   THEME_APPLY_BODY_FONT (Panel);
+ 
+   Header = lv_label_create (Panel);
+   lv_label_set_text (Header, PromptText != NULL ? PromptText : "Ordered List");
+-  THEME_APPLY_BODY_FONT (Header);
++  lv_obj_set_style_text_font (Header, LvglThemeFontSmall (), 0);
++  lv_obj_set_style_text_color (Header, lv_color_hex (THEME_COLOR_TEXT_SECONDARY), 0);
+ 
+   for (i = 0; i < ActiveCount; i++) {
+     Value = GetArrayData (Statement->CurrentValue.Buffer, ValueType, i);
+@@ -3110,9 +4401,14 @@ CreateOrderedListWidget (
+     Row = lv_obj_create (Panel);
+     lv_obj_set_size (Row, LV_PCT (100), LV_SIZE_CONTENT);
+     lv_obj_set_flex_flow (Row, LV_FLEX_FLOW_ROW);
++    lv_obj_set_flex_align (Row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+     lv_obj_set_style_pad_all (Row, THEME_PAD_ROW_TIGHT, 0);
++    lv_obj_set_style_pad_column (Row, THEME_PAD_ROW_GAP, 0);
+     lv_obj_set_style_border_width (Row, 0, 0);
+     lv_obj_set_style_bg_opa (Row, LV_OPA_TRANSP, 0);
++    lv_obj_clear_flag (Row, LV_OBJ_FLAG_SCROLLABLE);
++
++    CreatePromptIcon (Row, OptStr8, THEME_ICON_SQUARE, LvglThemeFontSmall ());
+ 
+     Label = lv_label_create (Row);
+     lv_label_set_text (Label, OptStr8 != NULL ? OptStr8 : "?");
+@@ -3132,6 +4428,8 @@ CreateOrderedListWidget (
+     BtnLabel = lv_label_create (UpBtn);
+     lv_label_set_text (BtnLabel, LV_SYMBOL_UP);
+     LvglThemeStyleButtonLabel (UpBtn, BtnLabel);
++    StyleSecondaryButton (UpBtn);
++    lv_obj_set_style_opa (UpBtn, LV_OPA_40, LV_STATE_DISABLED);
+ 
+     if (Grayout || (i == 0)) {
+       lv_obj_add_state (UpBtn, LV_STATE_DISABLED);
+@@ -3146,7 +4444,7 @@ CreateOrderedListWidget (
+         lv_obj_add_event_cb (UpBtn, OnOrderedListMove, LV_EVENT_CLICKED, UpCtx);
+       }
+ 
+-      AddToNavGroup (Group, UpBtn, NULL);
++      AddToNavGroup (Group, UpBtn, HelpCtx);
+     }
+ 
+     //
+@@ -3156,6 +4454,8 @@ CreateOrderedListWidget (
+     BtnLabel = lv_label_create (DownBtn);
+     lv_label_set_text (BtnLabel, LV_SYMBOL_DOWN);
+     LvglThemeStyleButtonLabel (DownBtn, BtnLabel);
++    StyleSecondaryButton (DownBtn);
++    lv_obj_set_style_opa (DownBtn, LV_OPA_40, LV_STATE_DISABLED);
+ 
+     if (Grayout || (i + 1 >= ActiveCount)) {
+       lv_obj_add_state (DownBtn, LV_STATE_DISABLED);
+@@ -3170,7 +4470,7 @@ CreateOrderedListWidget (
+         lv_obj_add_event_cb (DownBtn, OnOrderedListMove, LV_EVENT_CLICKED, DownCtx);
+       }
+ 
+-      AddToNavGroup (Group, DownBtn, NULL);
++      AddToNavGroup (Group, DownBtn, HelpCtx);
+     }
+   }
+ 
+@@ -3198,7 +4498,35 @@ CreateStringWidget (
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Row = lv_obj_create (Parent);
++  //
++  // A read-only string (for example the processor name in an overview) is
++  // information, not a field: show its value like a text line.
++  //
++  if ((Statement->OpCode->OpCode == EFI_IFR_STRING_OP) &&
++      ((Statement->Attribute & HII_DISPLAY_READONLY) != 0))
++  {
++    CurUtf8 = NULL;
++    if (Statement->CurrentValue.Value.string != 0) {
++      CurStr16 = HiiGetString (HiiHandle, Statement->CurrentValue.Value.string, NULL);
++      if (CurStr16 != NULL) {
++        CurUtf8 = Ucs2ToUtf8 (CurStr16);
++        FreePool (CurStr16);
++      }
++    }
++
++    CreateValueRow (Parent, (Text != NULL) ? Text : "", (CurUtf8 != NULL) ? CurUtf8 : "");
++    if (CurUtf8 != NULL) {
++      FreePool (CurUtf8);
++    }
++
++    if (Text != NULL) {
++      FreePool (Text);
++    }
++
++    return;
++  }
++
++  Row = lv_obj_create (RowParent (Parent));
+   StyleRow (Row);
+   if (Statement->SettingChangedFlag) {
+     MarkRowChanged (Row);
+@@ -3206,6 +4534,7 @@ CreateStringWidget (
+ 
+   Label = lv_label_create (Row);
+   lv_label_set_text (Label, Text != NULL ? Text : "String");
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
+   lv_obj_set_flex_grow (Label, 1);
+   LvglThemeApplyBodyFont (Label);
+ 
+@@ -3234,6 +4563,7 @@ CreateStringWidget (
+   }
+ 
+   LvglThemeStyleTextarea (Ta);
++  StyleTextField (Ta);
+ 
+   if (Statement->Attribute & HII_DISPLAY_GRAYOUT) {
+     lv_obj_add_state (Row, LV_STATE_DISABLED);
+@@ -3267,6 +4597,266 @@ CreateStringWidget (
+   }
+ }
+ 
++/**
++  Return the card of a menu area, creating the area -- a header and a card
++  -- in the column with the least content when it is new.
++**/
++STATIC
++lv_obj_t *
++AreaCard (
++  IN lv_obj_t        *Parent,
++  IN LVGL_MENU_AREA  Area
++  )
++{
++  UINTN     Idx;
++  UINTN     Column;
++  lv_obj_t  *Group;
++  lv_obj_t  *Header;
++
++  if (mAreaRow == NULL) {
++    mAreaRow = CreateBox (Parent);
++    lv_obj_set_size (mAreaRow, LV_PCT (100), LV_SIZE_CONTENT);
++    lv_obj_set_flex_flow (mAreaRow, LV_FLEX_FLOW_ROW);
++    lv_obj_set_style_pad_column (mAreaRow, THEME_PAD_AREA_GAP, 0);
++
++    for (Idx = 0; Idx < mAreaColumnCount; Idx++) {
++      mAreaColumns[Idx] = CreateBox (mAreaRow);
++      lv_obj_set_height (mAreaColumns[Idx], LV_SIZE_CONTENT);
++      lv_obj_set_flex_grow (mAreaColumns[Idx], 1);
++      lv_obj_set_flex_flow (mAreaColumns[Idx], LV_FLEX_FLOW_COLUMN);
++      lv_obj_set_style_pad_row (mAreaColumns[Idx], THEME_PAD_AREA_GAP, 0);
++      mAreaColumnWeight[Idx] = 0;
++    }
++  }
++
++  for (Idx = 0; Idx < mAreaCount; Idx++) {
++    if (mAreas[Idx].Area == Area) {
++      mAreaColumnWeight[mAreas[Idx].Column]++;
++      return mAreas[Idx].Card;
++    }
++  }
++
++  Column = 0;
++  for (Idx = 1; Idx < mAreaColumnCount; Idx++) {
++    if (mAreaColumnWeight[Idx] < mAreaColumnWeight[Column]) {
++      Column = Idx;
++    }
++  }
++
++  Group = CreateBox (mAreaColumns[Column]);
++  lv_obj_set_size (Group, LV_PCT (100), LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Group, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_style_pad_row (Group, THEME_PAD_AREA_HEADER_GAP, 0);
++
++  Header = lv_label_create (Group);
++  lv_label_set_text (Header, MenuAreaTitle (Area));
++  lv_obj_set_style_text_font (Header, LvglThemeFontSmall (), 0);
++  lv_obj_set_style_text_color (Header, lv_color_hex (THEME_COLOR_SECTION_TEXT), 0);
++  lv_obj_set_style_pad_left (Header, THEME_PAD_SECTION_X, 0);
++
++  //
++  // Header and first row.
++  //
++  mAreaColumnWeight[Column] += 2;
++
++  if (mAreaCount < LVGL_AREA_MAX) {
++    mAreas[mAreaCount].Area   = Area;
++    mAreas[mAreaCount].Column = Column;
++    mAreas[mAreaCount].Card   = CreateCard (Group);
++    return mAreas[mAreaCount++].Card;
++  }
++
++  return CreateCard (Group);
++}
++
++/**
++  Number of columns of the front-page grid: as many as fit in Width, at
++  most THEME_GRID_COLUMNS_MAX, and no more than needed to spread the
++  tiles of each section evenly over its rows.
++**/
++STATIC
++UINTN
++GridColumns (
++  IN int32_t  Width
++  )
++{
++  UINTN  MaxColumns;
++  UINTN  Columns;
++  UINTN  Rows;
++  UINTN  Idx;
++
++  MaxColumns = 1;
++  if (Width > (int32_t)THEME_TILE_WIDTH) {
++    MaxColumns = ((UINTN)Width + THEME_PAD_TILE_GAP_X) / (THEME_TILE_WIDTH + THEME_PAD_TILE_GAP_X);
++  }
++
++  MaxColumns = MAX (1, MIN (MaxColumns, THEME_GRID_COLUMNS_MAX));
++  Columns    = 1;
++  for (Idx = 0; Idx < LVGL_GRID_SECTIONS; Idx++) {
++    if (mGridCount[Idx] == 0) {
++      continue;
++    }
++
++    Rows    = (mGridCount[Idx] + MaxColumns - 1) / MaxColumns;
++    Columns = MAX (Columns, (mGridCount[Idx] + Rows - 1) / Rows);
++  }
++
++  return Columns;
++}
++
++/**
++  Return the section of the front-page grid that receives a tile. The
++  first call builds the grid in Parent: the sections that have tiles, a
++  divider between them, and the caption that shows the help of the focused
++  entry.
++**/
++STATIC
++lv_obj_t *
++GridSection (
++  IN lv_obj_t  *Parent,
++  IN UINTN     Section
++  )
++{
++  lv_obj_t  *Grid;
++  int32_t   Width;
++  UINTN     Columns;
++  UINTN     Idx;
++
++  if (mGridCaption == NULL) {
++    lv_obj_update_layout (Parent);
++    Columns = GridColumns (lv_obj_get_content_width (Parent));
++    Width   = (int32_t)(Columns * THEME_TILE_WIDTH + (Columns - 1) * THEME_PAD_TILE_GAP_X);
++
++    Grid = CreateBox (Parent);
++    lv_obj_set_size (Grid, Width, LV_SIZE_CONTENT);
++    lv_obj_set_flex_flow (Grid, LV_FLEX_FLOW_COLUMN);
++    lv_obj_set_flex_align (Grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++    lv_obj_set_style_pad_row (Grid, THEME_PAD_GRID_SECTION_GAP, 0);
++
++    for (Idx = 0; Idx < LVGL_GRID_SECTIONS; Idx++) {
++      if (mGridCount[Idx] == 0) {
++        continue;
++      }
++
++      if ((Idx > 0) && (mGridSection[0] != NULL)) {
++        CreateFilledBox (Grid, LV_PCT (100), THEME_BORDER_PANE, 0, THEME_COLOR_HOME_DIVIDER, LV_OPA_COVER);
++      }
++
++      //
++      // Tiles are the scroll targets (LV_OBJ_FLAG_USER_1, see
++      // NavScrollTarget), not the whole grid.
++      //
++      mGridSection[Idx] = CreateBox (Grid);
++      lv_obj_set_size (mGridSection[Idx], LV_PCT (100), LV_SIZE_CONTENT);
++      lv_obj_set_flex_flow (mGridSection[Idx], LV_FLEX_FLOW_ROW_WRAP);
++      lv_obj_set_flex_align (mGridSection[Idx], LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
++      lv_obj_set_style_pad_column (mGridSection[Idx], THEME_PAD_TILE_GAP_X, 0);
++      lv_obj_set_style_pad_row (mGridSection[Idx], THEME_PAD_TILE_GAP_Y, 0);
++      lv_obj_add_flag (mGridSection[Idx], LV_OBJ_FLAG_USER_1);
++    }
++
++    mGridCaption = lv_label_create (Grid);
++    lv_label_set_long_mode (mGridCaption, LV_LABEL_LONG_WRAP);
++    lv_obj_set_width (mGridCaption, LV_PCT (100));
++    lv_obj_set_style_text_font (mGridCaption, LvglThemeFontSmall (), 0);
++    lv_obj_set_style_text_color (mGridCaption, lv_color_hex (THEME_COLOR_GRID_CAPTION), 0);
++    lv_obj_set_style_text_align (mGridCaption, LV_TEXT_ALIGN_CENTER, 0);
++    lv_obj_set_style_min_height (mGridCaption, lv_font_get_line_height (LvglThemeFontSmall ()), 0);
++    lv_label_set_text (mGridCaption, "");
++  }
++
++  if (mGridSection[Section] == NULL) {
++    Section = (mGridSection[0] != NULL) ? 0 : 1;
++  }
++
++  return mGridSection[Section];
++}
++
++/**
++  Create a tile of the front-page grid: a rounded square with the symbol of
++  the entry and a light shadow, its prompt below. The tile passes its
++  states on to the square and the label: the focus draws a ring around the
++  square and turns the label white.
++**/
++STATIC
++VOID
++CreateGridTile (
++  IN lv_obj_t                       *Parent,
++  IN FORM_DISPLAY_ENGINE_STATEMENT  *Statement,
++  IN CONST CHAR8                    *Text,
++  IN lv_group_t                     *Group
++  )
++{
++  lv_obj_t                *Tile;
++  lv_obj_t                *Square;
++  lv_obj_t                *Glyph;
++  lv_obj_t                *Label;
++  LVGL_STATEMENT_CONTEXT  *Ctx;
++  CONST CHAR8             *Symbol;
++  UINT32                  Color;
++  CHAR8                   Letter[2];
++
++  Tile = lv_obj_create (GridSection (Parent, GridSectionOfArea (LookupMenuArea (Text))));
++  lv_obj_remove_style_all (Tile);
++  lv_obj_set_size (Tile, THEME_TILE_WIDTH, LV_SIZE_CONTENT);
++  lv_obj_set_flex_flow (Tile, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_flex_align (Tile, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
++  lv_obj_set_style_pad_top (Tile, THEME_PAD_TILE_TOP, 0);
++  lv_obj_set_style_pad_row (Tile, THEME_PAD_TILE_LABEL_GAP, 0);
++  lv_obj_clear_flag (Tile, LV_OBJ_FLAG_SCROLLABLE);
++  lv_obj_add_flag (Tile, LV_OBJ_FLAG_CLICKABLE);
++  lv_obj_add_flag (Tile, LV_OBJ_FLAG_STATE_TRICKLE);
++
++  Square = CreateBox (Tile);
++  lv_obj_set_size (Square, THEME_TILE_SQUARE, THEME_TILE_SQUARE);
++  lv_obj_set_style_radius (Square, THEME_RADIUS_TILE, 0);
++  lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG), 0);
++  lv_obj_set_style_bg_opa (Square, LV_OPA_COVER, 0);
++  lv_obj_set_style_border_color (Square, lv_color_hex (THEME_COLOR_TILE_BORDER), 0);
++  lv_obj_set_style_border_width (Square, THEME_BORDER_PANE, 0);
++  lv_obj_set_style_shadow_width (Square, THEME_TILE_SHADOW_WIDTH, 0);
++  lv_obj_set_style_shadow_offset_y (Square, THEME_TILE_SHADOW_OFFSET_Y, 0);
++  lv_obj_set_style_shadow_color (Square, lv_color_black (), 0);
++  lv_obj_set_style_shadow_opa (Square, LV_OPA_40, 0);
++  lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_HOVER), LV_STATE_HOVERED);
++  lv_obj_set_style_bg_color (Square, lv_color_hex (THEME_COLOR_TILE_BG_PRESSED), LV_STATE_PRESSED);
++  lv_obj_set_style_outline_color (Square, lv_color_hex (THEME_COLOR_TILE_FOCUS), LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_opa (Square, LV_OPA_COVER, LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_width (Square, THEME_TILE_FOCUS_BORDER, LV_STATE_FOCUSED);
++  lv_obj_set_style_outline_pad (Square, THEME_PAD_TILE_FOCUS_GAP, LV_STATE_FOCUSED);
++  lv_obj_set_style_opa (Square, LV_OPA_50, LV_STATE_DISABLED);
++
++  Symbol = PromptSymbol (Text, Letter, &Color);
++  Glyph  = lv_label_create (Square);
++  lv_label_set_text (Glyph, Symbol);
++  lv_obj_set_style_text_font (Glyph, LvglThemeFontTile (), 0);
++  lv_obj_set_style_text_color (Glyph, lv_color_hex (Color), 0);
++  lv_obj_center (Glyph);
++
++  Label = lv_label_create (Tile);
++  lv_label_set_text (Label, (Text != NULL) ? Text : "");
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width (Label, LV_PCT (100));
++  lv_obj_set_style_text_align (Label, LV_TEXT_ALIGN_CENTER, 0);
++  LvglThemeApplyBodyFont (Label);
++  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_TILE_LABEL), 0);
++  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_TEXT_TITLE), LV_STATE_FOCUSED);
++  lv_obj_set_style_text_color (Label, lv_color_hex (THEME_COLOR_TEXT_DISABLED), LV_STATE_DISABLED);
++
++  if (Statement->Attribute & HII_DISPLAY_GRAYOUT) {
++    lv_obj_add_state (Tile, LV_STATE_DISABLED);
++  }
++
++  Ctx = AllocateZeroPool (sizeof (LVGL_STATEMENT_CONTEXT));
++  if (Ctx != NULL) {
++    Ctx->Statement = Statement;
++    Ctx->Widget    = Tile;
++    lv_obj_add_event_cb (Tile, OnStatementClicked, LV_EVENT_CLICKED, Ctx);
++  }
++
++  AddToNavGroup (Group, Tile, Ctx);
++}
++
+ STATIC
+ VOID
+ CreateRefWidget (
+@@ -3277,21 +4867,96 @@ CreateRefWidget (
+   )
+ {
+   CHAR8                   *Text;
++  CHAR8                   *Help;
++  lv_obj_t                *Card;
+   lv_obj_t                *Btn;
++  lv_obj_t                *Column;
+   lv_obj_t                *Label;
++  lv_obj_t                *HelpLbl;
++  lv_obj_t                *Chevron;
+   LVGL_STATEMENT_CONTEXT  *Ctx;
++  BOOLEAN                 Large;
+ 
+   Text = GetPromptUtf8 (Statement, HiiHandle);
+ 
+-  Btn = lv_btn_create (Parent);
++  if (mGridMenu) {
++    CreateGridTile (Parent, Statement, Text, Group);
++    if (Text != NULL) {
++      FreePool (Text);
++    }
++
++    return;
++  }
++
++  //
++  // Menus are grouped by area; on the front page the entries are larger
++  // and show their help text (it has no help card).
++  //
++  Large = (BOOLEAN)(mGroupedMenu && IsFrontPageForm ());
++  if (mGroupedMenu) {
++    Card = AreaCard (Parent, LookupMenuArea (Text));
++    if (lv_obj_get_child_count (Card) > 0) {
++      AddCardDivider (Card);
++    }
++  } else {
++    Card = RowParent (Parent);
++  }
++
++  //
++  // Menu entry: icon, prompt and, for REF (goto) entries that open another
++  // form, a chevron. The row passes its focus on to the labels, which turn
++  // fully opaque on the accent fill.
++  //
++  Btn = lv_btn_create (Card);
+   StyleRow (Btn);
+   lv_obj_set_style_text_align (Btn, LV_TEXT_ALIGN_LEFT, 0);
++  lv_obj_add_flag (Btn, LV_OBJ_FLAG_STATE_TRICKLE);
++
++  CreatePromptIcon (
++    Btn,
++    Text,
++    Large ? THEME_ICON_SQUARE_LARGE : THEME_ICON_SQUARE,
++    Large ? THEME_FONT_BODY : LvglThemeFontSmall ()
++    );
+ 
+-  Label = lv_label_create (Btn);
++  Column = CreateBox (Btn);
++  lv_obj_set_height (Column, LV_SIZE_CONTENT);
++  lv_obj_set_flex_grow (Column, 1);
++  lv_obj_set_flex_flow (Column, LV_FLEX_FLOW_COLUMN);
++  lv_obj_set_style_pad_row (Column, LvglThemePx (2), 0);
++  lv_obj_add_flag (Column, LV_OBJ_FLAG_STATE_TRICKLE);
++
++  Label = lv_label_create (Column);
+   lv_label_set_text (Label, Text != NULL ? Text : "Goto");
+-  lv_obj_align (Label, LV_ALIGN_LEFT_MID, 0, 0);
++  lv_label_set_long_mode (Label, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width (Label, LV_PCT (100));
+   LvglThemeApplyBodyFont (Label);
+ 
++  if (Large) {
++    Help = GetHelpUtf8 (Statement, HiiHandle);
++    if (!IsBlankUtf8 (Help)) {
++      HelpLbl = lv_label_create (Column);
++      lv_label_set_long_mode (HelpLbl, LV_LABEL_LONG_WRAP);
++      lv_obj_set_width (HelpLbl, LV_PCT (100));
++      lv_label_set_text (HelpLbl, Help);
++      lv_obj_set_style_text_font (HelpLbl, LvglThemeFontSmall (), 0);
++      lv_obj_set_style_text_opa (HelpLbl, LV_OPA_60, 0);
++      lv_obj_set_style_text_opa (HelpLbl, LV_OPA_80, LV_STATE_FOCUSED);
++    }
++
++    if (Help != NULL) {
++      FreePool (Help);
++    }
++  }
++
++  if (Statement->OpCode->OpCode == EFI_IFR_REF_OP) {
++    Chevron = lv_label_create (Btn);
++    lv_label_set_text (Chevron, LV_SYMBOL_RIGHT);
++    lv_obj_set_style_text_font (Chevron, LvglThemeFontSmall (), 0);
++    lv_obj_set_style_text_opa (Chevron, LV_OPA_50, 0);
++    lv_obj_set_style_text_opa (Chevron, LV_OPA_COVER, LV_STATE_FOCUSED);
++  }
++
+   if (Statement->Attribute & HII_DISPLAY_GRAYOUT) {
+     lv_obj_add_state (Btn, LV_STATE_DISABLED);
+   }
+@@ -3329,6 +4994,145 @@ CreateActionWidget (
+ // ---- Core renderer ----
+ //
+ 
++/**
++  Decide whether the form is laid out as a menu in areas: the front page and
++  System Configuration, when every entry opens another form or runs an
++  action. Also sets the number of area columns: one per area, at most three
++  on the front page and two next to the help card.
++**/
++STATIC
++BOOLEAN
++IsGroupedMenuForm (
++  IN FORM_DISPLAY_ENGINE_FORM  *FormData
++  )
++{
++  LIST_ENTRY                     *Link;
++  FORM_DISPLAY_ENGINE_STATEMENT  *Statement;
++  BOOLEAN                        IsFrontPage;
++  BOOLEAN                        Seen[LvglAreaMore + 1];
++  UINTN                          Areas;
++  UINTN                          Entries;
++  CHAR8                          *Prompt;
++  LVGL_MENU_AREA                 Area;
++
++  mAreaColumnCount = 0;
++  ZeroMem (mGridCount, sizeof (mGridCount));
++  IsFrontPage      = CompareGuid (&FormData->FormSetGuid, &mFrontPageFormSetGuid);
++  if (!IsFrontPage && !CompareGuid (&FormData->FormSetGuid, &mDeviceManagerFormSetGuid)) {
++    return FALSE;
++  }
++
++  ZeroMem (Seen, sizeof (Seen));
++  Areas   = 0;
++  Entries = 0;
++  for (Link = FormData->StatementListHead.ForwardLink;
++       Link != &FormData->StatementListHead;
++       Link = Link->ForwardLink)
++  {
++    Statement = FORM_DISPLAY_ENGINE_STATEMENT_FROM_LINK (Link);
++    if (Statement->Attribute & HII_DISPLAY_SUPPRESS) {
++      continue;
++    }
++
++    switch (Statement->OpCode->OpCode) {
++      case EFI_IFR_REF_OP:
++      case EFI_IFR_ACTION_OP:
++        Prompt = GetPromptUtf8 (Statement, FormData->HiiHandle);
++        Area   = LookupMenuArea (Prompt);
++        if (Prompt != NULL) {
++          FreePool (Prompt);
++        }
++
++        if (!Seen[Area]) {
++          Seen[Area] = TRUE;
++          Areas++;
++        }
++
++        mGridCount[GridSectionOfArea (Area)]++;
++        Entries++;
++        break;
++
++      case EFI_IFR_CHECKBOX_OP:
++      case EFI_IFR_NUMERIC_OP:
++      case EFI_IFR_ONE_OF_OP:
++      case EFI_IFR_ORDERED_LIST_OP:
++      case EFI_IFR_STRING_OP:
++      case EFI_IFR_PASSWORD_OP:
++      case EFI_IFR_DATE_OP:
++      case EFI_IFR_TIME_OP:
++        return FALSE;
++
++      default:
++        break;
++    }
++  }
++
++  if (Entries < 2) {
++    return FALSE;
++  }
++
++  mAreaColumnCount = MIN (Areas, IsFrontPage ? 3 : 2);
++  return TRUE;
++}
++
++/**
++  Order the navigation list of a menu as it reads: column by column, top
++  to bottom, for the menus in columns (areas collect entries from anywhere
++  in the form); row by row, left to right, for the front-page grid.
++**/
++STATIC
++VOID
++SortNavByPosition (
++  IN BOOLEAN  ByRows
++  )
++{
++  UINTN                          Idx;
++  UINTN                          Pos;
++  lv_obj_t                       *Obj;
++  FORM_DISPLAY_ENGINE_STATEMENT  *Stmt;
++  lv_area_t                      Cur;
++  lv_area_t                      Prev;
++
++  for (Idx = 1; Idx < mNavCount; Idx++) {
++    Obj  = mNavList[Idx];
++    Stmt = mNavStatement[Idx];
++    lv_obj_get_coords (Obj, &Cur);
++
++    for (Pos = Idx; Pos > 0; Pos--) {
++      lv_obj_get_coords (mNavList[Pos - 1], &Prev);
++      if (ByRows) {
++        if ((Prev.y1 < Cur.y1) || ((Prev.y1 == Cur.y1) && (Prev.x1 <= Cur.x1))) {
++          break;
++        }
++      } else if ((Prev.x1 < Cur.x1) || ((Prev.x1 == Cur.x1) && (Prev.y1 <= Cur.y1))) {
++        break;
++      }
++
++      mNavList[Pos]      = mNavList[Pos - 1];
++      mNavStatement[Pos] = mNavStatement[Pos - 1];
++    }
++
++    mNavList[Pos]      = Obj;
++    mNavStatement[Pos] = Stmt;
++  }
++}
++
++/**
++  Back button of the window title bar: leave the form, like ESC.
++**/
++STATIC
++VOID
++OnBackClicked (
++  lv_event_t  *Event
++  )
++{
++  (VOID)Event;
++
++  if ((mPopupOverlay == NULL) && !IsFrontPageForm ()) {
++    RequestUserExit (BROWSER_ACTION_FORM_EXIT, 0, NULL);
++  }
++}
++
+ /**
+   Walk StatementListHead and create one LVGL widget per visible statement.
+ **/
+@@ -3342,7 +5146,14 @@ BuildFormWidgets (
+   FORM_DISPLAY_ENGINE_STATEMENT    *Statement;
+   EFI_HII_HANDLE                  HiiHandle;
+ 
+-  HiiHandle = Session->FormData->HiiHandle;
++  HiiHandle       = Session->FormData->HiiHandle;
++  mSectionCard    = NULL;
++  mPendingSection = NULL;
++  mAreaRow        = NULL;
++  mAreaCount      = 0;
++  mAboutInfo      = NULL;
++  mGridCaption    = NULL;
++  ZeroMem (mGridSection, sizeof (mGridSection));
+ 
+   for (Link = Session->FormData->StatementListHead.ForwardLink;
+        Link != &Session->FormData->StatementListHead;
+@@ -3500,13 +5311,18 @@ LvglRenderForm (
+   }
+ 
+   //
+-  // Create a new screen and the AMI Aptio-style chrome around it.
++  // Create a new screen and the chrome around it (menu bar, window, dock).
+   // AptioBuildChrome returns the inner content panel; form widgets are
+   // appended to that panel below.
+   //
++  mGroupedMenu    = IsGroupedMenuForm (FormData);
++  mGridMenu       = (BOOLEAN)(mGroupedMenu && IsFrontPageForm ());
+   mSession.Screen = lv_obj_create (NULL);
+-  ContentPanel    = AptioBuildChrome (mSession.Screen, FormData);
++  ContentPanel    = AptioBuildChrome (mSession.Screen, FormData, mGroupedMenu);
+   mContentPanel   = ContentPanel;
++  if (AptioGetBackButton () != NULL) {
++    lv_obj_add_event_cb (AptioGetBackButton (), OnBackClicked, LV_EVENT_CLICKED, NULL);
++  }
+ 
+   //
+   // Create a navigation group and bind keyboard input devices.
+@@ -3583,6 +5399,25 @@ LvglRenderForm (
+   // commit; otherwise use the browser highlight.
+   //
+   lv_obj_update_layout (mSession.Screen);
++
++  //
++  // The front page: center the overview and the menu (in the window) or the
++  // icon grid (on the desktop) vertically when they fit.
++  //
++  if (IsFrontPageForm () && (lv_obj_get_scroll_bottom (ContentPanel) < 0)) {
++    lv_obj_set_flex_align (
++      ContentPanel,
++      LV_FLEX_ALIGN_CENTER,
++      mGridMenu ? LV_FLEX_ALIGN_CENTER : LV_FLEX_ALIGN_START,
++      mGridMenu ? LV_FLEX_ALIGN_CENTER : LV_FLEX_ALIGN_START
++      );
++    lv_obj_update_layout (mSession.Screen);
++  }
++
++  if (mGroupedMenu) {
++    SortNavByPosition (mGridMenu);
++  }
++
+   if (mRestoreFocusPending) {
+     if (mRestoreFocusNavIdx < mNavCount) {
+       lv_group_focus_obj (mNavList[mRestoreFocusNavIdx]);
+@@ -3600,6 +5435,16 @@ LvglRenderForm (
+     }
+   }
+ 
++  //
++  // lv_group_add_obj() focuses the first object of the form before its
++  // event handlers exist, and focusing it again sends nothing: replay the
++  // FOCUSED event so that the help card and the row highlight follow the
++  // initial focus.
++  //
++  if (lv_group_get_focused (mSession.Group) != NULL) {
++    lv_obj_send_event (lv_group_get_focused (mSession.Group), LV_EVENT_FOCUSED, NULL);
++  }
++
+   //
+   // Finish a deferred leave after flushing the focused field on ESC/back.
+   //
+@@ -3702,6 +5547,7 @@ LvglRunConfirmPopup (
+   }
+ 
+   lv_group_delete (PopupGroup);
++  mPopupGroup = NULL;
+ 
+   {
+     UINTN  Result  = (UINTN)mPopupResult;
+@@ -3807,16 +5653,13 @@ AddHiiPopupButton (
+   IN lv_obj_t     *Row,
+   IN lv_group_t   *Group,
+   IN CONST CHAR8  *Label,
+-  IN INT32        Selection
++  IN INT32        Selection,
++  IN BOOLEAN      Stacked
+   )
+ {
+   lv_obj_t  *Btn;
+-  lv_obj_t  *Lbl;
+ 
+-  Btn = lv_btn_create (Row);
+-  Lbl = lv_label_create (Btn);
+-  lv_label_set_text (Lbl, Label);
+-  LvglThemeStyleButtonLabel (Btn, Lbl);
++  Btn = AddDialogButton (Row, Label, Stacked);
+   lv_obj_add_event_cb (Btn, OnHiiPopupBtn, LV_EVENT_CLICKED, (void *)(UINTN)(Selection + 1));
+   lv_obj_add_event_cb (Btn, OnHiiPopupKey, LV_EVENT_KEY, NULL);
+   lv_group_add_obj (Group, Btn);
+@@ -3832,10 +5675,14 @@ ShowHiiPopup (
+   IN lv_group_t           *Group,
+   IN CONST CHAR8          *Title,
+   IN CONST CHAR8          *Message,
++  IN EFI_HII_POPUP_STYLE  PopupStyle,
+   IN EFI_HII_POPUP_TYPE   PopupType
+   )
+ {
+   LVGL_DIALOG_SHELL  Shell;
++  BOOLEAN            Stacked;
++
++  Stacked = (BOOLEAN)(PopupType == EfiHiiPopupTypeYesNoCancel);
+ 
+   mHiiPopupSel    = LVGL_HII_POPUP_PENDING;
+   mHiiPopupYesSel = LVGL_HII_POPUP_PENDING;
+@@ -3843,27 +5690,38 @@ ShowHiiPopup (
+   mHiiPopupEscSel = LVGL_HII_POPUP_PENDING;
+   mHiiPopupGroup  = Group;
+ 
+-  CreateDialogShell (&Shell, Title);
++  switch (PopupStyle) {
++    case EfiHiiPopupStyleError:
++      CreateDialogShell (&Shell, Title, LV_SYMBOL_WARNING, THEME_COLOR_ICON_RED, Stacked);
++      break;
++    case EfiHiiPopupStyleWarning:
++      CreateDialogShell (&Shell, Title, LV_SYMBOL_WARNING, THEME_COLOR_ICON_ORANGE, Stacked);
++      break;
++    default:
++      CreateDialogShell (&Shell, Title, LV_SYMBOL_BELL, THEME_COLOR_ICON_BLUE, Stacked);
++      break;
++  }
++
+   mHiiPopupOverlay = Shell.Overlay;
+   CreateDialogMessageLabel (Shell.Card, Message, TRUE);
+ 
+   switch (PopupType) {
+     case EfiHiiPopupTypeOk:
+-      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "OK", EfiHiiPopupSelectionOk);
++      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "OK", EfiHiiPopupSelectionOk, Stacked);
+       mHiiPopupLast   = mHiiPopupFirst;
+       mHiiPopupEscSel = EfiHiiPopupSelectionOk;
+       break;
+ 
+     case EfiHiiPopupTypeOkCancel:
+-      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "OK", EfiHiiPopupSelectionOk);
+-      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "Cancel", EfiHiiPopupSelectionCancel);
++      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "OK", EfiHiiPopupSelectionOk, Stacked);
++      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "Cancel", EfiHiiPopupSelectionCancel, Stacked);
+       mHiiPopupEscSel = EfiHiiPopupSelectionCancel;
+       break;
+ 
+     case EfiHiiPopupTypeYesNoCancel:
+-      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "Yes (Y)", EfiHiiPopupSelectionYes);
+-      (VOID)AddHiiPopupButton (Shell.BtnRow, Group, "No (N)", EfiHiiPopupSelectionNo);
+-      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "Cancel", EfiHiiPopupSelectionCancel);
++      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "Yes (Y)", EfiHiiPopupSelectionYes, Stacked);
++      AddHiiPopupButton (Shell.BtnRow, Group, "No (N)", EfiHiiPopupSelectionNo, Stacked);
++      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "Cancel", EfiHiiPopupSelectionCancel, Stacked);
+       mHiiPopupYesSel = EfiHiiPopupSelectionYes;
+       mHiiPopupNoSel  = EfiHiiPopupSelectionNo;
+       mHiiPopupEscSel = EfiHiiPopupSelectionCancel;
+@@ -3871,8 +5729,8 @@ ShowHiiPopup (
+ 
+     case EfiHiiPopupTypeYesNo:
+     default:
+-      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "Yes (Y)", EfiHiiPopupSelectionYes);
+-      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "No (N)", EfiHiiPopupSelectionNo);
++      mHiiPopupFirst  = AddHiiPopupButton (Shell.BtnRow, Group, "Yes (Y)", EfiHiiPopupSelectionYes, Stacked);
++      mHiiPopupLast   = AddHiiPopupButton (Shell.BtnRow, Group, "No (N)", EfiHiiPopupSelectionNo, Stacked);
+       mHiiPopupYesSel = EfiHiiPopupSelectionYes;
+       mHiiPopupNoSel  = EfiHiiPopupSelectionNo;
+       mHiiPopupEscSel = EfiHiiPopupSelectionNo;
+@@ -3940,7 +5798,7 @@ LvglHiiCreatePopup (
+     }
+   }
+ 
+-  ShowHiiPopup (PopupGroup, Title, Utf8, PopupType);
++  ShowHiiPopup (PopupGroup, Title, Utf8, PopupStyle, PopupType);
+ 
+   //
+   // Drain pending keystrokes so the popup isn't dismissed by a stale key.
+-- 
+2.43.0
+

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 21:37:27 +0200
+Subject: [PATCH 2/6] LvglPkg: Add a PCD for the default UI scale
+
+The UI scale used before the user picks one in Graphical UI
+Configuration is fixed to 1x. Take it from PcdLvglUiScaleDefault, like
+the other layout defaults, so that a platform can start at the scale
+that suits its panel. The PCD defaults to 1x.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Library/LvglUiConfigLib/LvglUiConfigLib.c   | 2 +-
+ Library/LvglUiConfigLib/LvglUiConfigLib.inf | 1 +
+ LvglPkg.dec                                 | 4 ++++
+ 3 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/Library/LvglUiConfigLib/LvglUiConfigLib.c b/Library/LvglUiConfigLib/LvglUiConfigLib.c
+index 2db5725..f1bb942 100644
+--- a/Library/LvglUiConfigLib/LvglUiConfigLib.c
++++ b/Library/LvglUiConfigLib/LvglUiConfigLib.c
+@@ -61,7 +61,7 @@ LvglUiConfigGetDefaults (
+ {
+   ASSERT (Config != NULL);
+ 
+-  Config->UiScale                 = LVGL_UI_SCALE_DEFAULT;
++  Config->UiScale                   = PcdGet8 (PcdLvglUiScaleDefault);
+   Config->CenteredFrameEnabled      = PcdGetBool (PcdLvglCenteredFrameEnabled) ? 1 : 0;
+   Config->CenteredFrameHeightPct    = PcdGet8 (PcdLvglCenteredFrameHeightPct);
+   Config->CenteredFrameAspectNum    = PcdGet8 (PcdLvglCenteredFrameAspectNum);
+diff --git a/Library/LvglUiConfigLib/LvglUiConfigLib.inf b/Library/LvglUiConfigLib/LvglUiConfigLib.inf
+index 9ef7769..f0fa92c 100644
+--- a/Library/LvglUiConfigLib/LvglUiConfigLib.inf
++++ b/Library/LvglUiConfigLib/LvglUiConfigLib.inf
+@@ -32,6 +32,7 @@
+   gLvglUiConfigFormSetGuid
+ 
+ [Pcd]
++  gLvglPkgTokenSpaceGuid.PcdLvglUiScaleDefault
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameEnabled
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameHeightPct
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameAspectNum
+diff --git a/LvglPkg.dec b/LvglPkg.dec
+index 4bff149..995fec9 100644
+--- a/LvglPkg.dec
++++ b/LvglPkg.dec
+@@ -50,3 +50,7 @@
+   ## show the form title in the subtitle bar and render the centered banner in
+   ## the content area (original behavior).
+   gLvglPkgTokenSpaceGuid.PcdLvglAptioSubtitleShowsDeviceModel|FALSE|BOOLEAN|0x00000008
++
++  ## UI scale used until the user picks one in Graphical UI Configuration:
++  ## 0 = 1x, 3 = 1.25x, 1 = 1.5x, 2 = 2x (LVGL_UI_SCALE_* in Guid/LvglUiConfig.h).
++  gLvglPkgTokenSpaceGuid.PcdLvglUiScaleDefault|0|UINT8|0x00000009
+-- 
+2.43.0
+

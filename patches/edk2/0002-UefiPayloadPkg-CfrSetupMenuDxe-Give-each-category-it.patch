@@ -1,0 +1,996 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 00:23:39 +0200
+Subject: [PATCH 2/5] UefiPayloadPkg/CfrSetupMenuDxe: Give each category its
+ own form
+
+All CFR forms end up in a single HII form, one after the other under
+subtitles. Make the setup menu work for a bootloader that groups its
+options into categories:
+
+- Each top-level CFR form, up to eight, gets a form of its own, titled
+  with the CFR form name; the main form links to them. The formset has the
+  EDKII_IFR_FRONT_PAGE_FORMS_GUID class GUID, so the front page lists the
+  categories. Suppressed forms and those beyond eight stay in the main
+  form as before.
+- Nested forms are processed recursively: they become subtitles (cards)
+  with their options, and their dependency and flags apply to all of them.
+  Before, a nested form read its name at the wrong offset (relative to the
+  parent HOB instead of to itself).
+- Options get consecutive question IDs from CFR_COMPONENT_START. They were
+  the low 16 bits of CFR_COMPONENT_START plus the 64-bit CFR object ID,
+  which coreboot derives from pointers, so two options could collide.
+- Boolean options are checkboxes instead of Enabled/Disabled lists, which
+  graphical displays draw as switches. A checkbox uses the first byte of
+  the 32-bit variable, which holds 0 or 1, and RouteConfig keeps the
+  variable size, so existing variables and the bootloader are unaffected.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c | 656 +++++++++++++-----
+ .../CfrSetupMenuDxe/SetupMenuNVDataStruc.h    |  12 +
+ .../CfrSetupMenuDxe/SetupMenuStrings.uni      |  16 +
+ .../CfrSetupMenuDxe/SetupMenuVfr.Vfr          |  69 +-
+ 4 files changed, 570 insertions(+), 183 deletions(-)
+
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
+index 226cd4dc2a..8e8885c5b2 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
+@@ -171,6 +171,161 @@ CfrCleanupLockAtBoot (
+   mLockAtBootApplied = FALSE;
+ }
+ 
++//
++// HII question IDs are 16-bit while CFR object IDs are 64-bit (derived from
++// pointers in coreboot), so the options get consecutive question IDs from
++// CFR_COMPONENT_START, which are also the IDs of their VARSTOREs.
++//
++typedef struct {
++  UINT64             ObjectId;
++  EFI_QUESTION_ID    QuestionId;
++} CFR_QUESTION_ID_MAP;
++
++STATIC CFR_QUESTION_ID_MAP  *mQuestionIdMap     = NULL;
++STATIC UINTN                mQuestionIdMapCount = 0;
++STATIC UINTN                mQuestionIdMapSize  = 0;
++
++//
++// Titles of the category forms, set from the top-level CFR forms
++//
++STATIC CONST EFI_STRING_ID  mCategoryTitle[SETUP_MENU_CATEGORY_MAX] = {
++  STRING_TOKEN (STR_CFR_CATEGORY_0),
++  STRING_TOKEN (STR_CFR_CATEGORY_1),
++  STRING_TOKEN (STR_CFR_CATEGORY_2),
++  STRING_TOKEN (STR_CFR_CATEGORY_3),
++  STRING_TOKEN (STR_CFR_CATEGORY_4),
++  STRING_TOKEN (STR_CFR_CATEGORY_5),
++  STRING_TOKEN (STR_CFR_CATEGORY_6),
++  STRING_TOKEN (STR_CFR_CATEGORY_7),
++};
++
++/**
++  Return the question ID of a CFR option.
++
++  @param[in]  ObjectId  CFR object ID of the option.
++
++  @return The question ID, or 0 when ObjectId is not an option.
++
++**/
++STATIC
++EFI_QUESTION_ID
++CfrQuestionId (
++  IN UINT64  ObjectId
++  )
++{
++  UINTN  Index;
++
++  if (ObjectId == 0) {
++    return 0;
++  }
++
++  for (Index = 0; Index < mQuestionIdMapCount; Index++) {
++    if (mQuestionIdMap[Index].ObjectId == ObjectId) {
++      return mQuestionIdMap[Index].QuestionId;
++    }
++  }
++
++  return 0;
++}
++
++/**
++  Give a CFR option the next free question ID, unless it has one.
++
++**/
++STATIC
++VOID
++CfrAssignQuestionId (
++  IN UINT64  ObjectId
++  )
++{
++  CFR_QUESTION_ID_MAP  *NewMap;
++
++  if ((ObjectId == 0) || (CfrQuestionId (ObjectId) != 0)) {
++    return;
++  }
++
++  if (CFR_COMPONENT_START + mQuestionIdMapCount >= LABEL_RT_COMP_END) {
++    DEBUG ((DEBUG_ERROR, "CFR: Too many options, 0x%lx left out!\n", ObjectId));
++    return;
++  }
++
++  if (mQuestionIdMapCount == mQuestionIdMapSize) {
++    NewMap = ReallocatePool (
++               mQuestionIdMapSize * sizeof (CFR_QUESTION_ID_MAP),
++               (mQuestionIdMapSize + 64) * sizeof (CFR_QUESTION_ID_MAP),
++               mQuestionIdMap
++               );
++    if (NewMap == NULL) {
++      return;
++    }
++
++    mQuestionIdMap      = NewMap;
++    mQuestionIdMapSize += 64;
++  }
++
++  mQuestionIdMap[mQuestionIdMapCount].ObjectId   = ObjectId;
++  mQuestionIdMap[mQuestionIdMapCount].QuestionId = (EFI_QUESTION_ID)(CFR_COMPONENT_START + mQuestionIdMapCount);
++  mQuestionIdMapCount++;
++}
++
++/**
++  Offset of the first child record of a CFR form: past its header, its UI
++  name and its optional dependency values.
++
++**/
++STATIC
++UINTN
++CfrFormChildrenOffset (
++  IN CFR_OPTION_FORM  *Form
++  )
++{
++  UINTN  Offset;
++
++  Offset = sizeof (CFR_OPTION_FORM);
++  CfrExtractVarBinary ((UINT8 *)Form, &Offset, CB_TAG_CFR_VARCHAR_UI_NAME);
++  CfrExtractVarBinary ((UINT8 *)Form, &Offset, CB_TAG_CFR_DEP_VALUES);
++
++  return Offset;
++}
++
++/**
++  Assign question IDs to the options of a CFR form and its nested forms.
++
++**/
++STATIC
++VOID
++CfrAssignFormQuestionIds (
++  IN CFR_OPTION_FORM  *Form
++  )
++{
++  UINTN            Offset;
++  CFR_OPTION_FORM  *Record;
++
++  Offset = CfrFormChildrenOffset (Form);
++  while (Offset < Form->size) {
++    Record = (CFR_OPTION_FORM *)((UINT8 *)Form + Offset);
++    if (Record->size == 0) {
++      break;
++    }
++
++    switch (Record->tag) {
++      case CB_TAG_CFR_OPTION_FORM:
++        CfrAssignFormQuestionIds (Record);
++        break;
++      case CB_TAG_CFR_OPTION_ENUM:
++      case CB_TAG_CFR_OPTION_NUMBER:
++      case CB_TAG_CFR_OPTION_BOOL:
++      case CB_TAG_CFR_OPTION_VARCHAR:
++        CfrAssignQuestionId (Record->object_id);
++        break;
++      default:
++        break;
++    }
++
++    Offset += Record->size;
++  }
++}
++
+ /**
+   CFR_VARBINARY records are used as option name and UI name and help text.
+   Convert one to formats used for EDK2 HII.
+@@ -496,15 +651,24 @@ CfrProduceStorageForOption (
+   FreePool (VarStore);
+ }
+ 
+-/**
+-  Process one CFR form - its UI name - and create HII component.
+-  Therefore, *do not* advanced index by the size field.
++STATIC
++VOID
++EFIAPI
++CfrProcessNumericOption (
++  IN     CFR_OPTION_NUMERIC  *Option,
++  IN     VOID                *StartOpCodeHandle,
++  IN OUT UINTN               *ProcessedLength
++  );
+ 
+-  It's currently too difficult to produce form HII IFR, because these
+-  seem unable to be nested, so generating the VfrBin at runtime would be required.
+-  However, maybe we'll look into that, or HII "scopes" later.
++STATIC
++VOID
++EFIAPI
++CfrProcessCharacterOption (
++  IN     CFR_OPTION_VARCHAR  *Option,
++  IN     VOID                *StartOpCodeHandle,
++  IN OUT UINTN               *ProcessedLength
++  );
+ 
+-**/
+ STATIC
+ VOID
+ EFIAPI
+@@ -512,32 +676,157 @@ CfrProcessFormOption (
+   IN     CFR_OPTION_FORM  *Option,
+   IN     VOID             *StartOpCodeHandle,
+   IN OUT UINTN            *ProcessedLength
++  );
++
++/**
++  Create the HII components of the options of a CFR form, from Offset to
++  the end of the form. Nested forms are processed with their options.
++
++**/
++STATIC
++VOID
++EFIAPI
++CfrProcessFormChildren (
++  IN CFR_OPTION_FORM  *Form,
++  IN UINTN            Offset,
++  IN VOID             *StartOpCodeHandle
+   )
+ {
+-  CFR_VARBINARY       *CfrFormName;
+-  UINT32              *DepValues;
+-  UINT32              NumDepValues;
+-  CFR_VARBINARY       *CfrDepValues;
+-  CHAR16              *HiiFormNameString;
+-  EFI_STRING_ID       HiiFormNameStringId;
+-  UINT8               *TempHiiBuffer;
++  CFR_OPTION_FORM  *Record;
+ 
+-  //
+-  // Extract variable-length fields that follow the header
+-  //
+-  *ProcessedLength += sizeof (CFR_OPTION_FORM);
+-  CfrFormName = CfrExtractVarBinary ((UINT8 *)Option, ProcessedLength, CB_TAG_CFR_VARCHAR_UI_NAME);
+-  ASSERT (CfrFormName != NULL);
++  while (Offset < Form->size) {
++    Record = (CFR_OPTION_FORM *)((UINT8 *)Form + Offset);
++    if (Record->size == 0) {
++      DEBUG ((DEBUG_ERROR, "CFR: Offset 0x%x - Empty entry!\n", Offset));
++      break;
++    }
+ 
+-  // Dependency values are optional
+-  DepValues = NULL;
++    switch (Record->tag) {
++      case CB_TAG_CFR_OPTION_FORM:
++        CfrProcessFormOption (Record, StartOpCodeHandle, &Offset);
++        break;
++      case CB_TAG_CFR_OPTION_ENUM:
++      case CB_TAG_CFR_OPTION_NUMBER:
++      case CB_TAG_CFR_OPTION_BOOL:
++        CfrProcessNumericOption ((CFR_OPTION_NUMERIC *)Record, StartOpCodeHandle, &Offset);
++        break;
++      case CB_TAG_CFR_OPTION_VARCHAR:
++      case CB_TAG_CFR_OPTION_COMMENT:
++        CfrProcessCharacterOption ((CFR_OPTION_VARCHAR *)Record, StartOpCodeHandle, &Offset);
++        break;
++      default:
++        DEBUG ((
++          DEBUG_ERROR,
++          "CFR: Offset 0x%x - Unexpected entry 0x%x (size 0x%x)!\n",
++          Offset,
++          Record->tag,
++          Record->size
++          ));
++        Offset += Record->size;
++        break;
++    }
++  }
++}
++
++/**
++  Open the HII scopes for the dependency and the flags of a CFR form:
++  suppressif and grayoutif. Close them with CfrCloseFormScopes().
++
++  @return The number of scopes opened.
++
++**/
++STATIC
++UINTN
++CfrOpenFormScopes (
++  IN CFR_OPTION_FORM  *Form,
++  IN VOID             *StartOpCodeHandle
++  )
++{
++  UINTN            Offset;
++  CFR_VARBINARY    *CfrDepValues;
++  UINT32           *DepValues;
++  UINT32           NumDepValues;
++  EFI_QUESTION_ID  DependencyId;
++  UINTN            Scopes;
++
++  Scopes = 0;
++
++  DepValues    = NULL;
+   NumDepValues = 0;
+-  CfrDepValues = CfrExtractVarBinary ((UINT8 *)Option, ProcessedLength, CB_TAG_CFR_DEP_VALUES);
++  Offset       = sizeof (CFR_OPTION_FORM);
++  CfrExtractVarBinary ((UINT8 *)Form, &Offset, CB_TAG_CFR_VARCHAR_UI_NAME);
++  CfrDepValues = CfrExtractVarBinary ((UINT8 *)Form, &Offset, CB_TAG_CFR_DEP_VALUES);
+   if (CfrDepValues != NULL) {
+-    ASSERT (CfrDepValues->tag == CB_TAG_CFR_DEP_VALUES);
+     CfrConvertVarBinaryToUint32Array (CfrDepValues, &DepValues, &NumDepValues);
+   }
+ 
++  DependencyId = CfrQuestionId (Form->dependency_id);
++  if (DependencyId != 0) {
++    CfrProduceHiiForDependency (StartOpCodeHandle, DependencyId, DepValues, NumDepValues);
++    Scopes++;
++  }
++
++  if (Form->flags & CFR_OPTFLAG_SUPPRESS) {
++    CfrProduceHiiForFlags (StartOpCodeHandle, EFI_IFR_SUPPRESS_IF_OP);
++    Scopes++;
++  }
++
++  if (Form->flags & CFR_OPTFLAG_INACTIVE) {
++    CfrProduceHiiForFlags (StartOpCodeHandle, EFI_IFR_GRAY_OUT_IF_OP);
++    Scopes++;
++  }
++
++  return Scopes;
++}
++
++/**
++  Close the scopes opened by CfrOpenFormScopes().
++
++**/
++STATIC
++VOID
++CfrCloseFormScopes (
++  IN VOID   *StartOpCodeHandle,
++  IN UINTN  Scopes
++  )
++{
++  UINT8  *TempHiiBuffer;
++
++  while (Scopes-- > 0) {
++    TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
++    ASSERT (TempHiiBuffer != NULL);
++  }
++}
++
++/**
++  Process one nested CFR form: a subtitle with its UI name, then its
++  options. The dependency and the flags of the form apply to all of them.
++
++**/
++STATIC
++VOID
++EFIAPI
++CfrProcessFormOption (
++  IN     CFR_OPTION_FORM  *Option,
++  IN     VOID             *StartOpCodeHandle,
++  IN OUT UINTN            *ProcessedLength
++  )
++{
++  UINTN           Offset;
++  CFR_VARBINARY   *CfrFormName;
++  CHAR16          *HiiFormNameString;
++  EFI_STRING_ID   HiiFormNameStringId;
++  UINT8           *TempHiiBuffer;
++  UINTN           Scopes;
++
++  Offset      = sizeof (CFR_OPTION_FORM);
++  CfrFormName = CfrExtractVarBinary ((UINT8 *)Option, &Offset, CB_TAG_CFR_VARCHAR_UI_NAME);
++  ASSERT (CfrFormName != NULL);
++  if (CfrFormName == NULL) {
++    *ProcessedLength += Option->size;
++    return;
++  }
++
+   DEBUG ((
+     DEBUG_INFO,
+     "CFR: Processing form \"%a\", size 0x%x\n",
+@@ -548,21 +837,7 @@ CfrProcessFormOption (
+   CfrConvertVarBinaryToStrings (CfrFormName, &HiiFormNameString, &HiiFormNameStringId);
+   FreePool (HiiFormNameString);
+ 
+-  if (Option->dependency_id) {
+-    CfrProduceHiiForDependency (
+-      StartOpCodeHandle,
+-      CFR_COMPONENT_START + Option->dependency_id,
+-      DepValues,
+-      NumDepValues
+-      );
+-  }
+-
+-  if (Option->flags & CFR_OPTFLAG_SUPPRESS) {
+-    CfrProduceHiiForFlags (StartOpCodeHandle, EFI_IFR_SUPPRESS_IF_OP);
+-  }
+-  if (Option->flags & CFR_OPTFLAG_INACTIVE) {
+-    CfrProduceHiiForFlags (StartOpCodeHandle, EFI_IFR_GRAY_OUT_IF_OP);
+-  }
++  Scopes = CfrOpenFormScopes (Option, StartOpCodeHandle);
+ 
+   TempHiiBuffer = HiiCreateSubTitleOpCode (
+                     StartOpCodeHandle,
+@@ -573,19 +848,11 @@ CfrProcessFormOption (
+                     );
+   ASSERT (TempHiiBuffer != NULL);
+ 
+-  if (Option->flags & CFR_OPTFLAG_INACTIVE) {
+-    TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
+-    ASSERT (TempHiiBuffer != NULL);
+-  }
+-  if (Option->flags & CFR_OPTFLAG_SUPPRESS) {
+-    TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
+-    ASSERT (TempHiiBuffer != NULL);
+-  }
++  CfrProcessFormChildren (Option, CfrFormChildrenOffset (Option), StartOpCodeHandle);
+ 
+-  if (Option->dependency_id) {
+-    TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
+-    ASSERT (TempHiiBuffer != NULL);
+-  }
++  CfrCloseFormScopes (StartOpCodeHandle, Scopes);
++
++  *ProcessedLength += Option->size;
+ }
+ 
+ /**
+@@ -609,6 +876,8 @@ CfrProcessNumericOption (
+   UINT32          NumDepValues;
+   CFR_VARBINARY   *CfrDepValues;
+   UINTN           QuestionIdVarStoreId;
++  EFI_QUESTION_ID DependencyId;
++  VOID            *BoolDefaultOpCodeHandle;
+   UINT8           QuestionFlags;
+   VOID            *DefaultOpCodeHandle;
+   UINT8           *TempHiiBuffer;
+@@ -657,7 +926,12 @@ CfrProcessNumericOption (
+   //
+   // Processing start
+   //
+-  QuestionIdVarStoreId = CFR_COMPONENT_START + Option->object_id;
++  QuestionIdVarStoreId = CfrQuestionId (Option->object_id);
++  if (QuestionIdVarStoreId == 0) {
++    *ProcessedLength += Option->size;
++    return;
++  }
++
+   CfrProduceStorageForOption (
+     CfrOptionName,
+     &Option->default_value,
+@@ -672,10 +946,11 @@ CfrProcessNumericOption (
+     QuestionFlags |= EFI_IFR_FLAG_READ_ONLY;
+   }
+ 
+-  if (Option->dependency_id) {
++  DependencyId = CfrQuestionId (Option->dependency_id);
++  if (DependencyId != 0) {
+     CfrProduceHiiForDependency (
+       StartOpCodeHandle,
+-      CFR_COMPONENT_START + Option->dependency_id,
++      DependencyId,
+       DepValues,
+       NumDepValues
+       );
+@@ -771,28 +1046,22 @@ CfrProcessNumericOption (
+                       );
+     ASSERT (TempHiiBuffer != NULL);
+   } else if (Option->tag == CB_TAG_CFR_OPTION_BOOL) {
+-    OptionOpCodeHandle = HiiAllocateOpCodeHandle ();
+-    ASSERT (OptionOpCodeHandle != NULL);
+-
+-    TempHiiBuffer = HiiCreateOneOfOptionOpCode (
+-                      OptionOpCodeHandle,
+-                      STRING_TOKEN (STR_BOOL_ENABLED),
+-                      0,
+-                      EFI_IFR_TYPE_NUM_SIZE_32,
+-                      1
+-                      );
+-    ASSERT (TempHiiBuffer != NULL);
++    //
++    // A checkbox: displays show it as a switch. It uses the first byte of
++    // the 32-bit variable, which holds 0 or 1, and keeps the variable size.
++    //
++    BoolDefaultOpCodeHandle = HiiAllocateOpCodeHandle ();
++    ASSERT (BoolDefaultOpCodeHandle != NULL);
+ 
+-    TempHiiBuffer = HiiCreateOneOfOptionOpCode (
+-                      OptionOpCodeHandle,
+-                      STRING_TOKEN (STR_BOOL_DISABLED),
+-                      0,
+-                      EFI_IFR_TYPE_NUM_SIZE_32,
+-                      0
++    TempHiiBuffer = HiiCreateDefaultOpCode (
++                      BoolDefaultOpCodeHandle,
++                      EFI_HII_DEFAULT_CLASS_STANDARD,
++                      EFI_IFR_TYPE_BOOLEAN,
++                      Option->default_value != 0
+                       );
+     ASSERT (TempHiiBuffer != NULL);
+ 
+-    TempHiiBuffer = HiiCreateOneOfOpCode (
++    TempHiiBuffer = HiiCreateCheckBoxOpCode (
+                       StartOpCodeHandle,
+                       QuestionIdVarStoreId,
+                       QuestionIdVarStoreId,
+@@ -800,11 +1069,12 @@ CfrProcessNumericOption (
+                       HiiDisplayStringId,
+                       HiiHelpTextId,
+                       QuestionFlags,
+-                      EFI_IFR_NUMERIC_SIZE_4,
+-                      OptionOpCodeHandle,
+-                      DefaultOpCodeHandle
++                      (Option->default_value != 0) ? EFI_IFR_CHECKBOX_DEFAULT : 0,
++                      BoolDefaultOpCodeHandle
+                       );
+     ASSERT (TempHiiBuffer != NULL);
++
++    HiiFreeOpCodeHandle (BoolDefaultOpCodeHandle);
+   }
+ 
+   if (Option->flags & (CFR_OPTFLAG_INACTIVE | CFR_OPTFLAG_READONLY)) {
+@@ -816,7 +1086,7 @@ CfrProcessNumericOption (
+     ASSERT (TempHiiBuffer != NULL);
+   }
+ 
+-  if (Option->dependency_id) {
++  if (DependencyId != 0) {
+     TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
+     ASSERT (TempHiiBuffer != NULL);
+   }
+@@ -852,6 +1122,7 @@ CfrProcessCharacterOption (
+   UINT32          NumDepValues;
+   CFR_VARBINARY   *CfrDepValues;
+   UINTN           QuestionIdVarStoreId;
++  EFI_QUESTION_ID DependencyId;
+   CHAR16          *HiiDefaultValue;
+   EFI_STRING_ID   HiiDefaultValueId;
+   UINTN           HiiDefaultValueLengthChars;
+@@ -914,7 +1185,11 @@ CfrProcessCharacterOption (
+   // Processing start
+   //
+   if (Option->tag == CB_TAG_CFR_OPTION_VARCHAR) {
+-    QuestionIdVarStoreId = CFR_COMPONENT_START + Option->object_id;
++    QuestionIdVarStoreId = CfrQuestionId (Option->object_id);
++    if (QuestionIdVarStoreId == 0) {
++      *ProcessedLength += Option->size;
++      return;
++    }
+ 
+     if (CfrDefaultValue->data_length > 1) {
+       CfrConvertVarBinaryToStrings (CfrDefaultValue, &HiiDefaultValue, &HiiDefaultValueId);
+@@ -939,10 +1214,11 @@ CfrProcessCharacterOption (
+     }
+   }
+ 
+-  if (Option->dependency_id) {
++  DependencyId = CfrQuestionId (Option->dependency_id);
++  if (DependencyId != 0) {
+     CfrProduceHiiForDependency (
+       StartOpCodeHandle,
+-      CFR_COMPONENT_START + Option->dependency_id,
++      DependencyId,
+       DepValues,
+       NumDepValues
+       );
+@@ -1021,7 +1297,7 @@ CfrProcessCharacterOption (
+     ASSERT (TempHiiBuffer != NULL);
+   }
+ 
+-  if (Option->dependency_id) {
++  if (DependencyId != 0) {
+     TempHiiBuffer = HiiCreateEndOpCode (StartOpCodeHandle);
+     ASSERT (TempHiiBuffer != NULL);
+   }
+@@ -1030,9 +1306,44 @@ CfrProcessCharacterOption (
+   *ProcessedLength += Option->size;
+ }
+ 
++/**
++  Allocate an opcode handle that starts with a label.
++
++**/
++STATIC
++VOID *
++CfrAllocateLabeledOpCodeHandle (
++  IN UINT16  LabelNumber
++  )
++{
++  VOID                *OpCodeHandle;
++  EFI_IFR_GUID_LABEL  *Label;
++
++  OpCodeHandle = HiiAllocateOpCodeHandle ();
++  ASSERT (OpCodeHandle != NULL);
++
++  Label = (EFI_IFR_GUID_LABEL *)HiiCreateGuidOpCode (
++                                  OpCodeHandle,
++                                  &gEfiIfrTianoGuid,
++                                  NULL,
++                                  sizeof (EFI_IFR_GUID_LABEL)
++                                  );
++  ASSERT (Label != NULL);
++
++  Label->ExtendOpCode = EFI_IFR_EXTEND_OP_LABEL;
++  Label->Number       = LabelNumber;
++
++  return OpCodeHandle;
++}
++
+ /**
+   Create runtime components by iterating CFR forms.
+ 
++  Each top-level CFR form, up to SETUP_MENU_CATEGORY_MAX, fills a category
++  form of its own, and the main form links to it. A form that is suppressed
++  or comes after those stays in the main form, under a subtitle, as before.
++  Nested forms become subtitles in the form of their parent.
++
+ **/
+ VOID
+ EFIAPI
+@@ -1040,116 +1351,97 @@ CfrCreateRuntimeComponents (
+   VOID
+   )
+ {
+-  VOID                *StartOpCodeHandle;
+-  VOID                *EndOpCodeHandle;
+-  EFI_IFR_GUID_LABEL  *StartLabel;
+-  EFI_IFR_GUID_LABEL  *EndLabel;
+-  EFI_HOB_GUID_TYPE   *GuidHob;
+-  CFR_OPTION_FORM     *CfrFormHob;
+-  UINTN               ProcessedLength;
+-  CFR_OPTION_FORM     *CfrFormData;
+-  EFI_STATUS          Status;
+-  UINT8               *TempHiiBuffer;
+-
+-  //
+-  // Allocate GUIDed markers at runtime component offset in IFR
+-  //
+-  StartOpCodeHandle = HiiAllocateOpCodeHandle ();
+-  ASSERT (StartOpCodeHandle != NULL);
+-
+-  EndOpCodeHandle = HiiAllocateOpCodeHandle ();
+-  ASSERT (EndOpCodeHandle != NULL);
+-
+-  StartLabel = (EFI_IFR_GUID_LABEL *)HiiCreateGuidOpCode (
+-                                       StartOpCodeHandle,
+-                                       &gEfiIfrTianoGuid,
+-                                       NULL,
+-                                       sizeof (EFI_IFR_GUID_LABEL)
+-                                       );
+-  ASSERT (StartLabel != NULL);
+-
+-  StartLabel->ExtendOpCode = EFI_IFR_EXTEND_OP_LABEL;
+-  StartLabel->Number       = LABEL_RT_COMP_START;
+-
+-  EndLabel = (EFI_IFR_GUID_LABEL *)HiiCreateGuidOpCode (
+-                                       EndOpCodeHandle,
+-                                       &gEfiIfrTianoGuid,
+-                                       NULL,
+-                                       sizeof (EFI_IFR_GUID_LABEL)
+-                                       );
+-  ASSERT (EndLabel != NULL);
+-
+-  EndLabel->ExtendOpCode = EFI_IFR_EXTEND_OP_LABEL;
+-  EndLabel->Number       = LABEL_RT_COMP_END;
++  VOID               *MainOpCodeHandle;
++  VOID               *FormOpCodeHandle;
++  VOID               *EndOpCodeHandle;
++  EFI_HOB_GUID_TYPE  *GuidHob;
++  CFR_OPTION_FORM    *CfrFormHob;
++  CFR_VARBINARY      *CfrFormName;
++  CHAR16             *FormName;
++  UINTN              Offset;
++  UINTN              Category;
++  UINTN              Scopes;
++  EFI_STATUS         Status;
++  UINT8              *TempHiiBuffer;
+ 
+   //
+-  // For each HOB, create forms
++  // Question IDs first: dependencies can refer to any option
+   //
+   GuidHob = GetFirstGuidHob (&gEfiCfrSetupMenuFormGuid);
++  while (GuidHob != NULL) {
++    CfrAssignFormQuestionIds (GET_GUID_HOB_DATA (GuidHob));
++    GuidHob = GetNextGuidHob (&gEfiCfrSetupMenuFormGuid, GET_NEXT_HOB (GuidHob));
++  }
++
++  MainOpCodeHandle = CfrAllocateLabeledOpCodeHandle (LABEL_RT_COMP_START);
++  EndOpCodeHandle  = CfrAllocateLabeledOpCodeHandle (LABEL_RT_COMP_END);
++
++  Category = 0;
++  GuidHob  = GetFirstGuidHob (&gEfiCfrSetupMenuFormGuid);
+   while (GuidHob != NULL) {
+     CfrFormHob = GET_GUID_HOB_DATA (GuidHob);
+ 
+-    ProcessedLength = 0;
+-    CfrProcessFormOption (
+-      CfrFormHob,
+-      StartOpCodeHandle,
+-      &ProcessedLength
+-      );
++    Offset      = sizeof (CFR_OPTION_FORM);
++    CfrFormName = CfrExtractVarBinary ((UINT8 *)CfrFormHob, &Offset, CB_TAG_CFR_VARCHAR_UI_NAME);
++    ASSERT (CfrFormName != NULL);
++
++    if ((CfrFormName == NULL) || (Category >= SETUP_MENU_CATEGORY_MAX) ||
++        (CfrFormHob->flags & CFR_OPTFLAG_SUPPRESS))
++    {
++      //
++      // In the main form, as a subtitle followed by an empty line
++      //
++      Offset = 0;
++      CfrProcessFormOption (CfrFormHob, MainOpCodeHandle, &Offset);
++
++      TempHiiBuffer = HiiCreateSubTitleOpCode (
++                        MainOpCodeHandle,
++                        STRING_TOKEN (STR_EMPTY_STRING),
++                        0,
++                        0,
++                        0
++                        );
++      ASSERT (TempHiiBuffer != NULL);
++    } else {
++      DEBUG ((DEBUG_INFO, "CFR: Category %u: \"%a\"\n", (UINT32)Category, CfrFormName->data));
++
++      //
++      // The category form: its title and its options
++      //
++      CfrConvertVarBinaryToStrings (CfrFormName, &FormName, NULL);
++      HiiSetString (mSetupMenuPrivate.HiiHandle, mCategoryTitle[Category], FormName, NULL);
++      FreePool (FormName);
++
++      FormOpCodeHandle = CfrAllocateLabeledOpCodeHandle (LABEL_RT_COMP_START);
++      CfrProcessFormChildren (CfrFormHob, CfrFormChildrenOffset (CfrFormHob), FormOpCodeHandle);
++      Status = HiiUpdateForm (
++                 mSetupMenuPrivate.HiiHandle,
++                 &mSetupMenuFormsetGuid,
++                 (EFI_FORM_ID)(SETUP_MENU_CATEGORY_FORM_ID + Category),
++                 FormOpCodeHandle,
++                 EndOpCodeHandle
++                 );
++      ASSERT_EFI_ERROR (Status);
++      HiiFreeOpCodeHandle (FormOpCodeHandle);
++
++      //
++      // The link in the main form, with the dependency and flags of the form
++      //
++      Scopes        = CfrOpenFormScopes (CfrFormHob, MainOpCodeHandle);
++      TempHiiBuffer = HiiCreateGotoOpCode (
++                        MainOpCodeHandle,
++                        (EFI_FORM_ID)(SETUP_MENU_CATEGORY_FORM_ID + Category),
++                        mCategoryTitle[Category],
++                        STRING_TOKEN (STR_EMPTY_STRING),
++                        0,
++                        (EFI_QUESTION_ID)(SETUP_MENU_CATEGORY_FORM_ID + Category)
++                        );
++      ASSERT (TempHiiBuffer != NULL);
++      CfrCloseFormScopes (MainOpCodeHandle, Scopes);
+ 
+-    //
+-    // Process form tree
+-    //
+-    while (ProcessedLength < CfrFormHob->size) {
+-      CfrFormData = (CFR_OPTION_FORM *)((UINT8 *)CfrFormHob + ProcessedLength);
+-
+-      switch (CfrFormData->tag) {
+-        case CB_TAG_CFR_OPTION_FORM:
+-          DEBUG ((DEBUG_INFO, "CFR: Nested form, will produce subtitle\n"));
+-          CfrProcessFormOption (
+-            (CFR_OPTION_FORM *)CfrFormData,
+-            StartOpCodeHandle,
+-            &ProcessedLength
+-            );
+-          break;
+-        case CB_TAG_CFR_OPTION_ENUM:
+-        case CB_TAG_CFR_OPTION_NUMBER:
+-        case CB_TAG_CFR_OPTION_BOOL:
+-          CfrProcessNumericOption (
+-            (CFR_OPTION_NUMERIC *)CfrFormData,
+-            StartOpCodeHandle,
+-            &ProcessedLength
+-            );
+-          break;
+-        case CB_TAG_CFR_OPTION_VARCHAR:
+-        case CB_TAG_CFR_OPTION_COMMENT:
+-          CfrProcessCharacterOption (
+-            (CFR_OPTION_VARCHAR *)CfrFormData,
+-            StartOpCodeHandle,
+-            &ProcessedLength
+-            );
+-          break;
+-        default:
+-          DEBUG ((
+-            DEBUG_ERROR,
+-            "CFR: Offset 0x%x - Unexpected entry 0x%x (size 0x%x)!\n",
+-            ProcessedLength,
+-            CfrFormData->tag,
+-            CfrFormData->size
+-            ));
+-          ProcessedLength += CfrFormData->size;
+-          break;
+-      }
++      Category++;
+     }
+ 
+-    TempHiiBuffer = HiiCreateSubTitleOpCode (
+-                      StartOpCodeHandle,
+-                      STRING_TOKEN (STR_EMPTY_STRING),
+-                      0,
+-                      0,
+-                      0
+-                  );
+-    ASSERT (TempHiiBuffer != NULL);
+-
+     GuidHob = GetNextGuidHob (&gEfiCfrSetupMenuFormGuid, GET_NEXT_HOB (GuidHob));
+   }
+ 
+@@ -1160,11 +1452,11 @@ CfrCreateRuntimeComponents (
+              mSetupMenuPrivate.HiiHandle,
+              &mSetupMenuFormsetGuid,
+              SETUP_MENU_FORM_ID,
+-             StartOpCodeHandle,
++             MainOpCodeHandle,
+              EndOpCodeHandle
+              );
+   ASSERT_EFI_ERROR (Status);
+ 
+-  HiiFreeOpCodeHandle (StartOpCodeHandle);
++  HiiFreeOpCodeHandle (MainOpCodeHandle);
+   HiiFreeOpCodeHandle (EndOpCodeHandle);
+ }
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
+index 1e3b2a80e1..51fe6c47c8 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
+@@ -19,4 +19,16 @@
+ #define CFR_COMPONENT_START  0x1000
+ #define LABEL_RT_COMP_END    0xefff
+ 
++//
++// The first top-level CFR forms get forms of their own (categories), with
++// these IDs (also in SetupMenuVfr.Vfr), which the main form links to.
++//
++#define SETUP_MENU_CATEGORY_FORM_ID  0x0100
++#define SETUP_MENU_CATEGORY_MAX      8
++
++//
++// EDKII_IFR_FRONT_PAGE_FORMS_GUID: the front page lists the categories
++//
++#include <Guid/HiiFrontPageForms.h>
++
+ #endif
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
+index 708e224e5f..e3972a2eae 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
+@@ -14,6 +14,22 @@
+ #string STR_INVALID_STRING  #language en-US  "INVALID"
+                             #language fr-FR  "INVALID"
+ 
++#string STR_CFR_CATEGORY_0  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_1  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_2  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_3  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_4  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_5  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_6  #language en-US  ""
++                            #language fr-FR  ""
++#string STR_CFR_CATEGORY_7  #language en-US  ""
++                            #language fr-FR  ""
+ #string STR_BOOL_ENABLED    #language en-US  "Enabled"
+                             #language fr-FR  "Enabled"
+ #string STR_BOOL_DISABLED   #language en-US  "Disabled"
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuVfr.Vfr b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuVfr.Vfr
+index 725c7682be..909d72e3a9 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuVfr.Vfr
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuVfr.Vfr
+@@ -14,7 +14,7 @@ formset
+   guid      = SETUP_MENU_FORMSET_GUID,
+   title     = STRING_TOKEN(STR_CFR_MENU_TITLE),
+   help      = STRING_TOKEN(STR_CFR_MENU_HELP),
+-  classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
++  classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID | EDKII_IFR_FRONT_PAGE_FORMS_GUID,
+ 
+   form formid = SETUP_MENU_FORM_ID,
+     title = STRING_TOKEN(STR_CFR_MENU_TITLE);
+@@ -28,4 +28,71 @@ formset
+ 
+   endform;
+ 
++  //
++  // Categories: SETUP_MENU_CATEGORY_FORM_ID + n, titles set at runtime
++  //
++  form formid = 0x0100,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_0);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0101,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_1);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0102,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_2);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0103,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_3);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0104,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_4);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0105,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_5);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0106,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_6);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
++  form formid = 0x0107,
++    title = STRING_TOKEN(STR_CFR_CATEGORY_7);
++
++    label LABEL_RT_COMP_START;
++    label LABEL_RT_COMP_END;
++
++  endform;
++
+ endformset;
+-- 
+2.43.0
+

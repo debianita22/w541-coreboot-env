@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 21:37:46 +0200
+Subject: [PATCH 3/6] LvglLib: Style the stock widgets from LvglTheme.h
+
+Drop-downs, text areas, check boxes, buttons and lists get their look
+from LVGL's default theme, which lv_display_create() initializes in
+light mode with LVGL's blue and red. On a dark LvglTheme.h they stay
+white. Initialize the default theme again from new LvglTheme.h macros:
+primary and secondary color and dark mode, with the scaled body font.
+The defaults are LVGL's own values, so the look does not change unless
+the theme sets them.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Include/LvglTheme.h       | 12 ++++++++++++
+ Library/LvglLib/LvglLib.c | 14 ++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/Include/LvglTheme.h b/Include/LvglTheme.h
+index 3d081b1..3120324 100644
+--- a/Include/LvglTheme.h
++++ b/Include/LvglTheme.h
+@@ -58,6 +58,18 @@
+ //
+ #define THEME_ACCENT_PALETTE      LV_PALETTE_BLUE
+ 
++//
++// Stock LVGL widgets (drop-downs, text areas, check boxes, buttons, lists)
++// are styled by LVGL's default theme, which LvglLib initializes with:
++//   primary   -- focus outline, checked / selected fill, button background
++//   secondary -- LVGL's secondary accent
++//   dark      -- 1: dark widget surfaces with light text, 0: light ones
++// The values below are LVGL's own defaults (blue, red, light).
++//
++#define THEME_COLOR_WIDGET_PRIMARY    0x2196F3
++#define THEME_COLOR_WIDGET_SECONDARY  0xF44336
++#define THEME_WIDGETS_DARK            0
++
+ //
+ // Fonts -- must be enabled in lv_conf.h. Sizes scale with UiScale via
+ // LvglThemeFont*() (base: title 20, body/popup 16).
+diff --git a/Library/LvglLib/LvglLib.c b/Library/LvglLib/LvglLib.c
+index c6ba451..9ee3a2a 100644
+--- a/Library/LvglLib/LvglLib.c
++++ b/Library/LvglLib/LvglLib.c
+@@ -4,6 +4,7 @@
+ #include <Library/LvglLib.h>
+ #include <Library/LvglUiConfigLib.h>
+ #include <Library/LvglThemeLib.h>
++#include <LvglTheme.h>
+ 
+ extern UINT8  mExitBtnYes;
+ 
+@@ -90,6 +91,19 @@ UefiLvglInit (
+     return EFI_UNSUPPORTED;
+   }
+ 
++  //
++  // LVGL's default theme styles the stock widgets (drop-downs, text areas,
++  // check boxes, buttons, lists): take its colors and light/dark mode from
++  // LvglTheme.h, so that they match the chrome drawn by the renderer.
++  //
++  lv_theme_default_init (
++    Display,
++    lv_color_hex (THEME_COLOR_WIDGET_PRIMARY),
++    lv_color_hex (THEME_COLOR_WIDGET_SECONDARY),
++    THEME_WIDGETS_DARK,
++    LvglThemeFontBody ()
++    );
++
+   lv_port_indev_init(Display);
+ 
+   mUefiLvglInitDone = TRUE;
+-- 
+2.43.0
+

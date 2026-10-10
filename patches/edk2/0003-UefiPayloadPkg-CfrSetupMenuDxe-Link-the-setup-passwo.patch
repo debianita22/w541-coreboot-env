@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 01:22:44 +0200
+Subject: [PATCH 3/5] UefiPayloadPkg/CfrSetupMenuDxe: Link the setup password
+ from a category
+
+The password asked for before the setup menu opens is set in its own
+formset, which UserAuthenticationDxe installs under System
+Configuration, away from the security settings of the setup menu.
+
+Add PcdCfrSetupMenuPasswordCategory: the title of the category of the
+setup menu that ends with a card linking to that formset, "Security" by
+default (an empty string leaves the link out). The link names the
+formset by GUID. When UserAuthenticationDxe is not in the build, the
+browser reports nothing: after the usual prompt about unsaved changes,
+if any, selecting the link silently leaves the setup menu for the
+previous formset, as for any goto to a missing formset.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../CfrSetupMenuDxe/CfrSetupMenuDxe.inf       |  4 +
+ UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c | 88 ++++++++++++++++++-
+ .../CfrSetupMenuDxe/SetupMenuNVDataStruc.h    |  6 ++
+ .../CfrSetupMenuDxe/SetupMenuStrings.uni      |  6 ++
+ UefiPayloadPkg/UefiPayloadPkg.dec             |  5 ++
+ 5 files changed, 106 insertions(+), 3 deletions(-)
+
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/CfrSetupMenuDxe.inf b/UefiPayloadPkg/CfrSetupMenuDxe/CfrSetupMenuDxe.inf
+index ceaa96bee3..091ee78b64 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/CfrSetupMenuDxe.inf
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/CfrSetupMenuDxe.inf
+@@ -36,6 +36,7 @@
+   HiiLib
+   HobLib
+   MemoryAllocationLib
++  PcdLib
+   VariablePolicyHelperLib
+   UefiHiiServicesLib
+   UefiLib
+@@ -49,6 +50,9 @@
+   gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID (Indicate the formset class guid to be displayed)
+   gEfiIfrTianoGuid                              ## CONSUMES ## GUID (Extended IFR Guid Opcode)
+ 
++[Pcd]
++  gUefiPayloadPkgTokenSpaceGuid.PcdCfrSetupMenuPasswordCategory  ## CONSUMES
++
+ [Protocols]
+   gEfiDevicePathProtocolGuid        ## PRODUCES
+   gEfiHiiConfigAccessProtocolGuid   ## PRODUCES
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
+index 8e8885c5b2..9f2183d03c 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuCfr.c
+@@ -15,6 +15,7 @@
+ #include <Library/HiiLib.h>
+ #include <Library/HobLib.h>
+ #include <Library/MemoryAllocationLib.h>
++#include <Library/PcdLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+ #include <Library/UefiLib.h>
+ #include <Library/VariablePolicyHelperLib.h>
+@@ -185,6 +186,16 @@ STATIC CFR_QUESTION_ID_MAP  *mQuestionIdMap     = NULL;
+ STATIC UINTN                mQuestionIdMapCount = 0;
+ STATIC UINTN                mQuestionIdMapSize  = 0;
+ 
++//
++// Formset of UserAuthenticationDxe (USER_AUTHENTICATION_FORMSET_GUID) and
++// its form, which sets the password asked for before the setup menu opens.
++//
++STATIC CONST EFI_GUID  mUserAuthenticationFormsetGuid = {
++  0x760e3022, 0xf149, 0x4560, { 0x9c, 0x6f, 0x33, 0xaa, 0x7d, 0x48, 0x75, 0xfa }
++};
++
++#define USER_AUTHENTICATION_FORM_ID  0x0001
++
+ //
+ // Titles of the category forms, set from the top-level CFR forms
+ //
+@@ -1336,13 +1347,79 @@ CfrAllocateLabeledOpCodeHandle (
+   return OpCodeHandle;
+ }
+ 
++/**
++  Return whether a category gets the link to the password of the setup
++  menu: its title is PcdCfrSetupMenuPasswordCategory.
++
++  @param[in]  Title  Title of the category.
++
++  @retval TRUE   The category ends with the link.
++  @retval FALSE  It does not.
++
++**/
++STATIC
++BOOLEAN
++CfrIsPasswordCategory (
++  IN CONST CHAR16  *Title
++  )
++{
++  CONST CHAR16  *Category;
++
++  Category = (CONST CHAR16 *)PcdGetPtr (PcdCfrSetupMenuPasswordCategory);
++  return (BOOLEAN)((Title != NULL) && (Category != NULL) && (Category[0] != L'\0') &&
++                   (StrCmp (Title, Category) == 0));
++}
++
++/**
++  Append a card with a link to the password asked for before the setup menu
++  opens: the form of UserAuthenticationDxe, which asks for the current and
++  the new password. When that driver is missing, the browser reports
++  nothing: after the usual prompt about unsaved changes, if any, selecting
++  the link just leaves this formset.
++
++  @param[in]  OpCodeHandle  Handle of the category form.
++
++**/
++STATIC
++VOID
++CfrAddPasswordLink (
++  IN VOID  *OpCodeHandle
++  )
++{
++  UINT8  *TempHiiBuffer;
++
++  TempHiiBuffer = HiiCreateSubTitleOpCode (
++                    OpCodeHandle,
++                    STRING_TOKEN (STR_PASSWORD_TITLE),
++                    0,
++                    0,
++                    0
++                    );
++  ASSERT (TempHiiBuffer != NULL);
++
++  TempHiiBuffer = HiiCreateGotoExOpCode (
++                    OpCodeHandle,
++                    USER_AUTHENTICATION_FORM_ID,
++                    STRING_TOKEN (STR_PASSWORD_PROMPT),
++                    STRING_TOKEN (STR_PASSWORD_HELP),
++                    0,
++                    SETUP_MENU_PASSWORD_QUESTION_ID,
++                    0,
++                    (EFI_GUID *)&mUserAuthenticationFormsetGuid,
++                    0
++                    );
++  ASSERT (TempHiiBuffer != NULL);
++}
++
+ /**
+   Create runtime components by iterating CFR forms.
+ 
+   Each top-level CFR form, up to SETUP_MENU_CATEGORY_MAX, fills a category
+   form of its own, and the main form links to it. A form that is suppressed
+   or comes after those stays in the main form, under a subtitle, as before.
+-  Nested forms become subtitles in the form of their parent.
++  Nested forms become subtitles in the form of their parent. The category
++  named by PcdCfrSetupMenuPasswordCategory ends with a link to the password
++  of the setup menu.
+ 
+ **/
+ VOID
+@@ -1406,14 +1483,19 @@ CfrCreateRuntimeComponents (
+       DEBUG ((DEBUG_INFO, "CFR: Category %u: \"%a\"\n", (UINT32)Category, CfrFormName->data));
+ 
+       //
+-      // The category form: its title and its options
++      // The category form: its title and its options, and the password of
++      // the setup menu at the end of the category that gets it
+       //
+       CfrConvertVarBinaryToStrings (CfrFormName, &FormName, NULL);
+       HiiSetString (mSetupMenuPrivate.HiiHandle, mCategoryTitle[Category], FormName, NULL);
+-      FreePool (FormName);
+ 
+       FormOpCodeHandle = CfrAllocateLabeledOpCodeHandle (LABEL_RT_COMP_START);
+       CfrProcessFormChildren (CfrFormHob, CfrFormChildrenOffset (CfrFormHob), FormOpCodeHandle);
++      if (CfrIsPasswordCategory (FormName)) {
++        CfrAddPasswordLink (FormOpCodeHandle);
++      }
++
++      FreePool (FormName);
+       Status = HiiUpdateForm (
+                  mSetupMenuPrivate.HiiHandle,
+                  &mSetupMenuFormsetGuid,
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
+index 51fe6c47c8..a8355eee5b 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuNVDataStruc.h
+@@ -26,6 +26,12 @@
+ #define SETUP_MENU_CATEGORY_FORM_ID  0x0100
+ #define SETUP_MENU_CATEGORY_MAX      8
+ 
++//
++// Question ID of the link to the password of the setup menu, at the end of
++// the category named by PcdCfrSetupMenuPasswordCategory.
++//
++#define SETUP_MENU_PASSWORD_QUESTION_ID  0x00F0
++
+ //
+ // EDKII_IFR_FRONT_PAGE_FORMS_GUID: the front page lists the categories
+ //
+diff --git a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
+index e3972a2eae..18c1f504cd 100644
+--- a/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
++++ b/UefiPayloadPkg/CfrSetupMenuDxe/SetupMenuStrings.uni
+@@ -30,6 +30,12 @@
+                             #language fr-FR  ""
+ #string STR_CFR_CATEGORY_7  #language en-US  ""
+                             #language fr-FR  ""
++#string STR_PASSWORD_TITLE  #language en-US  "Password"
++                            #language fr-FR  "Password"
++#string STR_PASSWORD_PROMPT #language en-US  "Supervisor password"
++                            #language fr-FR  "Supervisor password"
++#string STR_PASSWORD_HELP   #language en-US  "The password asked for before the setup menu opens. Enter the current password, if one is set, then the new one; a new password left empty removes it."
++                            #language fr-FR  "The password asked for before the setup menu opens. Enter the current password, if one is set, then the new one; a new password left empty removes it."
+ #string STR_BOOL_ENABLED    #language en-US  "Enabled"
+                             #language fr-FR  "Enabled"
+ #string STR_BOOL_DISABLED   #language en-US  "Disabled"
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dec b/UefiPayloadPkg/UefiPayloadPkg.dec
+index 7f9b4391e5..715e4f6254 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dec
++++ b/UefiPayloadPkg/UefiPayloadPkg.dec
+@@ -165,3 +165,8 @@ gUefiPayloadPkgTokenSpaceGuid.PcdPciAllocateMemoryAbove4GB|FALSE|BOOLEAN|0x00000
+ #  default PK/KEK/db/dbx. If FALSE (legacy MrChromebox behavior), keys are
+ #  enrolled but SecureBootEnable/SecureBoot remain disabled until toggled in setup.
+ gUefiPayloadPkgTokenSpaceGuid.PcdSecureBootDefaultEnable|FALSE|BOOLEAN|0x0000002F
++
++## Title of the category of the CFR setup menu that ends with a link to the
++#  password asked for before the setup menu opens (UserAuthenticationDxe).
++#  An empty string leaves the link out.
++gUefiPayloadPkgTokenSpaceGuid.PcdCfrSetupMenuPasswordCategory|L"Security"|VOID*|0x00000030
+-- 
+2.43.0
+

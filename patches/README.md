@@ -17,6 +17,27 @@ for upstream review (one change each, with the reasoning in the message).
 | 0030-0033 | options for the Haswell ThinkPads: cooling policy (active trip point from GNVS), battery charge threshold presets, ExpressCard and Thunderbolt ports on the W541 |
 | 0034-0035 | the setup menu in categories (General, Energy Saver, Security, Keyboard, Hardware), with the H8 options placed by the mainboard |
 
+## EDK2 and LvglPkg
+
+`edk2/` and `lvglpkg/` hold the patches to the payload: `edk2/series` on
+MrChromebox's EDK2 at the commit of the defconfigs
+(`CONFIG_EDK2_TAG_OR_REV`), `lvglpkg/series` on its `LvglPkg` submodule (the
+graphical setup UI) at the commit that EDK2 pins. `tools/build.sh prepare`
+fetches EDK2 into the coreboot tree, where the payload build expects it, and
+applies both series as changes, not commits: coreboot's EDK2 Makefile resets
+a clean tree to the pinned commit but leaves a modified one alone.
+
+| Patches | What |
+|---|---|
+| `edk2/0001-0002` | the setup menu (CFR) in categories, each its own form, listed on the front page; booleans as check boxes |
+| `edk2/0003` | a link to the supervisor password (UserAuthenticationDxe) at the end of the *Security* category |
+| `edk2/0004` | the PS/2 mouse on the SIO bus, so that Ps2MouseDxe drives the TrackPoint and the touchpad |
+| `edk2/0005` | the setup UI named *System Preferences* |
+| `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
+| `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
+| `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |
+| `lvglpkg/0006` | the cursor moved by relative pointers (PS/2 TrackPoint and touchpad) |
+
 ## Optional patches
 
 `optional/` holds patches that never go into a release. `tools/build.sh --with
@@ -38,6 +59,11 @@ git format-patch --zero-commit -o /path/to/w541-coreboot-env/patches/ <COREBOOT_
 ls /path/to/w541-coreboot-env/patches/0*.patch | xargs -n1 basename > /path/to/w541-coreboot-env/patches/series
 ```
 
-Then `tools/build.sh prepare config` checks that the series applies and that
-both configurations keep every option. `tools/ci-check.sh` checks that
-`series` and the files agree.
+The same for EDK2 (a tree at `CONFIG_EDK2_TAG_OR_REV`) and for its LvglPkg
+submodule (at the commit EDK2 pins), into `edk2/` and `lvglpkg/`, each with
+its own `series`. Leave out `MdeModulePkg/Logo/Logo.bmp`, which the payload
+build overwrites with the boot splash.
+
+Then `tools/build.sh prepare config` checks that the series apply and that
+both configurations keep every option. `tools/ci-check.sh` checks that each
+`series` and its files agree.

@@ -8,8 +8,9 @@
 #   1. shellcheck (livello warning) sugli script, riconosciuti dalla prima riga
 #   2. i workflow (actionlint, se c'e')
 #   3. blobs/, assets/ e legacy/: i file corrispondono ai loro SHA256SUMS
-#   4. patches/series: ogni patch elencata c'e', ogni patches/*.patch e'
-#      elencata, ognuna e' una mail di git format-patch
+#   4. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
+#      patch elencata c'e', ogni .patch della cartella e' elencata, ognuna e'
+#      una mail di git format-patch
 #   5. niente chiave Optimus NVIDIA nel repository (opvk.inc: solo locale)
 #   6. i due defconfig: diversi solo nella RAM init (cosi' mrc e nri
 #      differiscono solo li'), con IFD, ME e GbE (immagine completa), EDK2
@@ -73,32 +74,43 @@ for d in blobs assets legacy/coreboot-4.22; do
 	done
 done
 
-step "patches/series"
-mapfile -t listed < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' patches/series | sed '/^$/d')
-n=0
-for p in "${listed[@]}"; do
-	n=$((n + 1))
-	if [ ! -f "patches/${p}" ]; then bad "${p}: in series ma non in patches/"; continue; fi
-	head -1 "patches/${p}" | grep -q '^From [0-9a-f]\{40\} ' || bad "${p}: non e' una mail di git format-patch"
-	grep -q '^Subject: \[PATCH' "patches/${p}" || bad "${p}: senza Subject: [PATCH"
-	grep -q '^diff --git ' "patches/${p}" || bad "${p}: senza diff"
-done
-for p in patches/*.patch; do
-	printf '%s\n' "${listed[@]}" | grep -qxF "${p#patches/}" || bad "${p}: non e' in patches/series"
-done
-dups="$(printf '%s\n' "${listed[@]}" | sort | uniq -d)"
-[ -z "${dups}" ] || bad "patches/series: ripetute ${dups}"
+# Una serie: la cartella $1 (patches, patches/edk2, ...) con il suo series
+check_series() {
+	local d="$1" p n=0 dups
+	local -a listed
+	if [ ! -f "${d}/series" ]; then bad "${d}/series non c'e'"; return; fi
+	mapfile -t listed < <(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${d}/series" | sed '/^$/d')
+	for p in "${listed[@]}"; do
+		n=$((n + 1))
+		if [ ! -f "${d}/${p}" ]; then bad "${p}: in ${d}/series ma non in ${d}/"; continue; fi
+		head -1 "${d}/${p}" | grep -q '^From [0-9a-f]\{40\} ' || bad "${d}/${p}: non e' una mail di git format-patch"
+		grep -q '^Subject: \[PATCH' "${d}/${p}" || bad "${d}/${p}: senza Subject: [PATCH"
+		grep -q '^diff --git ' "${d}/${p}" || bad "${d}/${p}: senza diff"
+	done
+	for p in "${d}"/*.patch; do
+		[ -e "${p}" ] || continue
+		printf '%s\n' "${listed[@]}" | grep -qxF "${p#"${d}/"}" || bad "${p}: non e' in ${d}/series"
+	done
+	dups="$(printf '%s\n' "${listed[@]}" | sort | uniq -d)"
+	[ -z "${dups}" ] || bad "${d}/series: ripetute ${dups}"
+	ok "${d}: ${n} patch in series"
+}
+
+step "serie di patch"
+check_series patches
+check_series patches/edk2
+check_series patches/lvglpkg
 for p in patches/optional/*.patch; do
 	head -1 "${p}" | grep -q '^From [0-9a-f]\{40\} ' || bad "${p}: non e' una mail di git format-patch"
 done
-ok "${n} patch in series, $(find patches/optional -name '*.patch' | wc -l) opzionali"
+ok "$(find patches/optional -name '*.patch' | wc -l) patch opzionali"
 
 step "chiave Optimus NVIDIA"
 # opvk.inc ha la chiave che il driver NVIDIA chiede alla dGPU: si genera dal
 # firmware originale sul portatile e non si distribuisce
 k="$(files | grep -i 'opvk' | grep -v '^patches/optional/local-optimus-key\.patch$' || true)"
 if [ -n "${k}" ]; then bad "file della chiave nel repository: ${k}"; else ok "nessun opvk.inc"; fi
-if grep -q '^+++ b/.*opvk\.inc' patches/optional/*.patch patches/*.patch 2>/dev/null; then
+if grep -q '^+++ b/.*opvk\.inc' patches/optional/*.patch patches/*.patch patches/edk2/*.patch patches/lvglpkg/*.patch 2>/dev/null; then
 	bad "una patch crea opvk.inc"
 else
 	ok "nessuna patch crea opvk.inc"

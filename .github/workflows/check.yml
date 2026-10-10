@@ -1,7 +1,8 @@
 # Controlli veloci a ogni push e pull request: niente build delle ROM.
 #   scripts   tools/ci-check.sh: shellcheck, actionlint, SHA256SUMS dei blob,
 #             patches/series, chiave Optimus assente, defconfig coerenti
-#   patch     coreboot al commit pinnato + patches/series + i .config delle
+#   patch     coreboot al commit pinnato + patches/series, EDK2 al commit dei
+#             defconfig + patches/edk2 e patches/lvglpkg, e i .config delle
 #             due varianti: ogni riga dei defconfig deve restare (Kconfig la
 #             lascia cadere senza errori se mancano le dipendenze)
 name: Check
@@ -39,9 +40,9 @@ jobs:
         run: ./tools/ci-check.sh
 
   patches:
-    name: Patch e .config su coreboot pinnato
+    name: Patch e .config su coreboot ed EDK2 pinnati
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -55,6 +56,7 @@ jobs:
             echo "### coreboot $(sed -n 's/^COREBOOT_DESCRIBE="\(.*\)"/\1/p' tools/build.sh)"
             echo
             echo "$(git -C work/coreboot log --oneline "$(sed -n 's/^COREBOOT_COMMIT="\(.*\)"/\1/p' tools/build.sh)..HEAD" | wc -l) patch applicate, .config di mrc e nri completi."
+            echo "EDK2: $(grep -cv '^#' patches/edk2/series) patch su EDK2, $(grep -cv '^#' patches/lvglpkg/series) su LvglPkg."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - uses: actions/upload-artifact@v7

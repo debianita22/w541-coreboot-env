@@ -112,7 +112,7 @@ jobs:
           gcc --version | head -1
           gnatmake --version | head -1
 
-      - name: coreboot pinnato, submodule, patch e blob
+      - name: coreboot ed EDK2 pinnati, submodule, patch e blob
         run: ./tools/build.sh prepare
 
       - name: Chiave del crossgcc

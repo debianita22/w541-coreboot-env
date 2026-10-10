@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 9 Oct 2026 21:37:27 +0200
+Subject: [PATCH 1/6] LvglPkg: Add a 1.25x UI scale
+
+On a 15-inch 1920x1080 panel, 1x draws 16 px body text, which is small,
+and 1.5x leaves room for few rows. Add 1.25x (body 20 px, title 24 px)
+with fonts that lv_conf.h already enables. The new scale is stored as
+3, so the values of the existing scales do not change, and invalid
+values now fall back to LVGL_UI_SCALE_DEFAULT.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ Include/Guid/LvglUiConfig.h               | 11 ++++++++---
+ Library/LvglThemeLib/LvglThemeLib.c       |  8 ++++++++
+ Library/LvglUiConfigLib/LvglUiConfigLib.c | 11 +++++++++--
+ LvglSetupDxe/LvglSetupDxe.uni             |  1 +
+ LvglSetupDxe/LvglSetupDxeVfr.vfr          |  1 +
+ 5 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/Include/Guid/LvglUiConfig.h b/Include/Guid/LvglUiConfig.h
+index 23acf6f..edfea61 100644
+--- a/Include/Guid/LvglUiConfig.h
++++ b/Include/Guid/LvglUiConfig.h
+@@ -25,13 +25,18 @@
+ 
+ //
+ // UI scale factors. Values are stored as-is in the variable's UiScale field.
+-//   1x   : native resolution, base theme metrics (default)
+-//   1.5x : larger fonts and layout via LvglThemeLib (3/2)
+-//   2x   : larger fonts and layout via LvglThemeLib (2/1)
++//   1x    : native resolution, base theme metrics (default)
++//   1.25x : larger fonts and layout via LvglThemeLib (5/4)
++//   1.5x  : larger fonts and layout via LvglThemeLib (3/2)
++//   2x    : larger fonts and layout via LvglThemeLib (2/1)
++//
++// 1.25x was added after the others, hence its value. The platform default
++// is PcdLvglUiScaleDefault; LVGL_UI_SCALE_DEFAULT replaces invalid values.
+ //
+ #define LVGL_UI_SCALE_1X       0
+ #define LVGL_UI_SCALE_1_5X     1
+ #define LVGL_UI_SCALE_2X       2
++#define LVGL_UI_SCALE_1_25X    3
+ #define LVGL_UI_SCALE_DEFAULT  LVGL_UI_SCALE_1X
+ 
+ #pragma pack(1)
+diff --git a/Library/LvglThemeLib/LvglThemeLib.c b/Library/LvglThemeLib/LvglThemeLib.c
+index 6fa521a..31a5f66 100644
+--- a/Library/LvglThemeLib/LvglThemeLib.c
++++ b/Library/LvglThemeLib/LvglThemeLib.c
+@@ -29,6 +29,10 @@ LvglThemeInitFromUiScale (
+       mScaleNum = 3;
+       mScaleDen = 2;
+       break;
++    case LVGL_UI_SCALE_1_25X:
++      mScaleNum = 5;
++      mScaleDen = 4;
++      break;
+     default:
+       mScaleNum = 1;
+       mScaleDen = 1;
+@@ -59,6 +63,8 @@ LvglThemeFontTitle (
+ #if LV_FONT_MONTSERRAT_30
+     return &lv_font_montserrat_30;
+ #endif
++  } else if ((mScaleNum == 5) && (mScaleDen == 4)) {
++    return &lv_font_montserrat_24;
+   }
+ 
+   return &lv_font_montserrat_20;
+@@ -76,6 +82,8 @@ LvglThemeFontBody (
+ #endif
+   } else if ((mScaleNum == 3) && (mScaleDen == 2)) {
+     return &lv_font_montserrat_24;
++  } else if ((mScaleNum == 5) && (mScaleDen == 4)) {
++    return &lv_font_montserrat_20;
+   }
+ 
+   return &lv_font_montserrat_16;
+diff --git a/Library/LvglUiConfigLib/LvglUiConfigLib.c b/Library/LvglUiConfigLib/LvglUiConfigLib.c
+index 696a5c1..2db5725 100644
+--- a/Library/LvglUiConfigLib/LvglUiConfigLib.c
++++ b/Library/LvglUiConfigLib/LvglUiConfigLib.c
+@@ -21,8 +21,15 @@ LvglUiConfigSanitize (
+   IN OUT LVGL_UI_CONFIG_VARSTORE_DATA  *Config
+   )
+ {
+-  if ((Config->UiScale != LVGL_UI_SCALE_1_5X) && (Config->UiScale != LVGL_UI_SCALE_2X)) {
+-    Config->UiScale = LVGL_UI_SCALE_1X;
++  switch (Config->UiScale) {
++    case LVGL_UI_SCALE_1X:
++    case LVGL_UI_SCALE_1_25X:
++    case LVGL_UI_SCALE_1_5X:
++    case LVGL_UI_SCALE_2X:
++      break;
++    default:
++      Config->UiScale = LVGL_UI_SCALE_DEFAULT;
++      break;
+   }
+ 
+   Config->CenteredFrameEnabled = (Config->CenteredFrameEnabled != 0) ? 1 : 0;
+diff --git a/LvglSetupDxe/LvglSetupDxe.uni b/LvglSetupDxe/LvglSetupDxe.uni
+index e8da289..6695b7a 100644
+--- a/LvglSetupDxe/LvglSetupDxe.uni
++++ b/LvglSetupDxe/LvglSetupDxe.uni
+@@ -19,6 +19,7 @@
+ #string STR_UI_SCALE_HELP        #language en-US  "Scale factor for the graphical setup UI. Larger values make text and controls physically bigger on high-resolution displays. A reboot is required for a change to take effect."
+ 
+ #string STR_UI_SCALE_1X          #language en-US  "1x (native)"
++#string STR_UI_SCALE_1_25X       #language en-US  "1.25x"
+ #string STR_UI_SCALE_1_5X        #language en-US  "1.5x"
+ #string STR_UI_SCALE_2X          #language en-US  "2x"
+ 
+diff --git a/LvglSetupDxe/LvglSetupDxeVfr.vfr b/LvglSetupDxe/LvglSetupDxeVfr.vfr
+index 47683c4..8199544 100644
+--- a/LvglSetupDxe/LvglSetupDxeVfr.vfr
++++ b/LvglSetupDxe/LvglSetupDxeVfr.vfr
+@@ -36,6 +36,7 @@ formset
+       help   = STRING_TOKEN(STR_UI_SCALE_HELP),
+       flags  = NUMERIC_SIZE_1 | RESET_REQUIRED,
+       option text = STRING_TOKEN(STR_UI_SCALE_1X),   value = 0, flags = DEFAULT | MANUFACTURING;
++      option text = STRING_TOKEN(STR_UI_SCALE_1_25X), value = 3, flags = 0;
+       option text = STRING_TOKEN(STR_UI_SCALE_1_5X), value = 1, flags = 0;
+       option text = STRING_TOKEN(STR_UI_SCALE_2X),   value = 2, flags = 0;
+     endoneof;
+-- 
+2.43.0
+

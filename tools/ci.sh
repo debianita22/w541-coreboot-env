@@ -142,7 +142,7 @@ cmd_version() {
 
 # Le note della release della variante $2, dai file di $1
 cmd_notes() {
-	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cfg lay repo sha cb cbdesc edk2 npatch pre=no
+	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
 	: "${VERSION:?}"
 	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
 	sha="${GITHUB_SHA:-$(git -C "${O}" rev-parse HEAD)}"
@@ -157,6 +157,7 @@ cmd_notes() {
 	cbdesc="$(pin COREBOOT_DESCRIBE)"
 	edk2="$(sed -n 's/^CONFIG_EDK2_TAG_OR_REV="\(.*\)"$/\1/p' "${O}/configs/w541-${v}.defconfig")"
 	npatch="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "${O}/patches/series" | wc -l)"
+	nedk2="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "${O}/patches/edk2/series" "${O}/patches/lvglpkg/series" | wc -l)"
 	case "${v}" in nri) pre=yes ;; esac
 	case "${version}" in *-*) pre=yes ;; esac
 	if [ "${PRERELEASE:-false}" = true ]; then pre=yes; fi
@@ -225,13 +226,16 @@ boot loader at that path too (Debian: \`sudo grub-install --removable\`), or
 pick it once with *Boot From File* in the boot manager (Esc at power-on).
 
 The NVIDIA GPU is **off by default**, as in upstream coreboot: turn it on in
-*System Configuration* → *Platform Setup Menu* → *Graphics* (Esc at
-power-on). Suspend (S3) needs the RAM training saved at the first boot:
-test it from the second boot on.
+the setup menu (Esc at power-on), *Hardware* → *NVIDIA discrete GPU*. Suspend
+(S3) needs the RAM training saved at the first boot: test it from the second
+boot on.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload
-(MrChromebox [\`${edk2:0:12}\`](https://github.com/mrchromebox/edk2/commit/${edk2})),
+(MrChromebox [\`${edk2:0:12}\`](https://github.com/mrchromebox/edk2/commit/${edk2})
+with [${nedk2} patches](https://github.com/${repo}/blob/${sha}/patches/README.md#edk2-and-lvglpkg)
+to EDK2 and LvglPkg: the setup menu laid out like System Preferences, mouse
+support for the TrackPoint and the touchpad),
 libgfxinit for the Intel GPU, the NVIDIA Quadro K2100M VBIOS exposed to the OS
 through ACPI \`_ROM\`, CPU microcode from coreboot's intel-microcode. Built
 with the coreboot cross toolchain.

@@ -1,0 +1,2 @@
+# Le patch di EDK2 hanno righe CRLF (i file di EDK2): nessuna conversione
+patches/** -text

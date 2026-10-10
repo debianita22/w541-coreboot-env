@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sat, 10 Oct 2026 01:22:44 +0200
+Subject: [PATCH 5/5] UefiPayloadPkg: Name the graphical setup System
+ Preferences
+
+The menu bar of the LVGL setup UI shows PcdLvglAptioHeaderTitle,
+"Firmware Setup". The UI is now laid out like System Preferences, with
+an icon grid on its front page: name it so.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/UefiPayloadPkg.dsc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index ef0c49c95f..3f4de29969 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -792,7 +792,7 @@
+   # LvglDisplayEngineDxe chrome overrides.
+   #
+   gLvglPkgTokenSpaceGuid.PcdLvglHelpPaneWidthPct|25
+-  gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderTitle|"Firmware Setup"
++  gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderTitle|"System Preferences"
+   gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderVendor|""
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameEnabled|TRUE
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameHeightPct|90
+-- 
+2.43.0
+
