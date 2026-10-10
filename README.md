@@ -65,17 +65,31 @@ address on the machine stay as they are.
 Inside coreboot:
 
 - coreboot `26.09-53-g26317964960f` plus the [patch series](patches/), EDK2
-  from MrChromebox pinned to a tested commit, with the boot splash in
+  from MrChromebox pinned to a tested commit plus its own
+  [patches](patches/README.md#edk2-and-lvglpkg), with the boot splash in
   `assets/`;
 - libgfxinit for the Intel GPU (no Intel VBIOS is executed);
 - the NVIDIA K2100M VBIOS, handed to the operating system through the ACPI
   `_ROM` method of the GPU, with runtime power management (the GPU is switched
   off when idle) and its power state kept across suspend;
 - CPU microcode from coreboot's `intel-microcode`, also referenced by the FIT;
-- a setup menu (Esc at power-on, *System Configuration* → *Platform Setup
-  Menu*): NVIDIA GPU, CPU power limits, Intel ME, power-on after power
-  failure, NMI. Settings live in UEFI variables in the `SMMSTORE` flash
-  region;
+- a setup menu laid out like System Preferences (Esc at power-on): a grid
+  of icons on a dark desktop, one per category, then the boot entries; each
+  category opens a window of settings grouped on cards, with switches and
+  drop-down menus. The arrow keys, the TrackPoint and the touchpad move
+  around:
+
+  | Category | Settings |
+  |---|---|
+  | *General* | model, processor, memory and firmware versions; beeps and volume; NMI |
+  | *Energy Saver* | battery charge thresholds (OS controlled, 100%, 80%, 60%), Intel SpeedStep, Turbo Boost, C-states, CPU PL1/PL2 limits, cooling policy (active or passive), USB always on, power-on after power failure |
+  | *Security* | Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
+  | *Keyboard* | Fn/Ctrl swap, F1-F12 or special keys, sticky Fn, keyboard backlight, TrackPoint, touchpad |
+  | *Hardware* | NVIDIA GPU, graphics stolen memory (native RAM init only: `mrc.bin` reserves a fixed 32 MiB) and aperture, ExpressCard and Thunderbolt ports, Wi-Fi, Bluetooth, WWAN |
+
+  Settings live in UEFI variables in the `SMMSTORE` flash region and apply
+  at the next boot. XMP memory profiles are not supported: the memory runs
+  at its JEDEC timings;
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -84,7 +98,7 @@ Inside coreboot:
 
 > [!NOTE]
 > The NVIDIA GPU is **disabled by default**, as in upstream coreboot. Turn it
-> on in *Platform Setup Menu* → *Graphics* → *NVIDIA discrete GPU*.
+> on in the setup menu: *Hardware* → *NVIDIA discrete GPU*.
 
 ## Flashing
 
@@ -95,7 +109,7 @@ in `legacy/`), from Linux:
 sha256sum -c SHA256SUMS --ignore-missing
 sudo flashrom -p internal -r backup-$(date +%F).rom      # whole 12 MiB: keep it off the laptop
 ls -l backup-*.rom                                        # must be 12582912 bytes
-sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.1-mrc.rom
+sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.2-mrc.rom
 ```
 
 The UEFI settings and boot entries start from scratch after flashing. Before
@@ -116,9 +130,10 @@ tools/build.sh                      # both variants, into dist/
 
 `tools/build.sh` fetches coreboot at the pinned commit into `work/coreboot`,
 applies `patches/series`, copies the blobs (checked against their
-`SHA256SUMS`), builds the coreboot cross toolchain the first time (30-60
-minutes, then reused), builds each variant and runs `tools/verify-rom.sh` on
-it. Useful options:
+`SHA256SUMS`), fetches MrChromebox's EDK2 at the commit of the defconfigs and
+applies `patches/edk2` and `patches/lvglpkg`, builds the coreboot cross
+toolchain the first time (30-60 minutes, then reused), builds each variant
+and runs `tools/verify-rom.sh` on it. Useful options:
 
 ```sh
 tools/build.sh --variant mrc                  # one variant
@@ -131,7 +146,7 @@ tools/build.sh --help
 
 | Workflow | When | What |
 |---|---|---|
-| [`check.yml`](.github/workflows/check.yml) | every push and pull request | `tools/ci-check.sh` (shellcheck, actionlint, blob checksums, patch series, defconfigs); the series applied to the pinned coreboot and both configurations checked |
+| [`check.yml`](.github/workflows/check.yml) | every push and pull request | `tools/ci-check.sh` (shellcheck, actionlint, blob checksums, patch series, defconfigs); the series applied to the pinned coreboot and EDK2, and both configurations checked |
 | [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
 | [`upstream.yml`](.github/workflows/upstream.yml) | every Monday | opens an issue when the series no longer applies on coreboot `main`, a patch was merged upstream, a coreboot release is out, or MrChromebox's EDK2 branch moved |
 
@@ -151,7 +166,7 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
 | `assets/` | the EDK2 boot splash |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
-| `patches/` | the series applied to coreboot, and optional patches ([patches/README.md](patches/README.md)) |
+| `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
 | `tools/` | build, verification, CI and upstream-check scripts |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md) |

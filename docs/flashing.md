@@ -84,7 +84,7 @@ so a different offset does not matter:
 ```sh
 cbfstool backup1.rom read -r RO_VPD -f ro_vpd.bin
 tr -d '\377' < ro_vpd.bin | wc -c            # 0: empty, nothing to copy
-cp w541-coreboot-v1.0.1-mrc.rom w541-flash.rom
+cp w541-coreboot-v1.0.2-mrc.rom w541-flash.rom
 cbfstool w541-flash.rom write -r RO_VPD -f ro_vpd.bin
 ```
 
@@ -95,7 +95,7 @@ Then flash `w541-flash.rom` (its checksum no longer matches `SHA256SUMS`).
 ## Internal update
 
 ```sh
-sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.1-mrc.rom
+sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.2-mrc.rom
 ```
 
 `--ifd -i bios` writes only the BIOS region (`0x500000-0xBFFFFF`) and keeps
@@ -116,15 +116,32 @@ same way.
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
   fatal error (`H8_FLASH_LEDS_ON_DEATH`), for example a failed memory
   initialization: see [Recovery](#recovery).
-- Settings: Esc at power-on (*Boot Options/Settings*), *System
-  Configuration* → *Platform Setup Menu*:
-  - *Graphics* → *NVIDIA discrete GPU*: **off by default**; when on, the
-    driver can power the GPU down when idle;
-  - *Processor*: *CPU PL1/PL2 power limit (W)* and *CPU power limit lock*;
-  - *System*: *Intel Management Engine*, *Non-maskable Interrupts*,
-    *Restore AC Power Loss*.
+- Settings: Esc at power-on opens the setup menu, a grid of icons. Arrow
+  keys, Enter and Esc, or the TrackPoint and touchpad, move around; F10
+  saves, F9 loads the defaults of every category, not only the open one.
+  - *Hardware* → *NVIDIA discrete GPU*: **off by default**; when on, the
+    driver can power the GPU down when idle. *Hardware* also has the
+    graphics aperture and, with the native RAM init (`nri`), the graphics
+    stolen memory (DVMT), the ExpressCard and Thunderbolt ports and the
+    radios;
+  - *Energy Saver*: battery charge thresholds (*OS controlled* keeps what
+    TLP or `thinkpad_acpi` sets), SpeedStep, Turbo Boost, C-states, CPU
+    PL1/PL2 limits and lock, cooling policy, *Restore AC Power Loss*;
+  - *Security*: VT-x, VT-d, *Intel Management Engine* and the supervisor
+    password. The processor keeps the VT-x setting until it is powered
+    off, so after a change the next boot switches the laptop off and on
+    once by itself. With a password set, Esc at power-on asks for it
+    before the setup menu, boot entries included, opens; without Esc the
+    laptop boots as usual. A forgotten password goes away when the image
+    is flashed again from Linux, since that also writes the empty
+    `SMMSTORE` region: every setting and boot entry resets too;
+  - *Keyboard*: Fn/Ctrl swap, F1-F12 or special keys, TrackPoint and
+    touchpad;
+  - *General*: what the laptop is (model, processor, memory, firmware and
+    EC versions), beeps, *Non-maskable Interrupts*.
 
-  Changes apply at the next boot.
+  Changes apply at the next boot. Graphics stolen memory and aperture
+  change the memory map: do not change them between suspend and resume.
 
 ## External programmer
 
@@ -140,7 +157,7 @@ and the Lenovo hardware maintenance manual show how to reach them.
 
   ```sh
   sudo flashrom -p ch341a_spi -r chip-a.rom && sudo flashrom -p ch341a_spi -r chip-b.rom && cmp chip-a.rom chip-b.rom
-  sudo flashrom -p ch341a_spi -w w541-coreboot-v1.0.1-mrc-4mb-chip.rom      # on the 4 MiB chip
+  sudo flashrom -p ch341a_spi -w w541-coreboot-v1.0.2-mrc-4mb-chip.rom      # on the 4 MiB chip
   ```
 
   Add `-c <chip>` if flashrom lists several matching chips.
@@ -158,7 +175,7 @@ image from your own backup, which keeps your descriptor, ME and MAC:
 
 ```sh
 dd if=backup1.rom of=my-8mb-chip.rom bs=1M count=5        # your IFD, GbE, ME
-dd if=w541-coreboot-v1.0.1-mrc.rom bs=1M skip=5 count=3 >> my-8mb-chip.rom
+dd if=w541-coreboot-v1.0.2-mrc.rom bs=1M skip=5 count=3 >> my-8mb-chip.rom
 ```
 
 On the Lenovo firmware the descriptor is locked and the ME is complete:
