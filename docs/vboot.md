@@ -164,6 +164,11 @@ on a copy of the flash: RO rc1, slot A rc3, slot B rc1, *prossimo: slot
 A*; with `--image` and the rc3 capsule, all 720 blocks of slot A equal to
 the release (487 had changed from rc1, 16 of them on the 4 MiB chip).
 
+v1.3.0-rc3, installed with flashrom over rc1: the two boots after it chose
+the slot from nvdata (`vboot-work`: *CHOSE_SLOT*, no *S3_RESUME*), the
+second with *Firmware protection* back on; a suspend came back to the
+desktop with *S3_RESUME* on the same slot.
+
 ## Testing on the laptop
 
 v1.3.0-rc3 is the release to test: rc1 can keep the old slot, rc2 does
