@@ -155,16 +155,24 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    the splash with the logo.
 
    ```sh
-   sudo cbmem -1 | grep -E 'Slot [AB] is selected|BM-LOCKDOWN|nvdata'
-   #   Slot A is selected
+   sudo cbmem -1 | grep -E 'area FW_MAIN_[AB] found|BM-LOCKDOWN'
+   #   FMAP: area FW_MAIN_A found @ 5d0000 (2883520 bytes)    the slot in use
    #   BM-LOCKDOWN: Enabled bootmedia protection
-   #   and no "failed to save nvdata": vboot wrote RW_NVRAM from the bootblock
-   cat /sys/class/dmi/id/bios_version          # ouroBIOS-v1.3.0-rc1-mrc
+   cat /sys/class/dmi/id/bios_version          # CBET4000 ouroBIOS-v1.3.0-rc1-mrc
    sudo dmesg | grep 'efi: EFI v'              # ... by ouroBIOS
-   sudo python3 tools/update.py status         # mappa: vboot, versione 1.3.0
+   sudo python3 tools/update.py status         # mappa: vboot (update.py of main)
+   sudo modprobe -r spi_intel_platform spi_intel
    sudo flashrom -p internal 2>&1 | grep -E 'PR[0-4]|locked down'
-   #   a PRx line: 0x00b60000-0x00bfffff is read-only
+   #   SPI Configuration is locked down.
+   #   PR0: Warning: 0x00b60000-0x00bfffff is read-only.
+   sudo flashrom -p internal -r flash.bin && python3 tools/update.py vboot flash.bin
+   #   RW_NVRAM: 1 record (or more): vboot wrote it from the bootblock
+   #   corrente: slot A
    ```
+
+   verstage prints *Slot A is selected* in the bootblock, before the
+   memory: the 3 KiB console kept until then usually loses it, so look for
+   the slot after the memory, in *FW_MAIN_A*.
 
    In the setup: *Security* → *Flash protection* → *Firmware protection*
    on; *Firmware Update* shows 1.3.0.
@@ -178,7 +186,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    ```sh
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
    sudo systemctl reboot
-   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot B is selected
+   sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_B
    ```
 
    Reboot three more times: always slot B. A new slot gets two tries; if
@@ -203,7 +211,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    sudo systemctl reboot                             # still slot B
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
    sudo systemctl reboot
-   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot A is selected
+   sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_A
    ```
 6. **Fallback** (programmer at hand): spoil the slot that runs, A, and
    reboot: vboot must find it broken, write that to `RW_NVRAM` and boot B.
@@ -213,7 +221,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    dd if=/dev/zero of=bad.rom bs=64K seek=$((0x5D0000 / 0x10000)) count=1 conv=notrunc
    sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
    sudo systemctl reboot
-   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot B is selected
+   sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_B
    sudo flashrom -p internal -r flash.bin && python3 tools/update.py vboot flash.bin
    #   precedente: slot A, fallito
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap

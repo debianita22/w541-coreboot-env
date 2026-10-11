@@ -37,8 +37,9 @@ circuit with an infinity inside, 16 x 16 pixels so that it reads in the
 firmware too: it is the boot splash and the badge of the setup's menu bar,
 and `tools/logo.py` turns it into the LVGL image, the splash and PNGs. The
 firmware reports itself as `ouroBIOS-vX.Y.Z-<variant>` (coreboot's
-`CONFIG_LOCALVERSION`, in SMBIOS and in the *About* card of the setup) and
-as *ouroBIOS* to the UEFI system table.
+`CONFIG_LOCALVERSION`: in the *About* card of the setup, and in SMBIOS as
+`CBET4000 ouroBIOS-vX.Y.Z-<variant>`, the prefix that Linux's
+`thinkpad_acpi` looks for) and as *ouroBIOS* to the UEFI system table.
 
 > [!WARNING]
 > Flashing firmware can leave the laptop unable to boot. Keep a backup of the
@@ -168,6 +169,7 @@ in `legacy/`), from Linux:
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
+sudo modprobe -r spi_intel_platform spi_intel             # flashrom must not go through /dev/mtd0
 sudo flashrom -p internal -r backup-$(date +%F).rom      # whole 12 MiB: keep it off the laptop
 ls -l backup-*.rom                                        # must be 12582912 bytes
 sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.3.0-mrc.rom

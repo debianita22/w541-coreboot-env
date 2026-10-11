@@ -46,9 +46,10 @@ switching variant, and for an update of the read-only part.
 - `flashrom` (`sudo apt install flashrom`). With two chips it switches to
   hardware sequencing by itself and reads and writes all 12 MiB.
 - Recent kernels drive the SPI controller themselves (`spi-intel`), and
-  flashrom 1.4 and later then go through `/dev/mtd0`: it reports "Opened
-  /dev/mtd0" and an "Opaque flash chip" of 8192 kB, sees one chip only and
-  has no descriptor regions, so `--ifd -i bios` cannot work. Release the
+  flashrom 1.3 and later then go through `/dev/mtd0` (`-p internal` tries it
+  first): it reports "Opened /dev/mtd0" and an "Opaque flash chip" of
+  8192 kB, sees one chip only and has no descriptor regions, so a backup has
+  8 MiB and `--ifd -i bios` or `--fmap-file` cannot work. Release the
   controller first, until the next reboot:
 
   ```sh
@@ -59,8 +60,9 @@ switching variant, and for an update of the read-only part.
   echo intel-spi | sudo tee /sys/bus/platform/drivers/intel-spi/unbind
   ```
 
-  flashrom must then print `Found chipset "Intel Lynx Point"` and no
-  `/dev/mtd0`. If it refuses the laptop, add `:laptop=force_I_want_a_brick`
+  flashrom must then print `Found chipset "Intel QM87"`, `Enabling hardware
+  sequencing due to multiple flash chips detected.` and an "Opaque flash
+  chip" of 12288 kB, and no `/dev/mtd0`. If it refuses the laptop, add `:laptop=force_I_want_a_brick`
   to `-p internal` (the W541 EC has its own flash, not the SPI chips).
 - Back up the whole flash, twice, and keep the copies off the laptop:
 
@@ -71,12 +73,14 @@ switching variant, and for an update of the read-only part.
   ls -l backup1.rom                            # 12582912 bytes
   ```
 
-  A backup of 8388608 bytes covers only the first chip: flashrom used
-  software sequencing. Read again with
-  `sudo flashrom -p internal:ich_spi_mode=hwseq -r backup1.rom`, and use the
-  same `-p` for every command below.
+  A backup of 8388608 bytes covers only the first chip: flashrom went
+  through `/dev/mtd0`, release the controller as above and read again. Only
+  a flashrom that stays on software sequencing needs
+  `-p internal:ich_spi_mode=hwseq`, then on every command below.
 - If flashrom cannot map the flash (`/dev/mem` errors), boot once with
-  `iomem=relaxed` on the kernel command line.
+  `iomem=relaxed` on the kernel command line. With Secure Boot on, Linux
+  locks `/dev/mem` and the I/O ports down and `-p internal` cannot work at
+  all: turn Secure Boot off for the flash, or boot a live system without it.
 - Check the download: `sha256sum -c SHA256SUMS --ignore-missing`.
 
 ## Boot loader fallback path
@@ -195,13 +199,27 @@ From v1.0.0-v1.0.2, or from other firmware, see
 [Internal update](#internal-update). flashrom must know `--fmap-file`
 (1.2 or later: `flashrom --help | grep fmap-file`).
 
+Check what runs: `cat /sys/class/dmi/id/bios_version` shows `CBET4000
+w541-v1.0.3-mrc` or later (or `-nri`). Then, in a subshell that stops at the
+first error:
+
 ```sh
-sha256sum -c SHA256SUMS --ignore-missing
-sudo flashrom -p internal -r backup-$(date +%F).rom        # whole 12 MiB, keep it off the laptop
-sudo flashrom -p internal --fmap-file w541-coreboot-v1.3.0-mrc.rom \
-  -i RW_MRC_CACHE -i RW_UNUSED -i RW_NVRAM -i RECOVERY_MRC_CACHE \
-  -i RW_SECTION_A -i RW_SECTION_B -i WP_RO -w w541-coreboot-v1.3.0-mrc.rom
+( set -e
+  R=w541-coreboot-v1.3.0-mrc.rom
+  sha256sum -c SHA256SUMS --ignore-missing
+  sudo modprobe -r spi_intel_platform spi_intel || true   # flashrom must not go through /dev/mtd0
+  sudo flashrom -p internal -r backup.rom                 # keep it off the laptop
+  test "$(stat -c %s backup.rom)" -eq 12582912            # 12 MiB, both chips
+  sudo flashrom -p internal --fmap-file $R \
+    -i RW_MRC_CACHE -i RW_UNUSED -i RW_NVRAM -i RECOVERY_MRC_CACHE \
+    -i RW_SECTION_A -i RW_SECTION_B -i WP_RO -w $R
+)
 ```
+
+If the kernel has `spi-intel` built in, `modprobe -r` does nothing and the
+backup comes out at 8 MiB: the `test` stops there, unbind the device as in
+[Before you start](#before-you-start). flashrom checks after writing the
+whole chip, the regions it kept included, against what it read before.
 
 `--fmap-file` takes the map of the new image; flashrom must end with
 `VERIFIED`, and if it does not, write again straight away. The first boot

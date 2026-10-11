@@ -237,7 +237,8 @@ log stay. *BIOS Lock* must be off; flashrom 1.2 or later
 
 \`\`\`sh
 sha256sum -c SHA256SUMS --ignore-missing
-sudo flashrom -p internal -r backup-\$(date +%F).rom        # whole 12 MiB, keep it off the laptop
+sudo modprobe -r spi_intel_platform spi_intel               # flashrom must not go through /dev/mtd0
+sudo flashrom -p internal -r backup-\$(date +%F).rom        # 12582912 bytes, keep it off the laptop
 sudo flashrom -p internal --fmap-file ${rom} \\
   -i RW_MRC_CACHE -i RW_UNUSED -i RW_NVRAM -i RECOVERY_MRC_CACHE \\
   -i RW_SECTION_A -i RW_SECTION_B -i WP_RO -w ${rom}
@@ -252,8 +253,9 @@ From v1.3.0 on the laptop, turn off *Firmware protection* (setup menu,
 
 \`\`\`sh
 sha256sum -c SHA256SUMS --ignore-missing
+sudo modprobe -r spi_intel_platform spi_intel               # flashrom must not go through /dev/mtd0
 sudo flashrom -p internal -r backup-\$(date +%F).rom        # whole 12 MiB, keep it off the laptop
-ls -l backup-*.rom                                        # 12582912 bytes (8388608: add -p internal:ich_spi_mode=hwseq)
+ls -l backup-*.rom                                        # 12582912 bytes (8388608: it went through /dev/mtd0)
 sudo flashrom -p internal --ifd -i bios -w ${rom}
 \`\`\`
 
