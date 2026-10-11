@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:34:27 +0200
+Subject: [PATCH] security/vboot: Add an option to leave the TPM to ramstage
+ with mocked secdata
+
+With VBOOT_MOCK_SECDATA, vboot keeps no secdata in the TPM, yet
+verstage still starts the TPM, extends three PCRs with the boot mode,
+the HWID and the firmware version, and requests recovery if any of it
+fails. On a board that boots without a recovery path, a TPM that does
+not answer then stops the boot; and the PCRs differ from those of the
+same firmware without vboot, which breaks what the OS sealed to them.
+
+Add VBOOT_MOCK_SECDATA_NO_TPM: verstage neither starts the TPM nor
+extends PCRs, and TPM_INIT_RAMSTAGE starts it in ramstage, as without
+vboot.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/tpm/Kconfig          |  3 ++-
+ src/security/vboot/Kconfig       | 12 ++++++++++++
+ src/security/vboot/vboot_logic.c |  9 ++++++++-
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/src/drivers/tpm/Kconfig b/src/drivers/tpm/Kconfig
+index 1bcc79c8e..967fcc9d0 100644
+--- a/src/drivers/tpm/Kconfig
++++ b/src/drivers/tpm/Kconfig
+@@ -3,7 +3,8 @@
+ config TPM_INIT_RAMSTAGE
+ 	bool
+ 	default y if TPM
+-	depends on !VBOOT && !VENDORCODE_ELTAN_VBOOT && !VENDORCODE_ELTAN_MBOOT \
++	depends on !VBOOT || VBOOT_MOCK_SECDATA_NO_TPM
++	depends on !VENDORCODE_ELTAN_VBOOT && !VENDORCODE_ELTAN_MBOOT \
+ 		&& !TPM_MEASURED_BOOT_INIT_BOOTBLOCK
+ 	help
+ 	  This driver automatically initializes the TPM if vboot is not used.
+diff --git a/src/security/vboot/Kconfig b/src/security/vboot/Kconfig
+index f09a22b1e..a28eb5b4e 100644
+--- a/src/security/vboot/Kconfig
++++ b/src/security/vboot/Kconfig
+@@ -115,6 +115,18 @@ config VBOOT_MOCK_SECDATA
+ 	  can be used during development when a TPM is not present or broken.
+ 	  THIS SHOULD NOT BE LEFT ON FOR PRODUCTION DEVICES.
+ 
++config VBOOT_MOCK_SECDATA_NO_TPM
++	bool "Leave the TPM to ramstage with mocked secdata"
++	depends on VBOOT_MOCK_SECDATA && TPM
++	default n
++	help
++	  With mocked secdata vboot needs no TPM, but verstage still starts it
++	  and extends PCRs with the boot mode, the HWID and the firmware
++	  version, and asks for recovery if the TPM fails. Select this to keep
++	  vboot away from the TPM: ramstage starts it as without vboot
++	  (TPM_INIT_RAMSTAGE), and the measurements of the TPM stay those of the
++	  rest of the firmware.
++
+ config VBOOT_DISABLE_DEV_ON_RECOVERY
+ 	bool
+ 	default n
+diff --git a/src/security/vboot/vboot_logic.c b/src/security/vboot/vboot_logic.c
+index a540e96e4..01d43a08c 100644
+--- a/src/security/vboot/vboot_logic.c
++++ b/src/security/vboot/vboot_logic.c
+@@ -187,6 +187,10 @@ static vb2_error_t hash_body(struct vb2_context *ctx,
+ static tpm_result_t extend_pcrs(struct vb2_context *ctx)
+ {
+ 	tpm_result_t rc;
++
++	if (CONFIG(VBOOT_MOCK_SECDATA_NO_TPM))
++		return TPM_SUCCESS;
++
+ 	rc = vboot_extend_pcr(ctx, CONFIG_PCR_BOOT_MODE, BOOT_MODE_PCR);
+ 	if (rc)
+ 		return rc;
+@@ -275,7 +279,10 @@ void verstage_main(void)
+ 	 * check the return value here because vb2api_fw_phase1 will catch
+ 	 * invalid secdata and tell us what to do (=reboot). */
+ 	timestamp_add_now(TS_TPMINIT_START);
+-	tpm_rc = vboot_setup_tpm(ctx);
++	if (CONFIG(VBOOT_MOCK_SECDATA_NO_TPM))
++		tpm_rc = TPM_SUCCESS;	/* ramstage starts the TPM */
++	else
++		tpm_rc = vboot_setup_tpm(ctx);
+ 	if (tpm_rc == TPM_SUCCESS) {
+ 		antirollback_read_space_firmware(ctx);
+ 		antirollback_read_space_kernel(ctx);
+-- 
+2.43.0
+

@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:01:18 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add an option to keep the RO region
+ minimal with vboot
+
+With vboot, every CBFS file goes to the RO region and to both RW slots,
+except for the few the RO region alone needs. The 7 MiB BIOS region of
+the W541 cannot hold three copies of a 2 MiB payload, so two RW slots
+leave no room for a recovery path in RO anyway.
+
+Add LENOVO_HASWELL_VBOOT_MINIMAL_RO: with verstage in the bootblock,
+romstage, postcar, ramstage, the DSDT, the VBT and the payload go to the
+RW slots only. The RO region keeps the bootblock with verstage, mrc.bin
+(at its fixed address) and the microcode, which is enough to verify and
+start a slot; if neither slot verifies, the boot stops.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/Kconfig | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index 991a90c3f..b65cd7853 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -51,6 +51,23 @@ config VBOOT
+ config VBOOT_SLOTS_RW_AB
+ 	default y
+ 
++config LENOVO_HASWELL_VBOOT_MINIMAL_RO
++	bool "Keep the stages after verstage and the payload out of the RO region"
++	depends on VBOOT && VBOOT_STARTS_IN_BOOTBLOCK && VBOOT_SLOTS_RW_AB
++	help
++	  With verstage in the bootblock, the RO region only needs the
++	  bootblock, mrc.bin and the microcode to boot from an RW slot. Keep
++	  romstage, postcar, ramstage, the DSDT, the VBT and the payload in the
++	  RW slots only, so that two slots with a large payload fit in the
++	  flash.
++
++	  There is then no recovery path: if neither slot verifies, the boot
++	  stops after verstage, and the flash has to be written with an
++	  external programmer.
++
++config RW_REGION_ONLY
++	default "fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml fallback/payload vbt.bin" if LENOVO_HASWELL_VBOOT_MINIMAL_RO
++
+ config VARIANT_DIR
+ 	default "t440p" if BOARD_LENOVO_THINKPAD_T440P
+ 	default "w541" if BOARD_LENOVO_THINKPAD_W541
+-- 
+2.43.0
+

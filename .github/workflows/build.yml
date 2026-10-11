@@ -19,6 +19,13 @@
 # che arriva solo al passo ROM. Senza, una release vX.Y.Z si ferma; le build di
 # prova escono senza capsula.
 #
+# Gli slot RW di vboot (docs/vboot.md) si firmano con il secret
+# VBOOT_SIGNING_KEY: la chiave dati privata (firmware_data_key.vbprivk in
+# base64 su una riga) di keys/vboot/firmware_data_key.vbpubk, anche lei solo
+# al passo ROM. Senza, una release si ferma; le build di prova firmano con le
+# chiavi di test di vboot (e le capsule delle release non si installano su
+# quelle ROM).
+#
 # Quale release e' cosa (tools/ci.sh):
 #   - mrc: RAM init con mrc.bin, come la 4.22. "latest" se non e' una
 #     pre-release ed e' la versione piu' alta.
@@ -148,6 +155,7 @@ jobs:
       - name: ROM
         env:
           CAPSULE_SIGNING_KEY: ${{ secrets.CAPSULE_SIGNING_KEY }}
+          VBOOT_SIGNING_KEY: ${{ secrets.VBOOT_SIGNING_KEY }}
         run: ./tools/build.sh --release --version "${VERSION}" roms
 
       - name: Riepilogo

@@ -96,9 +96,10 @@ def metainfo(variant, guid, version, date, url):
   <description>
     <p>
       w541-coreboot-env system firmware, {variant} variant (memory
-      initialisation: {descen}). The update rewrites the coreboot region of
-      the 4 MiB flash chip and clears the memory training cache; UEFI
-      settings, VPD and the event log are kept.
+      initialisation: {descen}), verified by vboot. The update writes the RW
+      slot that is not running, and the firmware tries it on the next boot:
+      if the write is cut short or the new slot fails, the old one boots.
+      The read-only region, UEFI settings, VPD and the event log are kept.
     </p>
   </description>
   <provides>

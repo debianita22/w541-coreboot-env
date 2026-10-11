@@ -4,9 +4,31 @@
 CONFIG_VENDOR_LENOVO=y
 CONFIG_BOARD_LENOVO_THINKPAD_W541=y
 # Mappa del flash: configs/w541.fmd (le regioni scritte a ogni avvio nel
-# chip da 8 MiB, coreboot da solo nel chip da 4 MiB: CBFS di 0x3ff000).
-# Con un FMDFILE Kconfig non chiede CBFS_SIZE.
+# chip da 8 MiB, i due slot RW di vboot, la regione RO in cima al chip da
+# 4 MiB). Con un FMDFILE Kconfig non chiede CBFS_SIZE.
 CONFIG_FMDFILE="w541/w541.fmd"
+
+# vboot (docs/vboot.md, patch 0053-0057): la regione RO (bootblock con
+# verstage, mrc.bin, microcode) verifica la firma di uno dei due slot RW
+# (romstage, ramstage, payload) e lo avvia; se non si verifica, o non arriva
+# al payload per due avvii dopo un aggiornamento, avvia l'altro. Nessun
+# recovery: nella RO non c'e' spazio per un payload.
+CONFIG_VBOOT=y
+CONFIG_VBOOT_SLOTS_RW_AB=y
+CONFIG_LENOVO_HASWELL_VBOOT_MINIMAL_RO=y
+# Niente dati di vboot nel TPM (anti-rollback degli slot): il TPM lo avvia
+# ramstage come senza vboot, con le stesse misure nei PCR
+CONFIG_VBOOT_MOCK_SECDATA=y
+CONFIG_VBOOT_MOCK_SECDATA_NO_TPM=y
+# Le chiavi del progetto, da keys/vboot (tools/build.sh le copia in
+# w541/vboot/). La chiave privata degli slot arriva solo dal secret
+# VBOOT_SIGNING_KEY; senza, tools/build.sh usa le chiavi di prova di vboot
+# (build di prova, non release).
+CONFIG_VBOOT_ROOT_KEY="w541/vboot/root_key.vbpubk"
+CONFIG_VBOOT_RECOVERY_KEY="w541/vboot/recovery_key.vbpubk"
+CONFIG_VBOOT_KERNEL_KEY="w541/vboot/kernel_subkey.vbpubk"
+CONFIG_VBOOT_KEYBLOCK="w541/vboot/firmware.keyblock"
+CONFIG_VBOOT_FIRMWARE_PRIVKEY="w541/vboot/firmware_data_key.vbprivk"
 
 # IFD, GbE e ME trattati come nella 4.22: regioni sbloccate, ME leggibile
 # dalla CPU, me_cleaner -S (della ME restano solo ROMP e BUP, piu' il bit
@@ -70,19 +92,28 @@ CONFIG_SMBIOS_SYSTEM_DATA_FROM_VPD=y
 # eventi, patch 0044, e gli aggiornamenti con capsula), flashrom dall'OS
 # puo' solo leggere.
 CONFIG_BOOTMEDIA_SMM_BWP_RUNTIME_OPTION=y
+# Firmware protection, nello stesso menu e accesa di default: la regione RO
+# (WP_RO, con la chiave root di vboot) protetta in scrittura dai Protected
+# Range Register del controller SPI, bloccati fino al reset (FLOCKDN). Si
+# spegne solo per riscrivere la RO con flashrom (patch 0055-0056).
+CONFIG_BOOTMEDIA_LOCK_CONTROLLER=y
+CONFIG_BOOTMEDIA_LOCK_WPRO_VBOOT_RO=y
+CONFIG_BOOTMEDIA_LOCK_RUNTIME_OPTION=y
 
 # Aggiornamento con capsula UEFI (docs/update.md): ESRT con la versione della
 # release (DRIVERS_EFI_MAIN_FW_VERSION, la mette tools/build.sh), capsule su
-# disco (\EFI\UpdateCapsule dell'ESP) applicate dal payload nello stesso
-# avvio, solo se firmate dalla chiave di keys/capsule-signing.pem (patch
-# 0048-0052, edk2 0008-0013). La capsula riscrive RW_MRC_CACHE e COREBOOT:
-# variabili UEFI, VPD e registro degli eventi restano. Il GUID e' della
-# variante: una capsula nri non si applica sulla mrc, e viceversa. Con
-# un'altra mappa del flash le capsule si rifiutano (edk2 0008): GUID nuovi.
-# Mai capsule piu' vecchie della v1.2.0, la prima che le applica (LSV).
+# disco (\EFI\UpdateCapsule dell'ESP o di una chiavetta USB) applicate dal
+# payload nello stesso avvio, solo se firmate dalla chiave di
+# keys/capsule-signing.pem (patch 0048-0052, 0054, edk2 0008-0016). La
+# capsula porta i due slot RW e il payload scrive solo quello che non gira,
+# poi chiede a vboot di provarlo: la regione RO, le variabili UEFI, la VPD e
+# il registro degli eventi restano. Il GUID e' della variante e della mappa
+# del flash con vboot (v1.3.0): una capsula nri non si applica sulla mrc, ne'
+# una di questa mappa su un firmware fino alla v1.2.x, e viceversa. Mai
+# capsule piu' vecchie della v1.3.0 (LSV).
 CONFIG_DRIVERS_EFI_FW_INFO=y
-CONFIG_DRIVERS_EFI_MAIN_FW_GUID="d945239f-4a5a-4089-8597-6bd72edd1a1f"
-CONFIG_DRIVERS_EFI_MAIN_FW_LSV=0x01020000
+CONFIG_DRIVERS_EFI_MAIN_FW_GUID="ef384a6d-1e1d-4344-abf9-b26f39d9e80a"
+CONFIG_DRIVERS_EFI_MAIN_FW_LSV=0x01030000
 CONFIG_DRIVERS_EFI_UPDATE_CAPSULES=y
 CONFIG_DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT=y
 # relativo all'albero di EDK2 (payloads/external/edk2/workspace/mrchromebox)

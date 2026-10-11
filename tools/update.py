@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # update.py - aggiorna il firmware del W541 da Linux con una capsula UEFI
-# (docs/update.md). Dalla v1.2.0 ogni release ha, per variante, una capsula
-# firmata (w541-coreboot-vX.Y.Z-mrc.cap): la si copia in \EFI\UpdateCapsule
+# (docs/update.md). Ogni release ha, per variante, una capsula firmata
+# (w541-coreboot-vX.Y.Z-mrc.cap): la si copia in \EFI\UpdateCapsule
 # dell'ESP, si accende il bit "capsule su disco" di OsIndications e al
-# riavvio il firmware la verifica e la scrive (RW_MRC_CACHE e COREBOOT), anche
-# con il BIOS Lock acceso. Variabili UEFI, VPD e registro degli eventi
-# restano.
+# riavvio il firmware la verifica e la scrive, anche con il BIOS Lock acceso.
+# Dalla v1.3.0 (vboot, docs/vboot.md) scrive solo lo slot RW che non gira e
+# poi lo prova; la regione RO, le variabili UEFI, la VPD e il registro degli
+# eventi restano.
 #
 #   sudo python3 tools/update.py status
 #   sudo python3 tools/update.py stage --latest        # ultima release della variante che gira
@@ -16,8 +17,10 @@
 # Al posto della .cap va bene anche il pacchetto fwupd della release (.cab,
 # tools/fwupd-cab.py): se ne usa la capsula che contiene.
 #
-# Il firmware che gira deve essere una release dalla v1.2.0 in su: la prima
-# volta si scrive con flashrom (docs/flashing.md). Il firmware applica solo
+# Il firmware che gira deve avere la stessa mappa del flash della capsula: le
+# capsule della v1.3.0 in su (con vboot) si installano su un firmware dalla
+# v1.3.0, quelle della v1.2.x su un firmware v1.2.x; da v1.2.x a v1.3.0 si
+# passa una volta con flashrom (docs/flashing.md). Il firmware applica solo
 # capsule della sua variante (mrc o nri, un GUID ciascuna nell'ESRT), firmate
 # dalla chiave di keys/capsule-signing.pem e non piu' vecchie della versione
 # minima (LSV); qui si controlla prima, per non riavviare per niente.
@@ -42,13 +45,23 @@ import xml.etree.ElementTree as ET
 
 REPO = "debianita22/w541-coreboot-env"
 
-# Il GUID dell'ESRT (DRIVERS_EFI_MAIN_FW_GUID nei defconfig) di ogni variante
+# Il GUID dell'ESRT (DRIVERS_EFI_MAIN_FW_GUID nei defconfig) di ogni variante,
+# con la mappa del flash di vboot (dalla v1.3.0)
 VARIANTS = {
+    "mrc": uuid.UUID("1a1d806e-1dec-436f-a428-17e010b08c58"),
+    "nri": uuid.UUID("ef384a6d-1e1d-4344-abf9-b26f39d9e80a"),
+}
+# e quelli della mappa senza vboot (v1.2.x), per riconoscere un firmware o una
+# capsula di prima
+LEGACY_VARIANTS = {
     "mrc": uuid.UUID("b774aa46-be0e-4ec1-bb1b-b7c0bf2722aa"),
     "nri": uuid.UUID("d945239f-4a5a-4089-8597-6bd72edd1a1f"),
 }
-# Le regioni che scrive una capsula (CAPSULE_REGIONS di tools/build.sh)
-REGIONS = ["RW_MRC_CACHE", "COREBOOT"]
+# Le regioni che scrive una capsula (CAPSULE_REGIONS di tools/build.sh): il
+# firmware scrive il training della RAM e lo slot che non gira
+REGIONS = ["RW_MRC_CACHE", "RW_SECTION_A", "RW_SECTION_B"]
+LEGACY_REGIONS = ["RW_MRC_CACHE", "COREBOOT"]
+MIGRATION = "docs/flashing.md, \"Da v1.2.x a v1.3.0\""
 ROM_SIZE = 12 * 1024 * 1024
 
 FMP_CAPSULE_GUID = uuid.UUID("6dcbd5ed-e82d-4c44-bda1-7194199ad92a")
@@ -116,6 +129,13 @@ def attempt_str(status):
 
 def variant_of(guid):
     for name, g in VARIANTS.items():
+        if g == guid:
+            return name
+    return None
+
+
+def legacy_variant_of(guid):
+    for name, g in LEGACY_VARIANTS.items():
         if g == guid:
             return name
     return None
@@ -388,15 +408,25 @@ def load_capsule(path):
         raise Error("%s: %s" % (path, e))
 
 
-def check_capsule(cap, variant=None):
-    """Quello che il firmware controllerebbe a parte la firma."""
-    if cap["variant"] is None:
+def check_capsule(cap, fw=None):
+    """Quello che il firmware fw (esrt_entry(), o nessuno: solo la capsula)
+    controllerebbe a parte la firma."""
+    legacy = legacy_variant_of(cap["type_id"])
+    variant = cap["variant"] or legacy
+    if variant is None:
         raise Error("capsula per un firmware sconosciuto (%s)" % cap["type_id"])
-    if variant and cap["variant"] != variant:
+    if fw and fw["legacy"] and not legacy:
+        raise Error("qui gira la %s, senza vboot: la v1.3.0 cambia la mappa del flash e si installa una "
+                    "volta con flashrom (%s), poi con le capsule" % (version_str(fw["version"]), MIGRATION))
+    if fw and not fw["legacy"] and legacy:
+        raise Error("capsula della v1.2.x (mappa del flash senza vboot): da un firmware v1.3.0 in su "
+                    "si torna alla v1.2.x solo con flashrom")
+    if fw and variant != fw["variant"]:
         raise Error("capsula della variante %s, qui gira la %s: per cambiare variante si usa "
-                    "flashrom (docs/flashing.md)" % (cap["variant"], variant))
-    if cap["regions"] != REGIONS:
-        raise Error("la capsula scrive %s, attese %s" % (cap["regions"] or "tutto il flash", REGIONS))
+                    "flashrom (docs/flashing.md)" % (variant, fw["variant"]))
+    want = LEGACY_REGIONS if legacy else REGIONS
+    if cap["regions"] != want:
+        raise Error("la capsula scrive %s, attese %s" % (cap["regions"] or "tutto il flash", want))
     if len(cap["image"]) != ROM_SIZE:
         raise Error("immagine di %d byte, attesi %d" % (len(cap["image"]), ROM_SIZE))
 
@@ -422,11 +452,13 @@ def esrt_entry():
         except (TypeError, ValueError):
             continue
         name = variant_of(guid)
-        if name is None:
+        legacy = legacy_variant_of(guid)
+        if name is None and legacy is None:
             continue
         num = lambda f: int(read_text(os.path.join(d, f)) or "0", 0)
         return {
-            "variant": name,
+            "variant": name or legacy,
+            "legacy": name is None,
             "guid": guid,
             "version": num("fw_version"),
             "lsv": num("lowest_supported_fw_version"),
@@ -636,7 +668,9 @@ def print_capsule(path, cap):
         print("pacchetto: %s (fwupd, %s)" % (path, cap["cab"]["meta"]["id"]))
         print("           %s" % " ".join(sorted(cap["cab"]["files"])))
     print("capsula:   %s" % (path if "cab" not in cap else "firmware.bin"))
-    print("firmware:  W541 coreboot, variante %s (%s)" % (cap["variant"] or "?", cap["type_id"]))
+    legacy = legacy_variant_of(cap["type_id"])
+    print("firmware:  W541 coreboot, variante %s%s (%s)" % (cap["variant"] or legacy or "?",
+                                                         ", v1.2.x senza vboot" if legacy else "", cap["type_id"]))
     print("versione:  %s, minima %s" % (version_str(cap["version"]), version_str(cap["lsv"])))
     print("regioni:   %s" % (" ".join(cap["regions"]) or "tutto il flash"))
     signer = signer_of(cap)
@@ -686,6 +720,10 @@ def cmd_status(args):
         print("firmware:  %s, senza aggiornamento con capsula (prima della v1.2.0?)" % (bios or "?"))
         return 0
     print("firmware:  W541 coreboot, variante %s (BIOS %s)" % (fw["variant"], bios or "?"))
+    if fw["legacy"]:
+        print("mappa:     senza vboot (v1.2.x): la v1.3.0 si installa una volta con flashrom (%s)" % MIGRATION)
+    else:
+        print("mappa:     vboot, due slot RW (una capsula scrive quello che non gira)")
     print("versione:  %s, minima per una capsula %s" % (version_str(fw["version"]), version_str(fw["lsv"])))
     if fw["last_version"]:
         print("ultimo:    %s, %s" % (version_str(fw["last_version"]), attempt_str(fw["last_status"])))
@@ -705,7 +743,7 @@ def cmd_status(args):
     for f in files:
         try:
             _, cap = load_capsule(f)
-            what = "%s %s" % (cap["variant"], version_str(cap["version"]))
+            what = "%s %s" % (cap["variant"] or legacy_variant_of(cap["type_id"]), version_str(cap["version"]))
         except (Error, OSError) as e:
             what = str(e)
         print("in attesa: %s (%s)" % (f, what))
@@ -729,7 +767,7 @@ def cmd_stage(args):
             path = download_latest(fw["variant"], args.pre, tmp)
         data, cap = load_capsule(path)
         print_capsule(path, cap)
-        check_capsule(cap, fw["variant"])
+        check_capsule(cap, fw)
         cert = args.cert or default_cert()
         if cert and shutil.which("openssl"):
             verify_signature(cap, cert)

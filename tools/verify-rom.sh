@@ -22,24 +22,29 @@
 # Controlli:
 #   1. 12 MiB; i primi 5 MiB (IFD, GbE, ME) identici a quelli di --reference:
 #      IFD a 0x0 (firma 0x0FF0A55A a 0x10), GbE a 0x1000 (uguale a
-#      blobs/gbe.bin), ME da 0x3000; 0x500000-0x7FFFFF tutto 0xFF (le regioni
-#      scrivibili vuote: niente variabili UEFI, seriale o training della RAM
-#      di un'altra macchina)
-#   2. FMAP come configs/w541.fmd: SI_BIOS 0x500000-0xBFFFFF; RW_MRC_CACHE,
-#      SMMSTORE, RO_VPD e RW_ELOG nel chip da 8 MiB (sotto 0x800000); FMAP e COREBOOT
-#      nel chip da 4 MiB (da 0x800000), cosi' l'immagine di quel chip e' un
-#      coreboot completo
-#   3. CBFS: i file di ogni build; mrc.bin solo nella mrc, uguale a
-#      blobs/mrc.bin e a 0xFFFA0000, dove lo chiama la romstage;
-#      pci10de,11fc.rom uguale al VBIOS NVIDIA di blobs/; la chiave Optimus
-#      di blobs/opvk.inc nel DSDT
+#      blobs/gbe.bin), ME da 0x3000
+#   2. FMAP come configs/w541.fmd: SI_BIOS 0x500000-0xBFFFFF; le regioni
+#      scritte a ogni avvio (RW_MRC_CACHE, SMMSTORE, RO_VPD, RW_ELOG,
+#      RW_NVRAM, RECOVERY_MRC_CACHE) nel chip da 8 MiB e vuote (niente
+#      variabili UEFI, seriale o training della RAM di un'altra macchina);
+#      RW_NVRAM in blocchi da 64 KiB tutti suoi; RW_SECTION_B e WP_RO nel chip
+#      da 4 MiB, WP_RO in cima e allineata a 4 KiB (Protected Range Register)
+#   3. CBFS: nella regione RO (COREBOOT) bootblock, microcode, FIT e, nella
+#      mrc, mrc.bin uguale a blobs/mrc.bin e a 0xFFFA0000, dove lo chiama la
+#      romstage, e niente stage dopo verstage ne' payload; in ognuno dei due
+#      slot RW (FW_MAIN_A, FW_MAIN_B) gli stage, il payload, il DSDT con la
+#      chiave Optimus di blobs/opvk.inc, pci10de,11fc.rom uguale al VBIOS
+#      NVIDIA di blobs/, e gli stessi file nei due slot
+#   4b. vboot: la chiave root nel GBB; con --release quella di
+#      keys/vboot/root_key.vbpubk, non le chiavi di prova
 #   4. microcode per la CPU del W541 (CPUID 306C3) e voci microcode nel FIT
 #   5. vettore di reset: un jmp a 0xFFFFFFF0
 #   6. il .config dentro la ROM: board, RAM init della variante, IFD, ME
-#      (me_cleaner) e GbE, flash non bloccato (regioni sbloccate,
-#      BOOTMEDIA_LOCK_NONE e niente SMM_BWP: il prossimo aggiornamento si fa
-#      ancora con flashrom -p internal), aggiornamento con capsula (ESRT con
-#      il GUID del defconfig della variante e la versione X.Y.Z di
+#      (me_cleaner) e GbE, regioni del descrittore sbloccate e niente SMM_BWP
+#      fisso (BIOS Lock e Firmware protection dal menu), vboot con due slot,
+#      la RO minima, secdata finta e il TPM avviato da ramstage, protezione
+#      di WP_RO dal controller con l'opzione, aggiornamento con capsula (ESRT
+#      con il GUID del defconfig della variante e la versione X.Y.Z di
 #      CONFIG_LOCALVERSION, capsule su disco, il certificato di keys/)
 set -uo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
@@ -134,11 +139,6 @@ if [ "${sig}" = 5aa5f00f ]; then ok "descrittore Intel (0x0FF0A55A a 0x10)"; els
 if [ -f "${O}/blobs/gbe.bin" ]; then
 	if at_offset "${ROM}" $((0x1000)) "${O}/blobs/gbe.bin"; then ok "GbE a 0x1000 uguale a blobs/gbe.bin"; else bad "GbE a 0x1000 diversa da blobs/gbe.bin"; fi
 fi
-if all_ff "${ROM}" "${INTEL_SIZE}" $(( LOW_SIZE - INTEL_SIZE )); then
-	ok "0x500000-0x7FFFFF tutto 0xFF (regioni scrivibili vuote)"
-else
-	bad "0x500000-0x7FFFFF non vuoto (dati di una macchina nella ROM, o CBFS nel chip da 8 MiB)"
-fi
 
 # --- 2. FMAP ---------------------------------------------------------------
 if "${CBFSTOOL}" "${ROM}" layout -w > "${TMP}/layout.txt" 2>&1; then
@@ -156,7 +156,7 @@ else
 	bad "FMAP: SI_BIOS ${boff:-?}+${bsize:-?}, atteso 0x500000+0x700000"
 fi
 # le regioni scritte a ogni avvio nel chip da 8 MiB, vuote
-for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG; do
+for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG RW_NVRAM RECOVERY_MRC_CACHE; do
 	read -r rsize roff <<< "$(region "${r}")"
 	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
 	if [ "${roff}" -lt "${INTEL_SIZE}" ] || [ $(( roff + rsize )) -gt "${LOW_SIZE}" ]; then
@@ -169,8 +169,15 @@ for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG; do
 		bad "FMAP: ${r} non vuota (dati di una macchina nella ROM)"
 	fi
 done
-# coreboot tutto nel chip da 4 MiB
-for r in FMAP COREBOOT; do
+# RW_NVRAM: il payload lo cancella a blocchi da 64 KiB quando e' pieno
+read -r rsize roff <<< "$(region RW_NVRAM)"
+if [ -n "${rsize:-}" ] && [ $(( roff % 0x10000 )) = 0 ] && [ $(( rsize % 0x10000 )) = 0 ]; then
+	ok "FMAP: RW_NVRAM in blocchi da 64 KiB tutti suoi"
+else
+	bad "FMAP: RW_NVRAM ${roff:-?}+${rsize:-?} non in blocchi da 64 KiB"
+fi
+# slot B, la regione RO e la FMAP nel chip da 4 MiB, la RO in cima; slot A
+for r in RW_SECTION_B WP_RO FMAP COREBOOT GBB; do
 	read -r rsize roff <<< "$(region "${r}")"
 	if [ -z "${rsize:-}" ]; then bad "FMAP: manca ${r}"; continue; fi
 	if [ "${roff}" -lt "${LOW_SIZE}" ] || [ $(( roff + rsize )) -gt "${ROM_SIZE}" ]; then
@@ -179,19 +186,51 @@ for r in FMAP COREBOOT; do
 		ok "FMAP: ${r} $(hex "${roff}") nel chip da 4 MiB ($(( rsize / 1024 )) KiB)"
 	fi
 done
+read -r rsize roff <<< "$(region WP_RO)"
+if [ -n "${rsize:-}" ] && [ $(( roff + rsize )) = "${ROM_SIZE}" ] && [ $(( roff % 0x1000 )) = 0 ]; then
+	ok "FMAP: WP_RO in cima al flash, allineata a 4 KiB"
+else
+	bad "FMAP: WP_RO ${roff:-?}+${rsize:-?} non in cima al flash o non allineata a 4 KiB"
+fi
+read -r asize aoff <<< "$(region RW_SECTION_A)"
+read -r bsize boff2 <<< "$(region RW_SECTION_B)"
+if [ -n "${asize:-}" ] && [ "${asize}" = "${bsize:-}" ]; then
+	ok "FMAP: RW_SECTION_A $(hex "${aoff}") e RW_SECTION_B $(hex "${boff2}"), $(( asize / 1024 )) KiB ciascuno"
+else
+	bad "FMAP: RW_SECTION_A ${asize:-?} e RW_SECTION_B ${bsize:-?} di dimensioni diverse o mancanti"
+fi
 
 # --- 3. CBFS ---------------------------------------------------------------
-"${CBFSTOOL}" "${ROM}" print -r COREBOOT > "${TMP}/cbfs.txt" 2>&1 || bad "cbfstool print: $(head -1 "${TMP}/cbfs.txt")"
-awk 'NR > 2 { print $1 }' "${TMP}/cbfs.txt" > "${TMP}/names"
-has() { grep -qxF -- "$1" "${TMP}/names"; }
-extract() { "${CBFSTOOL}" "${ROM}" extract -r COREBOOT -n "$1" -f "$2" > /dev/null 2>&1; }
+for r in COREBOOT FW_MAIN_A FW_MAIN_B; do
+	"${CBFSTOOL}" "${ROM}" print -r "${r}" > "${TMP}/cbfs-${r}.txt" 2>&1 || bad "cbfstool print -r ${r}: $(head -1 "${TMP}/cbfs-${r}.txt")"
+	awk 'NR > 2 && $1 != "(empty)" { print $1 }' "${TMP}/cbfs-${r}.txt" > "${TMP}/names-${r}"
+done
+# has FILE [REGIONE], extract FILE OUT [REGIONE]: la regione RO di default
+has() { grep -qxF -- "$1" "${TMP}/names-${2:-COREBOOT}"; }
+extract() { "${CBFSTOOL}" "${ROM}" extract -r "${3:-COREBOOT}" -n "$1" -f "$2" > /dev/null 2>&1; }
 missing=()
-for f in bootblock fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml \
-	fallback/payload cpu_microcode_blob.bin intel_fit vbt.bin config revision build_info \
-	pci10de,11fc.rom; do
+for f in bootblock cpu_microcode_blob.bin intel_fit config revision build_info; do
 	has "${f}" || missing+=("${f}")
 done
-if [ ${#missing[@]} -eq 0 ]; then ok "CBFS: stage, payload, DSDT, VBT, microcode, FIT, config"; else bad "CBFS: mancano ${missing[*]}"; fi
+if [ ${#missing[@]} -eq 0 ]; then ok "CBFS RO: bootblock, microcode, FIT, config"; else bad "CBFS RO: mancano ${missing[*]}"; fi
+extra=()
+for f in fallback/romstage fallback/postcar fallback/ramstage fallback/payload fallback/dsdt.aml; do
+	if has "${f}"; then extra+=("${f}"); fi
+done
+if [ ${#extra[@]} -eq 0 ]; then ok "CBFS RO: niente stage dopo verstage ne' payload (RO minima)"; else bad "CBFS RO: ci sono ${extra[*]}"; fi
+for r in FW_MAIN_A FW_MAIN_B; do
+	missing=()
+	for f in fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml \
+		fallback/payload cpu_microcode_blob.bin vbt.bin config pci10de,11fc.rom; do
+		has "${f}" "${r}" || missing+=("${f}")
+	done
+	if [ ${#missing[@]} -eq 0 ]; then ok "CBFS ${r}: stage, payload, DSDT, VBT, microcode"; else bad "CBFS ${r}: mancano ${missing[*]}"; fi
+done
+if cmp -s "${TMP}/names-FW_MAIN_A" "${TMP}/names-FW_MAIN_B"; then
+	ok "CBFS: gli stessi file nei due slot"
+else
+	bad "CBFS: i due slot hanno file diversi"
+fi
 if [ "${VARIANT}" = mrc ]; then
 	if ! has mrc.bin; then
 		bad "CBFS: manca mrc.bin (variante mrc)"
@@ -207,14 +246,14 @@ if [ "${VARIANT}" = mrc ]; then
 else
 	if has mrc.bin; then bad "CBFS: mrc.bin nella variante nri"; else ok "niente mrc.bin (RAM init nativa)"; fi
 fi
-if has pci10de,11fc.rom && extract pci10de,11fc.rom "${TMP}/vbios.rom" \
+if has pci10de,11fc.rom FW_MAIN_A && extract pci10de,11fc.rom "${TMP}/vbios.rom" FW_MAIN_A \
 	&& cmp -s "${TMP}/vbios.rom" "${O}/blobs/vbios_10de_11fc_1.rom"; then
 	ok "pci10de,11fc.rom uguale a blobs/vbios_10de_11fc_1.rom"
 else
 	bad "pci10de,11fc.rom assente o diverso da blobs/vbios_10de_11fc_1.rom"
 fi
 # la chiave Optimus di blobs/opvk.inc (byte 0x.. separati da virgola) nel DSDT
-if has fallback/dsdt.aml && extract fallback/dsdt.aml "${TMP}/dsdt.aml" \
+if has fallback/dsdt.aml FW_MAIN_A && extract fallback/dsdt.aml "${TMP}/dsdt.aml" FW_MAIN_A \
 	&& [ -f "${O}/blobs/opvk.inc" ]; then
 	n="$(python3 -I - "${O}/blobs/opvk.inc" "${TMP}/dsdt.aml" <<'PY'
 import re, sys
@@ -261,6 +300,38 @@ else
 	echo "  --  FIT non controllato (ifittool non trovato)"
 fi
 
+# --- 4b. vboot: la chiave root nel GBB --------------------------------------------
+read -r gsize goff <<< "$(region GBB)"
+if [ -n "${gsize:-}" ]; then
+	key="$(python3 -I - "${ROM}" "${goff}" "${gsize}" "${O}/keys/vboot/root_key.vbpubk" <<'PY'
+import struct, sys
+rom = open(sys.argv[1], "rb").read()
+off, size = int(sys.argv[2]), int(sys.argv[3])
+gbb = rom[off:off + size]
+mine = open(sys.argv[4], "rb").read()
+if gbb[:4] != b"$GBB":
+    print("nogbb")
+    sys.exit()
+# header 1.2: firma, versioni, dimensione, flag, HWID, chiave root
+ko, ks = struct.unpack_from("<II", gbb, 24)
+root = gbb[ko:ko + ks]
+print("mine" if root[:len(mine)] == mine else "other")
+PY
+)"
+	case "${key}" in
+		mine) ok "GBB: chiave root di keys/vboot/root_key.vbpubk" ;;
+		other)
+			if [ "${RELEASE}" = yes ]; then
+				bad "GBB: la chiave root non e' keys/vboot/root_key.vbpubk (chiavi di prova?)"
+			else
+				echo "  --  GBB: chiave root diversa da keys/vboot (build di prova con le chiavi di vboot)"
+			fi ;;
+		*) bad "GBB: non c'e' un GBB valido" ;;
+	esac
+else
+	bad "FMAP: manca GBB"
+fi
+
 # --- 5. vettore di reset --------------------------------------------------------
 rv="$(od -An -tx1 -j $(( size - 16 )) -N1 "${ROM}" | tr -d ' \n')"
 case "${rv}" in
@@ -289,8 +360,24 @@ if extract config "${TMP}/config"; then
 	want CONFIG_USE_ME_CLEANER=y
 	want CONFIG_HAVE_GBE_BIN=y
 	want CONFIG_UNLOCK_FLASH_REGIONS=y
-	want CONFIG_BOOTMEDIA_LOCK_NONE=y
-	never CONFIG_BOOTMEDIA_SMM_BWP=y "flash scrivibile solo da SMM: flashrom -p internal non aggiornerebbe piu'"
+	never CONFIG_BOOTMEDIA_SMM_BWP=y "flash scrivibile solo da SMM senza scelta: flashrom -p internal non aggiornerebbe piu'"
+	want CONFIG_BOOTMEDIA_SMM_BWP_RUNTIME_OPTION=y
+	# vboot (docs/vboot.md)
+	want CONFIG_VBOOT=y
+	want CONFIG_VBOOT_SLOTS_RW_AB=y
+	want CONFIG_VBOOT_STARTS_IN_BOOTBLOCK=y
+	want CONFIG_LENOVO_HASWELL_VBOOT_MINIMAL_RO=y
+	want CONFIG_VBOOT_VBNV_FLASH=y
+	want CONFIG_VBOOT_MOCK_SECDATA=y
+	want CONFIG_VBOOT_MOCK_SECDATA_NO_TPM=y
+	want CONFIG_TPM_INIT_RAMSTAGE=y
+	want CONFIG_BOOTMEDIA_LOCK_CONTROLLER=y
+	want CONFIG_BOOTMEDIA_LOCK_WPRO_VBOOT_RO=y
+	want CONFIG_BOOTMEDIA_LOCK_RUNTIME_OPTION=y
+	if [ "${RELEASE}" = yes ]; then
+		want 'CONFIG_VBOOT_ROOT_KEY="w541/vboot/root_key.vbpubk"'
+		want 'CONFIG_VBOOT_KEYBLOCK="w541/vboot/firmware.keyblock"'
+	fi
 	# aggiornamento con capsula (docs/update.md)
 	want CONFIG_DRIVERS_EFI_FW_INFO=y
 	guid="$(grep '^CONFIG_DRIVERS_EFI_MAIN_FW_GUID=' "${O}/configs/w541-${VARIANT}.defconfig" || true)"
@@ -335,11 +422,12 @@ if [ -n "${CHIP8}" ]; then
 	else
 		bad "$(basename "${CHIP4}"): non sono gli ultimi 4 MiB della ROM"
 	fi
-	# da solo e' un coreboot completo: la FMAP e' in testa al chip
-	if [ "$(head -c 8 "${CHIP4}" 2>/dev/null)" = "__FMAP__" ]; then
-		ok "$(basename "${CHIP4}"): FMAP in testa, coreboot completo nel chip da 4 MiB"
+	# da solo avvia: la regione RO e lo slot B sono tutti nel chip da 4 MiB
+	read -r _ foff <<< "$(region FMAP)"
+	if [ -n "${foff:-}" ] && [ "$(tail -c +$(( foff - LOW_SIZE + 1 )) "${CHIP4}" 2>/dev/null | head -c 8)" = "__FMAP__" ]; then
+		ok "$(basename "${CHIP4}"): FMAP, regione RO e slot B: avvia da solo (dallo slot B)"
 	else
-		bad "$(basename "${CHIP4}"): nessuna FMAP in testa al chip da 4 MiB"
+		bad "$(basename "${CHIP4}"): la FMAP non e' dove la mette configs/w541.fmd"
 	fi
 fi
 

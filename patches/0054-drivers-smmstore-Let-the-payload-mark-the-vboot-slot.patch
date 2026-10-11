@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:02:44 +0200
+Subject: [PATCH] drivers/smmstore: Let the payload mark the vboot slot it
+ booted as working
+
+When vboot tries a new RW slot (try_next with a try count), the slot
+keeps fw_result "trying" until something records "success"; once the
+tries run out with "trying", vboot falls back to the other slot. On
+ChromeOS the OS records the success. Without it, a slot that boots
+fine is still abandoned after its tries.
+
+Add SMMSTORE_CMD_VBOOT_SLOT_GOOD for boards with the vboot nvdata in
+flash: the payload sends it once it has booted, and the handler sets
+fw_result to "success" in the stored nvdata if it is "trying". With the
+BIOS lock on, only SMM can write the flash once the payload runs, and
+the SMMSTORE handler already does it for the payload.
+
+The command only turns "trying" into "success": the OS can send it too,
+which at worst keeps a slot that boots far enough for the OS to run.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/smmstore/smi.c       |  9 +++++++++
+ src/include/smmstore.h           |  8 ++++++++
+ src/security/vboot/Makefile.mk   |  5 +++++
+ src/security/vboot/vbnv.c        | 18 ++++++++++++++++++
+ src/security/vboot/vbnv.h        |  9 +++++++++
+ src/security/vboot/vbnv_layout.h |  7 +++++++
+ 6 files changed, 56 insertions(+)
+
+diff --git a/src/drivers/smmstore/smi.c b/src/drivers/smmstore/smi.c
+index 9b87b7f4a..09ffbf5cb 100644
+--- a/src/drivers/smmstore/smi.c
++++ b/src/drivers/smmstore/smi.c
+@@ -3,6 +3,7 @@
+ #include <console/console.h>
+ #include <commonlib/region.h>
+ #include <cpu/x86/smm.h>
++#include <security/vboot/vbnv.h>
+ #include <smmstore.h>
+ #include <stddef.h>
+ #include <stdint.h>
+@@ -80,6 +81,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+ 			ret = SMMSTORE_RET_SUCCESS;
+ 		break;
+ 	}
++	case SMMSTORE_CMD_VBOOT_SLOT_GOOD:
++		if (!CONFIG(VBOOT) || !CONFIG(VBOOT_VBNV_FLASH)) {
++			ret = SMMSTORE_RET_UNSUPPORTED;
++			break;
++		}
++		vbnv_mark_tried_slot_good();
++		ret = SMMSTORE_RET_SUCCESS;
++		break;
+ 	default:
+ 		printk(BIOS_DEBUG, "Unknown SMM store command: 0x%02x\n", command);
+ 		ret = SMMSTORE_RET_UNSUPPORTED;
+diff --git a/src/include/smmstore.h b/src/include/smmstore.h
+index 6b25774cb..2020fa320 100644
+--- a/src/include/smmstore.h
++++ b/src/include/smmstore.h
+@@ -15,6 +15,14 @@
+ #define SMMSTORE_CMD_RAW_WRITE 6
+ #define SMMSTORE_CMD_RAW_CLEAR 7
+ 
++/*
++ * With vboot and its nvdata in flash: the payload has booted from the RW
++ * slot that vboot is trying, record that the slot works (fw_result
++ * "success"), so that vboot keeps it when the tries run out. Returns
++ * SMMSTORE_RET_SUCCESS whether or not there was a slot to mark.
++ */
++#define SMMSTORE_CMD_VBOOT_SLOT_GOOD 8
++
+ /*
+  * Used by capsule updates as a standalone command or modifier to v2 commands.
+  *
+diff --git a/src/security/vboot/Makefile.mk b/src/security/vboot/Makefile.mk
+index 16afe527c..28addfed2 100644
+--- a/src/security/vboot/Makefile.mk
++++ b/src/security/vboot/Makefile.mk
+@@ -89,6 +89,11 @@ romstage-$(CONFIG_VBOOT_VBNV_CMOS_BACKUP_TO_FLASH) += vbnv_flash.c
+ ramstage-$(CONFIG_VBOOT_VBNV_CMOS_BACKUP_TO_FLASH) += vbnv_flash.c
+ postcar-$(CONFIG_VBOOT_VBNV_CMOS_BACKUP_TO_FLASH) += vbnv_flash.c
+ 
++# The SMMSTORE handler marks a working slot for the payload (drivers/smmstore)
++ifeq ($(CONFIG_SMMSTORE),y)
++smm-$(CONFIG_VBOOT_VBNV_FLASH) += vbnv.c vbnv_flash.c
++endif
++
+ bootblock-$(CONFIG_VBOOT_VBNV_FLASH) += vbnv_flash.c
+ verstage-$(CONFIG_VBOOT_VBNV_FLASH) += vbnv_flash.c
+ romstage-$(CONFIG_VBOOT_VBNV_FLASH) += vbnv_flash.c
+diff --git a/src/security/vboot/vbnv.c b/src/security/vboot/vbnv.c
+index 2ddb89803..069c3e103 100644
+--- a/src/security/vboot/vbnv.c
++++ b/src/security/vboot/vbnv.c
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
+ #include <assert.h>
++#include <console/console.h>
+ #include <string.h>
+ #include <types.h>
+ #include <security/vboot/misc.h>
+@@ -78,6 +79,23 @@ void save_vbnv(const uint8_t *vbnv_copy)
+ 		dead_code();
+ }
+ 
++int vbnv_mark_tried_slot_good(void)
++{
++	uint8_t vbnv_copy[VBOOT_VBNV_BLOCK_SIZE];
++
++	read_vbnv(vbnv_copy);
++	if ((vbnv_copy[BOOT2_OFFSET] & BOOT2_RESULT_MASK) != BOOT2_RESULT_TRYING)
++		return 0;
++
++	vbnv_copy[BOOT2_OFFSET] &= ~BOOT2_RESULT_MASK;
++	vbnv_copy[BOOT2_OFFSET] |= BOOT2_RESULT_SUCCESS;
++	regen_vbnv_crc(vbnv_copy);
++	save_vbnv(vbnv_copy);
++	printk(BIOS_INFO, "VBNV: slot %c works\n",
++	       (vbnv_copy[BOOT2_OFFSET] & BOOT2_TRIED) ? 'B' : 'A');
++	return 1;
++}
++
+ /* Read the USB Device Controller(UDC) enable flag from VBNV. */
+ int vbnv_udc_enable_flag(void)
+ {
+diff --git a/src/security/vboot/vbnv.h b/src/security/vboot/vbnv.h
+index 49d1f12f6..bf64734b6 100644
+--- a/src/security/vboot/vbnv.h
++++ b/src/security/vboot/vbnv.h
+@@ -11,6 +11,15 @@ void save_vbnv(const uint8_t *vbnv_copy);
+ int verify_vbnv(uint8_t *vbnv_copy);
+ void regen_vbnv_crc(uint8_t *vbnv_copy);
+ 
++/*
++ * If vboot is trying the slot it booted (fw_result "trying"), record that
++ * the slot works (fw_result "success"), so that vboot keeps it when the
++ * tries run out. Works on the stored copy, without the vboot context: for
++ * code that runs after the stages, like SMM. Returns 1 if it marked the
++ * slot, 0 if there was nothing to mark.
++ */
++int vbnv_mark_tried_slot_good(void);
++
+ /* Read the USB Device Controller(UDC) enable flag from VBNV. */
+ int vbnv_udc_enable_flag(void);
+ 
+diff --git a/src/security/vboot/vbnv_layout.h b/src/security/vboot/vbnv_layout.h
+index 5dd39643c..70efac55f 100644
+--- a/src/security/vboot/vbnv_layout.h
++++ b/src/security/vboot/vbnv_layout.h
+@@ -24,6 +24,13 @@
+ #define RECOVERY_OFFSET              2
+ #define LOCALIZATION_OFFSET          3
+ 
++#define BOOT2_OFFSET                 7
++#define BOOT2_RESULT_MASK               0x03
++#define BOOT2_RESULT_TRYING             0x01
++#define BOOT2_RESULT_SUCCESS            0x02
++#define BOOT2_TRIED                     0x04
++#define BOOT2_TRY_NEXT                  0x08
++
+ #define DEV_FLAGS_OFFSET             4
+ #define DEV_BOOT_USB_MASK               0x01
+ #define DEV_BOOT_SIGNED_ONLY_MASK       0x02
+-- 
+2.43.0
+

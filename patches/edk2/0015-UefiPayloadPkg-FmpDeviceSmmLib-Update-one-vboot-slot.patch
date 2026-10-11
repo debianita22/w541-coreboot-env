@@ -1,0 +1,596 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:30:25 +0200
+Subject: [PATCH] UefiPayloadPkg/FmpDeviceSmmLib: Update one vboot slot at a
+ time
+
+A firmware verified by vboot with two RW slots is updated with a
+capsule whose manifest names both, RW_SECTION_A and RW_SECTION_B.
+Writing both, as the manifest says, leaves nothing to boot from if the
+update is cut short.
+
+With such a manifest, read the nvdata of vboot from RW_NVRAM (the
+format of coreboot's vbnv_flash.c), write only the slot that vboot did
+not boot, with the other regions of the manifest, and then append a
+record that asks vboot to try that slot for two boots. If the write is
+cut short, vboot still boots the old slot; if the new slot does not
+verify, vboot goes back to the old one; if it does not boot far enough
+to report it (SMMSTORE_CMD_VBOOT_SLOT_GOOD), vboot goes back once the
+tries run out. A full RW_NVRAM is erased first, which needs it to be
+whole flash blocks; otherwise the capsule is refused before anything is
+written.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c | 194 ++++++++++++++++++
+ .../FmpDeviceSmmLib/FmpDeviceSmmLib.inf       |   2 +
+ .../FmpDeviceSmmLib/FmpDeviceSmmVboot.c       | 169 +++++++++++++++
+ .../FmpDeviceSmmLib/FmpDeviceSmmVboot.h       | 107 ++++++++++
+ 4 files changed, 472 insertions(+)
+ create mode 100644 UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.c
+ create mode 100644 UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.h
+
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+index 3275cca3dd..0916b62cba 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+@@ -12,6 +12,12 @@
+   is.  An image without a manifest, or for another flash layout, is refused:
+   such a firmware is installed with an external tool.
+ 
++  A manifest with the two RW slots of vboot (RW_SECTION_A and RW_SECTION_B)
++  updates only the slot that is not running, with the other regions it
++  names, then asks vboot, in its nvdata in RW_NVRAM, to try that slot on the
++  next boots: an update cut short, or a slot that does not verify or boot,
++  leaves the old slot to boot from.
++
+   Copyright (c) Microsoft Corporation.<BR>
+   Copyright (c) 2018 - 2019, Intel Corporation. All rights reserved.<BR>
+   Copyright (c) 2025, 3mdeb Sp. z o.o. All rights reserved.<BR>
+@@ -37,6 +43,7 @@
+ #include "FmpDeviceSmmFlashRetry.h"
+ #include "FmpDeviceSmmManifest.h"
+ #include "FmpDeviceSmmUpdatePolicy.h"
++#include "FmpDeviceSmmVboot.h"
+ 
+ //
+ // Minimal FMAP parsing to locate and compare the flash map before updating.
+@@ -1431,6 +1438,73 @@ UpdateFlashRangeFromImage (
+   return EFI_SUCCESS;
+ }
+ 
++/**
++  Ask vboot to try a slot: append the updated nvdata record to RW_NVRAM, or
++  write it at the start of the region after erasing it if it is full.
++
++  @param[in] BlockSize   Flash block size.
++  @param[in] NvOffset    Flash offset of RW_NVRAM.
++  @param[in] NvSize      Size of RW_NVRAM.
++  @param[in] NextOffset  Offset in RW_NVRAM of the first erased record, NvSize
++                         if there is none.
++  @param[in] Record      The record to write.
++
++  @retval EFI_SUCCESS       The record is in the flash.
++  @retval EFI_VOLUME_FULL   The region is full and not made of whole blocks
++                            that can be erased.
++  @retval EFI_DEVICE_ERROR  A write, an erase or the readback failed.
++**/
++STATIC
++EFI_STATUS
++VbootWriteNvRecord (
++  IN UINTN        BlockSize,
++  IN UINTN        NvOffset,
++  IN UINTN        NvSize,
++  IN UINTN        NextOffset,
++  IN CONST UINT8  Record[VBOOT_NV_RECORD_SIZE]
++  )
++{
++  EFI_STATUS  Status;
++  UINTN       Lba;
++  UINTN       NumBytes;
++  UINT8       Readback[VBOOT_NV_RECORD_SIZE];
++
++  if ((BlockSize == 0) || ((BlockSize % VBOOT_NV_RECORD_SIZE) != 0)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if (NextOffset + VBOOT_NV_RECORD_SIZE > NvSize) {
++    if (((NvOffset % BlockSize) != 0) || ((NvSize % BlockSize) != 0)) {
++      return EFI_VOLUME_FULL;
++    }
++
++    for (Lba = NvOffset / BlockSize; Lba < (NvOffset + NvSize) / BlockSize; Lba++) {
++      if (EFI_ERROR (EraseAnyBlock (Lba))) {
++        return EFI_DEVICE_ERROR;
++      }
++    }
++
++    NextOffset = 0;
++  }
++
++  Lba      = (NvOffset + NextOffset) / BlockSize;
++  NumBytes = VBOOT_NV_RECORD_SIZE;
++  Status   = WriteAnyBlock (Lba, (NvOffset + NextOffset) % BlockSize, &NumBytes, (UINT8 *)Record);
++  if (EFI_ERROR (Status) || (NumBytes != VBOOT_NV_RECORD_SIZE)) {
++    return EFI_DEVICE_ERROR;
++  }
++
++  NumBytes = VBOOT_NV_RECORD_SIZE;
++  Status   = ReadAnyBlockWithRetry (Lba, (NvOffset + NextOffset) % BlockSize, &NumBytes, Readback);
++  if (EFI_ERROR (Status) || (NumBytes != VBOOT_NV_RECORD_SIZE) ||
++      (CompareMem (Readback, Record, VBOOT_NV_RECORD_SIZE) != 0))
++  {
++    return EFI_DEVICE_ERROR;
++  }
++
++  return EFI_SUCCESS;
++}
++
+ /**
+   This code finds variable in storage blocks (Volatile or Non-Volatile).
+ 
+@@ -1657,11 +1731,25 @@ FmpDeviceSetImageWithStatus (
+   UINTN                        FlashRegionOffset;
+   UINTN                        FlashRegionSize;
+   CONST CHAR8                  SmmStoreRegionName[REGION_MANIFEST_NAME_LEN] = "SMMSTORE";
++  CONST CHAR8                  NvRegionName[REGION_MANIFEST_NAME_LEN]       = "RW_NVRAM";
++  BOOLEAN                      AbUpdate;
++  UINTN                        AbIndex[2];
++  UINTN                        TargetSlot;
++  UINTN                        NvOffset;
++  UINTN                        NvSize;
++  UINTN                        NvNext;
++  UINT8                        *NvBuffer;
++  UINT8                        NvRecord[VBOOT_NV_RECORD_SIZE];
+ 
+   *LastAttemptStatus = LAST_ATTEMPT_STATUS_SMMSTORE_INVALID_IMAGE;
+   ReadBuffer         = NULL;
+   VerifyBuffer       = NULL;
+   TotalSteps         = 0;
++  AbUpdate           = FALSE;
++  TargetSlot         = 0;
++  NvOffset           = 0;
++  NvSize             = 0;
++  NvNext             = 0;
+ 
+   //
+   // FmpDeviceCheckImageWithStatus() has already validated the image, so not
+@@ -1896,6 +1984,27 @@ FmpDeviceSetImageWithStatus (
+     }
+   }
+ 
++  //
++  // The two slots of vboot: the flash must have the nvdata of vboot too.
++  //
++  AbUpdate = FmpVbootFindSlots (ManifestEntries, ManifestEntryCount, &AbIndex[0], &AbIndex[1]);
++  if (AbUpdate && !LayoutMismatch) {
++    Status = FindFmapRegion (
++               FlashFmapHeader,
++               FlashFmapAreas,
++               FlashFmapHeader->AreaCount,
++               NvRegionName,
++               &NvOffset,
++               &NvSize
++               );
++    if (EFI_ERROR (Status) || (NvSize < VBOOT_NV_RECORD_SIZE) || ((NvSize % VBOOT_NV_RECORD_SIZE) != 0) ||
++        (NvOffset >= BaseImageSize) || (NvSize > (BaseImageSize - NvOffset)))
++    {
++      DEBUG ((DEBUG_ERROR, "%a(): vboot slots, but no RW_NVRAM in the flash\n", __func__));
++      LayoutMismatch = TRUE;
++    }
++  }
++
+   if (FlashFmapBuffer != NULL) {
+     FreePool (FlashFmapBuffer);
+     FlashFmapBuffer = NULL;
+@@ -1938,6 +2047,73 @@ FmpDeviceSetImageWithStatus (
+     return EFI_ABORTED;
+   }
+ 
++  if (AbUpdate) {
++    //
++    // Write the slot that is not running, and only that one.
++    //
++    NvBuffer = AllocatePool (NvSize);
++    if (NvBuffer == NULL) {
++      FreePool (VerifyBuffer);
++      FreePool (ReadBuffer);
++      return EFI_OUT_OF_RESOURCES;
++    }
++
++    Status = ReadFlashRange (BlockSize, BaseImageSize, NvOffset, NvSize, NvBuffer);
++    if (EFI_ERROR (Status)) {
++      FreePool (NvBuffer);
++      *LastAttemptStatus = LAST_ATTEMPT_STATUS_SMMSTORE_FLASH_FAILED;
++      goto IoError;
++    }
++
++    if (!FmpVbootNvFindCurrent (NvBuffer, NvSize, NvRecord, &NvNext)) {
++      DEBUG ((DEBUG_WARN, "%a(): no valid vboot nvdata, assuming slot A runs\n", __func__));
++    }
++
++    FreePool (NvBuffer);
++    if ((NvNext + VBOOT_NV_RECORD_SIZE > NvSize) && (((NvOffset % BlockSize) != 0) || ((NvSize % BlockSize) != 0))) {
++      DEBUG ((DEBUG_ERROR, "%a(): RW_NVRAM is full and cannot be erased\n", __func__));
++      FreePool (VerifyBuffer);
++      FreePool (ReadBuffer);
++      *LastAttemptStatus = LAST_ATTEMPT_STATUS_SMMSTORE_LAYOUT_MISMATCH;
++      return EFI_ABORTED;
++    }
++
++    TargetSlot = 1 - FmpVbootNvTriedSlot (NvRecord);
++    DEBUG ((
++      DEBUG_INFO,
++      "%a(): vboot runs slot %c, updating slot %c\n",
++      __func__,
++      (TargetSlot == 0) ? 'B' : 'A',
++      (TargetSlot == 0) ? 'A' : 'B'
++      ));
++
++    TotalSteps = 0;
++    for (EntryIndex = 0; EntryIndex < ManifestEntryCount; ++EntryIndex) {
++      UINTN  RegionOffset;
++      UINTN  RegionSize;
++
++      if (EntryIndex == AbIndex[1 - TargetSlot]) {
++        continue;
++      }
++
++      Status = FindFmapRegion (
++                 FmapHeader,
++                 FmapAreas,
++                 FmapHeader->AreaCount,
++                 ManifestEntries[EntryIndex].RegionName,
++                 &RegionOffset,
++                 &RegionSize
++                 );
++      if (EFI_ERROR (Status) ||
++          EFI_ERROR (FmpDeviceGetFlashRangeStepCount (RegionOffset, RegionSize, BlockSize, &RangeSteps)))
++      {
++        goto InvalidImage;
++      }
++
++      TotalSteps += RangeSteps;
++    }
++  }
++
+   ShouldReportProgress = TRUE;
+   Step                 = 0;
+   *LastAttemptStatus   = LAST_ATTEMPT_STATUS_SMMSTORE_FLASH_FAILED;
+@@ -1948,6 +2124,10 @@ FmpDeviceSetImageWithStatus (
+     UINTN  RegionOffset;
+     UINTN  RegionSize;
+ 
++    if (AbUpdate && (EntryIndex == AbIndex[1 - TargetSlot])) {
++      continue;
++    }
++
+     Status = FindFmapRegion (
+                FmapHeader,
+                FmapAreas,
+@@ -1980,6 +2160,20 @@ FmpDeviceSetImageWithStatus (
+     }
+   }
+ 
++  if (AbUpdate) {
++    //
++    // The slot is written and verified: try it on the next boots.
++    //
++    FmpVbootNvSetTryNext (NvRecord, TargetSlot, VBOOT_AB_TRY_COUNT);
++    Status = VbootWriteNvRecord (BlockSize, NvOffset, NvSize, NvNext, NvRecord);
++    if (EFI_ERROR (Status)) {
++      DEBUG ((DEBUG_ERROR, "%a(): writing the vboot nvdata failed: %r\n", __func__, Status));
++      goto IoError;
++    }
++
++    DEBUG ((DEBUG_INFO, "%a(): vboot tries slot %c next\n", __func__, (TargetSlot == 0) ? 'A' : 'B'));
++  }
++
+   FreePool (VerifyBuffer);
+   FreePool (ReadBuffer);
+ 
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
+index f5c968cc4a..e3131facdb 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
+@@ -26,6 +26,8 @@
+   FmpDeviceSmmManifest.c
+   FmpDeviceSmmManifest.h
+   FmpDeviceSmmUpdatePolicy.c
++  FmpDeviceSmmVboot.c
++  FmpDeviceSmmVboot.h
+   FmpDeviceSmmUpdatePolicy.h
+ 
+ [LibraryClasses]
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.c
+new file mode 100644
+index 0000000000..fdffa1f2da
+--- /dev/null
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.c
+@@ -0,0 +1,169 @@
++/** @file
++  vboot A/B updates for SMMSTORE-backed firmware updates.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++
++#include "FmpDeviceSmmVboot.h"
++
++/**
++  Whether a manifest entry names Name.
++**/
++STATIC
++BOOLEAN
++EntryIs (
++  IN CONST REGION_MANIFEST_ENTRY  *Entry,
++  IN CONST CHAR8                  *Name
++  )
++{
++  CHAR8  Padded[REGION_MANIFEST_NAME_LEN];
++
++  ZeroMem (Padded, sizeof (Padded));
++  CopyMem (Padded, Name, AsciiStrLen (Name));
++  return CompareMem (Entry->RegionName, Padded, sizeof (Padded)) == 0;
++}
++
++BOOLEAN
++FmpVbootFindSlots (
++  IN  CONST REGION_MANIFEST_ENTRY  *Entries,
++  IN  UINTN                        Count,
++  OUT UINTN                        *IndexA,
++  OUT UINTN                        *IndexB
++  )
++{
++  UINTN  Index;
++  UINTN  FoundA;
++  UINTN  FoundB;
++
++  if (Entries == NULL) {
++    return FALSE;
++  }
++
++  FoundA = 0;
++  FoundB = 0;
++  for (Index = 0; Index < Count; Index++) {
++    if (EntryIs (&Entries[Index], "RW_SECTION_A")) {
++      *IndexA = Index;
++      FoundA++;
++    } else if (EntryIs (&Entries[Index], "RW_SECTION_B")) {
++      *IndexB = Index;
++      FoundB++;
++    }
++  }
++
++  return (FoundA == 1) && (FoundB == 1);
++}
++
++UINT8
++FmpVbootNvCrc8 (
++  IN CONST UINT8  *Data,
++  IN UINTN        Size
++  )
++{
++  UINT32  Crc;
++  UINTN   Index;
++  UINTN   Bit;
++
++  Crc = 0;
++  for (Index = 0; Index < Size; Index++) {
++    Crc ^= ((UINT32)Data[Index] << 8);
++    for (Bit = 0; Bit < 8; Bit++) {
++      if ((Crc & 0x8000) != 0) {
++        Crc ^= (0x1070 << 3);
++      }
++
++      Crc <<= 1;
++    }
++  }
++
++  return (UINT8)(Crc >> 8);
++}
++
++/**
++  Whether a record is erased flash.
++**/
++STATIC
++BOOLEAN
++RecordIsErased (
++  IN CONST UINT8  *Record
++  )
++{
++  UINTN  Index;
++
++  for (Index = 0; Index < VBOOT_NV_RECORD_SIZE; Index++) {
++    if (Record[Index] != 0xFF) {
++      return FALSE;
++    }
++  }
++
++  return TRUE;
++}
++
++BOOLEAN
++FmpVbootNvFindCurrent (
++  IN  CONST UINT8  *Region,
++  IN  UINTN        Size,
++  OUT UINT8        Record[VBOOT_NV_RECORD_SIZE],
++  OUT UINTN        *NextOffset
++  )
++{
++  UINTN  Offset;
++
++  //
++  // Records are appended from the start of the region, and the region is
++  // erased when it is full: the current one is the last before the first
++  // erased one.
++  //
++  for (Offset = 0; Offset + VBOOT_NV_RECORD_SIZE <= Size; Offset += VBOOT_NV_RECORD_SIZE) {
++    if (RecordIsErased (Region + Offset)) {
++      break;
++    }
++  }
++
++  *NextOffset = (Offset + VBOOT_NV_RECORD_SIZE <= Size) ? Offset : Size;
++  if ((Offset > 0) &&
++      ((Region[Offset - VBOOT_NV_RECORD_SIZE + VBOOT_NV_OFFS_HEADER] & VBOOT_NV_HEADER_MASK) == VBOOT_NV_HEADER_SIGNATURE) &&
++      (FmpVbootNvCrc8 (Region + Offset - VBOOT_NV_RECORD_SIZE, VBOOT_NV_OFFS_CRC) ==
++       Region[Offset - VBOOT_NV_RECORD_SIZE + VBOOT_NV_OFFS_CRC]))
++  {
++    CopyMem (Record, Region + Offset - VBOOT_NV_RECORD_SIZE, VBOOT_NV_RECORD_SIZE);
++    return TRUE;
++  }
++
++  //
++  // What vboot starts from without valid nvdata: slot A, nothing to try.
++  //
++  ZeroMem (Record, VBOOT_NV_RECORD_SIZE);
++  Record[VBOOT_NV_OFFS_HEADER] = VBOOT_NV_HEADER_SIGNATURE;
++  Record[VBOOT_NV_OFFS_CRC]    = FmpVbootNvCrc8 (Record, VBOOT_NV_OFFS_CRC);
++  return FALSE;
++}
++
++UINTN
++FmpVbootNvTriedSlot (
++  IN CONST UINT8  Record[VBOOT_NV_RECORD_SIZE]
++  )
++{
++  return ((Record[VBOOT_NV_OFFS_BOOT2] & VBOOT_NV_BOOT2_TRIED) != 0) ? 1 : 0;
++}
++
++VOID
++FmpVbootNvSetTryNext (
++  IN OUT UINT8  Record[VBOOT_NV_RECORD_SIZE],
++  IN     UINTN  Slot,
++  IN     UINT8  Tries
++  )
++{
++  if (Slot != 0) {
++    Record[VBOOT_NV_OFFS_BOOT2] |= VBOOT_NV_BOOT2_TRY_NEXT;
++  } else {
++    Record[VBOOT_NV_OFFS_BOOT2] &= (UINT8) ~VBOOT_NV_BOOT2_TRY_NEXT;
++  }
++
++  Record[VBOOT_NV_OFFS_BOOT] &= (UINT8) ~VBOOT_NV_BOOT_TRY_COUNT;
++  Record[VBOOT_NV_OFFS_BOOT] |= (Tries & VBOOT_NV_BOOT_TRY_COUNT);
++  Record[VBOOT_NV_OFFS_CRC]   = FmpVbootNvCrc8 (Record, VBOOT_NV_OFFS_CRC);
++}
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.h b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.h
+new file mode 100644
+index 0000000000..d480fe5c15
+--- /dev/null
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmVboot.h
+@@ -0,0 +1,107 @@
++/** @file
++  vboot A/B updates for SMMSTORE-backed firmware updates.
++
++  A firmware verified by vboot with two RW slots (RW_SECTION_A and
++  RW_SECTION_B in the FMAP) and its nvdata in flash (RW_NVRAM, the format of
++  coreboot's vbnv_flash.c: 16-byte V1 records appended until the region is
++  full) is updated one slot at a time: the slot that is not running is
++  written, then vboot is asked to try it on the next boots.  If the write is
++  cut short, or the new slot does not verify, vboot boots the old one.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#pragma once
++
++#include <Base.h>
++#include "FmpDeviceSmmManifest.h"
++
++#define VBOOT_NV_RECORD_SIZE  16
++
++//
++// Fields of a V1 record (vboot_reference, 2nvstorage_fields.h).
++//
++#define VBOOT_NV_OFFS_HEADER         0
++#define VBOOT_NV_OFFS_BOOT           1
++#define VBOOT_NV_OFFS_BOOT2          7
++#define VBOOT_NV_OFFS_CRC            15
++#define VBOOT_NV_HEADER_SIGNATURE    0x40
++#define VBOOT_NV_HEADER_MASK         0xC0
++#define VBOOT_NV_BOOT_TRY_COUNT      0x0F
++#define VBOOT_NV_BOOT2_RESULT        0x03
++#define VBOOT_NV_BOOT2_TRIED         0x04
++#define VBOOT_NV_BOOT2_TRY_NEXT      0x08
++
++//
++// Boots vboot gives a new slot before it falls back to the other one, if
++// the payload of the new slot never reports that it booted.
++//
++#define VBOOT_AB_TRY_COUNT  2
++
++/**
++  Whether a manifest names the two RW slots of vboot, each once; it may name
++  other regions too.
++
++  @param[in]  Entries  Manifest entries.
++  @param[in]  Count    Number of entries.
++  @param[out] IndexA   Entry of RW_SECTION_A.
++  @param[out] IndexB   Entry of RW_SECTION_B.
++
++  @retval TRUE   The manifest has RW_SECTION_A and RW_SECTION_B.
++  @retval FALSE  It does not.
++**/
++BOOLEAN
++FmpVbootFindSlots (
++  IN  CONST REGION_MANIFEST_ENTRY  *Entries,
++  IN  UINTN                        Count,
++  OUT UINTN                        *IndexA,
++  OUT UINTN                        *IndexB
++  );
++
++/**
++  CRC-8 of a V1 record, as vboot computes it (x^8 + x^2 + x + 1).
++**/
++UINT8
++FmpVbootNvCrc8 (
++  IN CONST UINT8  *Data,
++  IN UINTN        Size
++  );
++
++/**
++  Find the current record in the contents of RW_NVRAM.
++
++  @param[in]  Region      The region.
++  @param[in]  Size        Its size, a multiple of VBOOT_NV_RECORD_SIZE.
++  @param[out] Record      The current record if it is valid, otherwise an
++                          empty valid one, as vboot would start from.
++  @param[out] NextOffset  Offset of the first erased record, where the next
++                          one goes; Size if the region is full.
++
++  @retval TRUE   The current record is valid.
++  @retval FALSE  There is none, or it is corrupted.
++**/
++BOOLEAN
++FmpVbootNvFindCurrent (
++  IN  CONST UINT8  *Region,
++  IN  UINTN        Size,
++  OUT UINT8        Record[VBOOT_NV_RECORD_SIZE],
++  OUT UINTN        *NextOffset
++  );
++
++/**
++  The slot that vboot booted, 0 for A and 1 for B.
++**/
++UINTN
++FmpVbootNvTriedSlot (
++  IN CONST UINT8  Record[VBOOT_NV_RECORD_SIZE]
++  );
++
++/**
++  Ask vboot to try Slot on the next boots: try_next, and the try count.
++**/
++VOID
++FmpVbootNvSetTryNext (
++  IN OUT UINT8  Record[VBOOT_NV_RECORD_SIZE],
++  IN     UINTN  Slot,
++  IN     UINT8  Tries
++  );
+-- 
+2.43.0
+

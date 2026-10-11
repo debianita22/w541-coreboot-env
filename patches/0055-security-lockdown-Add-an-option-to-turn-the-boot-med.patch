@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:03:16 +0200
+Subject: [PATCH] security/lockdown: Add an option to turn the boot media lock
+ off
+
+The boot media protection (BOOTMEDIA_LOCK_*) is set at build time: once
+a firmware write-protects its RO region, the only way to write that
+region again is an external programmer, or a build without the lock.
+
+Add BOOTMEDIA_LOCK_RUNTIME_OPTION: the protection is applied only if
+the "bootmedia_lock" option is set, the default when it is missing, so
+that a setup menu can turn it off for a boot that writes the region with
+flashrom. This mirrors BOOTMEDIA_SMM_BWP_RUNTIME_OPTION for the BIOS
+lock.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/security/lockdown/Kconfig    | 10 ++++++++++
+ src/security/lockdown/lockdown.c |  6 ++++++
+ src/security/lockdown/lockdown.h |  7 +++++++
+ 3 files changed, 23 insertions(+)
+
+diff --git a/src/security/lockdown/Kconfig b/src/security/lockdown/Kconfig
+index 22e97c68b..49ac27415 100644
+--- a/src/security/lockdown/Kconfig
++++ b/src/security/lockdown/Kconfig
+@@ -96,6 +96,16 @@ config BOOTMEDIA_LOCK_IN_VERSTAGE
+ 	  ramstage, like the MRC cache for example.
+ 	  Use this option if you don't trust code running after verstage.
+ 
++config BOOTMEDIA_LOCK_RUNTIME_OPTION
++	bool "Read whether to lock the boot media from an option"
++	depends on !BOOTMEDIA_LOCK_NONE
++	depends on !OPTION_BACKEND_NONE
++	help
++	  Apply the boot media protection only if the "bootmedia_lock" option
++	  is set (the default when it is missing), so that the protected
++	  regions can be made writable again from the setup menu, for instance
++	  to write them with flashrom.
++
+ config BOOTMEDIA_SMM_BWP
+ 	bool "Boot media only writable in SMM"
+ 	depends on !CONSOLE_SPI_FLASH
+diff --git a/src/security/lockdown/lockdown.c b/src/security/lockdown/lockdown.c
+index 6a75111f6..11a52ecdc 100644
+--- a/src/security/lockdown/lockdown.c
++++ b/src/security/lockdown/lockdown.c
+@@ -5,6 +5,7 @@
+ #include <console/console.h>
+ #include <bootstate.h>
+ #include <fmap.h>
++#include <security/lockdown/lockdown.h>
+ 
+ /*
+  * Enables read- /write protection of the bootmedia.
+@@ -15,6 +16,11 @@ void boot_device_security_lockdown(void)
+ 	struct region_device dev;
+ 	enum bootdev_prot_type lock_type;
+ 
++	if (!enable_bootmedia_lock()) {
++		printk(BIOS_INFO, "BM-LOCKDOWN: Boot media protection off (option bootmedia_lock)\n");
++		return;
++	}
++
+ 	printk(BIOS_DEBUG, "BM-LOCKDOWN: Enabling boot media protection scheme ");
+ 
+ 	if (CONFIG(BOOTMEDIA_LOCK_CONTROLLER)) {
+diff --git a/src/security/lockdown/lockdown.h b/src/security/lockdown/lockdown.h
+index b81e636c3..aad1714be 100644
+--- a/src/security/lockdown/lockdown.h
++++ b/src/security/lockdown/lockdown.h
+@@ -13,4 +13,11 @@ static inline bool enable_smm_bios_protection(void)
+ 	return CONFIG(BOOTMEDIA_SMM_BWP);
+ }
+ 
++static inline bool enable_bootmedia_lock(void)
++{
++	if (CONFIG(BOOTMEDIA_LOCK_RUNTIME_OPTION))
++		return get_uint_option("bootmedia_lock", 1);
++	return !CONFIG(BOOTMEDIA_LOCK_NONE);
++}
++
+ #endif /* SECURITY_LOCKDOWN_LOCKDOWN_H */
+-- 
+2.43.0
+

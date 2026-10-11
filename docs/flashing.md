@@ -8,18 +8,27 @@ The images use the map in [`configs/w541.fmd`](../configs/w541.fmd):
 |---|---|---|
 | `0x000000-0x4FFFFF` | 8 MiB | descriptor, GbE, Intel ME: the same in every release, from `blobs/` |
 | `0x500000-0x597FFF` | 8 MiB | `RW_MRC_CACHE`, `SMMSTORE`, `RO_VPD`, `RW_ELOG`: written by coreboot at runtime, empty in the image |
-| `0x598000-0x7FFFFF` | 8 MiB | unused |
-| `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and CBFS: all of coreboot |
+| `0x5A0000-0x5BFFFF` | 8 MiB | `RW_NVRAM` (vboot's state) and `RECOVERY_MRC_CACHE`, empty in the image |
+| `0x5C0000-0x88FFFF` | both | `RW_SECTION_A`: slot A (romstage, ramstage, payload), signed |
+| `0x890000-0xB5FFFF` | 4 MiB | `RW_SECTION_B`: slot B, the same |
+| `0xB60000-0xBFFFFF` | 4 MiB | `WP_RO`: FMAP, vboot's root key, bootblock, `mrc.bin`, microcode |
 
-Each release has the complete image and the two chip images. From v1.2.0
-on the laptop, later releases install from Linux with their capsule,
-without flashrom ([docs/update.md](update.md)); flashrom stays for the first
-install of v1.2.0 or later, for switching variant, and for older releases.
+This is the map of v1.3.0 and later, with vboot and two RW slots
+([docs/vboot.md](vboot.md)). Up to v1.2.x, `0x598000-0x7FFFFF` was unused and
+`0x800000-0xBFFFFF` held `FMAP` and all of coreboot.
+
+Each release has the complete image and the two chip images. On a laptop
+that runs v1.3.0 or later, later releases install from Linux or from the
+setup menu with their capsule, without flashrom ([docs/update.md](update.md));
+flashrom is for the first install of v1.3.0 (from v1.2.x, see
+[From v1.2.x to v1.3.0](#from-v12x-to-v130), or from other firmware), for
+switching variant, and for an update of the read-only part.
 
 - [Before you start](#before-you-start)
 - [Boot loader fallback path](#boot-loader-fallback-path)
 - [Serial number and machine type (VPD)](#serial-number-and-machine-type-vpd)
 - [Internal update](#internal-update)
+- [From v1.2.x to v1.3.0](#from-v12x-to-v130)
 - [First boot and settings](#first-boot-and-settings)
 - [Diagnosing a hang](#diagnosing-a-hang)
 - [External programmer](#external-programmer)
@@ -29,8 +38,9 @@ install of v1.2.0 or later, for switching variant, and for older releases.
 
 - The laptop must already run coreboot with a writable flash, like the 4.22
   image in `legacy/` and every image from this repository (unlocked
-  descriptor, `BOOTMEDIA_LOCK_NONE`, *BIOS Lock* off in the setup menu, its
-  default). The Lenovo firmware does not allow it: the first flash needs an
+  descriptor, *BIOS Lock* off in the setup menu, its default; from v1.3.0
+  also *Firmware protection* off, see [Internal update](#internal-update)).
+  The Lenovo firmware does not allow it: the first flash needs an
   [external programmer](#external-programmer).
 - AC adapter connected, battery charged.
 - `flashrom` (`sudo apt install flashrom`). With two chips it switches to
@@ -129,14 +139,21 @@ python3 tools/vpd.py show vpd.rom          # before flashing: what goes into RO_
 sudo dmidecode -t system | grep -E 'Product|Version|Serial|UUID|SKU|Family'   # after a reboot
 ```
 
-An update with flashrom rewrites the whole BIOS region, `RO_VPD` included:
+An update with flashrom of the whole BIOS region rewrites `RO_VPD` too:
 copy the VPD into the new image first, as in [Internal update](#internal-update).
-An update with a capsule ([docs/update.md](update.md)) leaves it alone.
+An update with a capsule ([docs/update.md](update.md)), and the move from
+v1.2.x to v1.3.0 ([below](#from-v12x-to-v130)), leave it alone.
 
 ## Internal update
 
+From v1.3.0, update with the capsule ([docs/update.md](update.md)); this
+is for the cases a capsule does not cover. On a laptop that runs v1.3.0 or
+later, turn off *Firmware protection* first (*Security* → *Flash
+protection*), save and reboot: otherwise flashrom cannot write `WP_RO`, and
+stops with an error at its first block. Turn it on again afterwards.
+
 ```sh
-sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.2-mrc.rom
+sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.3.0-mrc.rom
 ```
 
 `--ifd -i bios` writes only the BIOS region (`0x500000-0xBFFFFF`) and keeps
@@ -162,6 +179,29 @@ update ([docs/update.md](update.md)) works with it on.
 To switch between the `mrc` and `nri` variants, flash the other image the
 same way.
 
+## From v1.2.x to v1.3.0
+
+v1.3.0 moves to the map of vboot, with two RW slots: its capsule does not
+install on v1.2.x (other ESRT GUIDs, another flash layout; `update.py
+stage` says so), so it goes in once with flashrom. The regions written at
+runtime are at the same offsets in both maps: write everything else, and
+settings, boot entries, Secure Boot keys, supervisor password, VPD and event
+log stay, with no `tools/vpd.py copy`. *BIOS Lock* must be off (v1.2.x has
+no *Firmware protection*).
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+sudo flashrom -p internal -r backup-$(date +%F).rom        # whole 12 MiB, keep it off the laptop
+sudo flashrom -p internal --fmap-file w541-coreboot-v1.3.0-mrc.rom \
+  -i RW_MRC_CACHE -i RW_UNUSED -i RW_NVRAM -i RECOVERY_MRC_CACHE \
+  -i RW_SECTION_A -i RW_SECTION_B -i WP_RO -w w541-coreboot-v1.3.0-mrc.rom
+```
+
+`--fmap-file` takes the map of the new image; flashrom must end with
+`VERIFIED`, and if it does not, write again straight away. The first boot
+trains the memory (a few seconds of black screen) and boots slot A. Then
+`sudo python3 tools/update.py status` shows *mappa: vboot*, and the next
+releases install with their capsule.
 ## First boot and settings
 
 - The first boot trains the memory and saves the result in `RW_MRC_CACHE`:
@@ -290,10 +330,12 @@ and the Lenovo hardware maintenance manual show how to reach them.
 
   Add `-c <chip>` if flashrom lists several matching chips.
 
-`-4mb-chip.rom` is all of coreboot. It boots with an 8 MiB chip that
-already carries a coreboot image for this layout, from this repository or
-from the builds in `legacy/`: the runtime regions on that chip may hold
-anything, coreboot and EDK2 check them and start over.
+From v1.3.0, `-4mb-chip.rom` holds the read-only part and slot B, enough
+to boot: slot A, which also takes part of the 8 MiB chip, does not verify
+until it is written again, and vboot boots slot B. It works with an 8 MiB
+chip that carries any image of this repository or of `legacy/`: the runtime
+regions on that chip may hold anything, coreboot and EDK2 check them and
+start over. (Up to v1.2.x, `-4mb-chip.rom` was all of coreboot.)
 
 `-8mb-chip.rom` carries the descriptor, the ME and the **MAC address of the
 machine the blobs come from**. Write it only to a chip you cannot keep
@@ -312,10 +354,12 @@ converting a laptop needs its own backup processed as in `legacy/`
 
 ## Recovery
 
-If the laptop does not boot after a flash, or after a capsule update cut
-short, write the 4 MiB chip externally with a working image: the
-`-4mb-chip.rom` of a previous release, or the last 4 MiB of your backup. The 8 MiB chip needs writing only if it was changed
-(see above for an image with your own descriptor and MAC address).
+If the laptop does not boot after a flash, write the 4 MiB chip externally
+with a working image: the `-4mb-chip.rom` of a release, or the last 4 MiB of
+your backup. The 8 MiB chip needs writing only if it was changed (see above
+for an image with your own descriptor and MAC address). From v1.3.0 a
+capsule update cut short does not need this: vboot boots the old slot
+([docs/vboot.md](vboot.md)).
 
 ```sh
 dd if=backup1.rom of=backup-4mb.rom bs=1M skip=8      # 0x800000-0xBFFFFF

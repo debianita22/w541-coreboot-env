@@ -1,8 +1,10 @@
 # Firmware updates with UEFI capsules
 
-From v1.2.0 each release also has a signed UEFI capsule per variant,
+Each release also has a signed UEFI capsule per variant,
 `w541-coreboot-vX.Y.Z-mrc.cap` and `-nri.cap`. A W541 that already runs
-v1.2.0 or later installs it from Linux, without flashrom:
+v1.3.0 or later installs it from Linux, without flashrom (v1.2.x, with the
+flash map before vboot, installs the capsules of v1.2.x only: see
+[The first time](#the-first-time)):
 
 ```sh
 curl -LO https://raw.githubusercontent.com/debianita22/w541-coreboot-env/main/tools/update.py
@@ -12,8 +14,10 @@ sudo systemctl reboot
 ```
 
 At the next boot the firmware checks the capsule, writes it with a progress
-bar under the logo (about a minute; do not power off), and starts again on
-the new version.
+bar under the logo (about a minute), and starts again on the new version.
+From v1.3.0 it writes the RW slot that is not running, and vboot goes back
+to the old one if the new one does not verify or does not boot
+([docs/vboot.md](vboot.md)).
 
 - [What changes and what stays](#what-changes-and-what-stays)
 - [The first time](#the-first-time)
@@ -30,28 +34,40 @@ the new version.
 ## What changes and what stays
 
 A capsule carries the whole 12 MiB image of the release, but the firmware
-writes only two of its regions ([flash map](flashing.md)):
+writes only a few of its regions ([flash map](flashing.md)):
 
 | Region | |
 |---|---|
-| `COREBOOT` (FMAP and CBFS, the 4 MiB chip) | **written**: the new firmware |
+| `RW_SECTION_A` or `RW_SECTION_B` | **written**, the slot that is not running: the new firmware |
+| the other slot | kept: the firmware that runs now, where vboot goes back if the new one fails |
 | `RW_MRC_CACHE` | **erased**: the first boot trains the memory again, a few seconds longer |
+| `RW_NVRAM` | a record appended: *try* the new slot, two tries |
+| `WP_RO` | kept: bootblock, vboot's root key, `mrc.bin` |
 | `SMMSTORE` | kept: settings, boot entries, Secure Boot keys, supervisor password |
 | `RO_VPD` | kept: serial number, machine type, UUID |
 | `RW_ELOG` | kept: event log |
 | descriptor, GbE, ME | kept |
 
+(Up to v1.2.x: `COREBOOT`, the whole 4 MiB chip, and `RW_MRC_CACHE`.)
+
 So, unlike flashrom, a capsule needs no `tools/vpd.py copy` and resets no
 setting. Blocks that are already identical are not written again.
-*BIOS Lock* can stay on: the firmware writes the capsule itself, from SMM.
+*BIOS Lock* and *Firmware protection* can stay on: the firmware writes the
+capsule itself, from SMM, and never `WP_RO`.
 
 ## The first time
 
-The firmware that applies capsules is v1.2.0. Install v1.2.0, or any later
-release, once with flashrom, as in [docs/flashing.md](flashing.md#internal-update)
+The capsules of v1.3.0 and later need a firmware with the same flash map,
+v1.3.0 or later. Install it once with flashrom: from v1.2.x as in
+[docs/flashing.md](flashing.md#from-v12x-to-v130) (settings and VPD stay),
+from other firmware as in [docs/flashing.md](flashing.md#internal-update)
 (VPD copied into the image first, *BIOS Lock* off). From there on, every
 update can be a capsule. `update.py status` tells whether the running
-firmware applies them.
+firmware applies them (*mappa*: *vboot*, or *senza vboot* for v1.2.x), and `stage` refuses a
+capsule for the other map.
+
+v1.2.0 to v1.2.2 apply the capsules of v1.2.x, which rewrite the whole
+4 MiB chip, without A/B.
 
 ## tools/update.py
 
@@ -91,10 +107,16 @@ for that boot only, and the payload, before anything else runs:
 3. reads and deletes the files in `\EFI\UpdateCapsule` of every EFI system
    partition and USB drive;
 4. verifies each capsule: signature, variant, version, flash layout;
-5. writes it, showing a progress bar under the logo and *Updating the
-   firmware: do not turn off the computer*;
+5. finds the slot that is running in `RW_NVRAM`, writes the other one,
+   showing a progress bar under the logo and *Updating the firmware: do not
+   turn off the computer*, and asks vboot to try it at the next boot;
 6. shows *Firmware updated, restarting* (or *failed* and the reason) and
    restarts.
+
+The next boot runs the new slot; when it reaches the boot logo, the payload
+tells vboot that it works. If it does not verify, or two boots in a row do
+not get that far, vboot boots the old slot: `update.py status` then shows
+the old version.
 
 A capsule that fails a check writes nothing: the laptop restarts on the old
 firmware, and `update.py status` shows why (*firma non valida*: signature,
@@ -171,11 +193,13 @@ A pre-release has the number of its release: v1.3.0-rc1 and v1.3.0 are both
 1.3.0, so going from one to the other needs `--allow-older`.
 
 The firmware refuses capsules older than its lowest supported version,
-v1.2.0: an older release goes back with flashrom. Older capsules from v1.2.0
-up install with `--allow-older`.
+v1.3.0 (v1.2.0 for v1.2.x): an older release goes back with flashrom. Older
+capsules from that version up install with `--allow-older`.
 
 `mrc` and `nri` are different firmware for the ESRT (each its own GUID):
-a capsule installs only on its own variant. To switch variant, flash the
+a capsule installs only on its own variant. The GUIDs changed with the flash
+map in v1.3.0, so fwupd and other tools do not offer a v1.3.0 package to a
+v1.2.x firmware. To switch variant, flash the
 other image with flashrom ([docs/flashing.md](flashing.md#internal-update)).
 
 ## Without tools/update.py
@@ -206,14 +230,14 @@ Any tool that delivers capsules on disk works the same way:
   on, stage the capsule again.
 - *No firmware update found*: the bit was set but there was no file on an
   ESP; the laptop boots on.
-- Power lost while writing: the 4 MiB chip may be incomplete and the laptop
-  may not start. Recover it with an external programmer and the
-  `-4mb-chip.rom` of a release, as in [docs/flashing.md](flashing.md#recovery).
-  Settings, VPD and event log are on the other chip and survive. Keep the
-  programmer at hand for the first capsule update of a laptop: it is the
-  first time the firmware writes the 4 MiB chip itself (a capsule of the
-  version already installed writes nothing there, all its blocks are the
-  same).
+- Power lost while writing: from v1.3.0 the slot being written does not
+  verify, and vboot boots the old one; stage the capsule again. Up to
+  v1.2.x the 4 MiB chip may be incomplete and the laptop may not start:
+  recover it with an external programmer and the `-4mb-chip.rom` of a
+  release, as in [docs/flashing.md](flashing.md#recovery).
+- The new version does not show up after the update: vboot went back to the
+  old slot (the new one did not verify, or did not boot twice). The event
+  log and `cbmem -c` (*vboot*, *falling back*) tell why.
 
 The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 
@@ -232,11 +256,13 @@ The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
   signature against the certificate built into the ROM
   (`keys/capsule-signing.pem`) and the version against the lowest supported
   one; `FmpDeviceSmmLib` writes the regions listed by the manifest appended
-  to the image (`RW_MRC_CACHE COREBOOT`, `CAPSULE_REGIONS` in
-  `tools/build.sh`), through the SMMSTORE handler. An image without a
-  manifest, or whose regions are not where the running firmware's flash map
-  has them, is refused: upstream, such an image rewrites the whole BIOS
-  region, settings and VPD included.
+  to the image (`RW_MRC_CACHE RW_SECTION_A RW_SECTION_B`, `CAPSULE_REGIONS`
+  in `tools/build.sh`), through the SMMSTORE handler: of the two slots only
+  the one that is not running, then a record in `RW_NVRAM` with *try next*
+  and two tries (patch `edk2/0015`). An image without a manifest, or whose
+  regions are not where the running firmware's flash map has them, is
+  refused: upstream, such an image rewrites the whole BIOS region, settings
+  and VPD included.
 - After writing, the payload restarts. Without anything to write, it gives
   the whole-flash access back to coreboot (patch 0050) before Driver####
   options, option ROMs or the OS run, or restarts if that fails. It asks the

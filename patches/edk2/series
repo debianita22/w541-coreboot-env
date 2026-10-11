@@ -11,3 +11,6 @@
 0011-UefiPayloadPkg-Make-the-FMP-of-CAPSULE_MAIN_FW_GUID-.patch
 0012-UefiPayloadPkg-PlatformBootManagerLib-Capsules-on-di.patch
 0013-UefiPayloadPkg-Add-a-Firmware-Update-setup-page.patch
+0014-UefiPayloadPkg-Tell-coreboot-that-the-firmware-boote.patch
+0015-UefiPayloadPkg-FmpDeviceSmmLib-Update-one-vboot-slot.patch
+0016-UefiPayloadPkg-FmpDeviceSmmLib-Print-the-manifest-en.patch

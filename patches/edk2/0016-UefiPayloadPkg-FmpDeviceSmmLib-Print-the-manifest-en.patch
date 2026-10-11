@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:30:26 +0200
+Subject: [PATCH] UefiPayloadPkg/FmpDeviceSmmLib: Print the manifest entry
+ count with %a
+
+The debug message on the region manifest prints "y" or "ies" with %s,
+which in DEBUG () is a CHAR16 string: it prints the memory after the
+ASCII string until it finds a NUL CHAR16. Use %a.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+index 0916b62cba..4fe7bb37f4 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+@@ -1802,7 +1802,7 @@ FmpDeviceSetImageWithStatus (
+   } else {
+     DEBUG ((
+       DEBUG_INFO,
+-      "%a(): found region manifest (%u entr%s), base image size 0x%x\n",
++      "%a(): found region manifest (%u entr%a), base image size 0x%x\n",
+       __func__,
+       (UINT32)ManifestEntryCount,
+       (ManifestEntryCount == 1) ? "y" : "ies",
+-- 
+2.43.0
+

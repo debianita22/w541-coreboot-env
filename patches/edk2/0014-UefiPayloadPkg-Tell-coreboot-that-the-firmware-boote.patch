@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:30:25 +0200
+Subject: [PATCH] UefiPayloadPkg: Tell coreboot that the firmware booted
+
+coreboot with vboot and two RW slots tries a new slot for a few boots
+after an update, and falls back to the other slot when the tries run
+out, unless a boot records that the new slot works. On ChromeOS the OS
+does it; here the payload knows first.
+
+Add SmmStoreLibVbootSlotGood(), which sends SMMSTORE_CMD_VBOOT_SLOT_GOOD
+to the SMMSTORE handler of coreboot, and call it from
+PlatformBootManagerAfterConsole(): a slot that boots the payload to its
+console is kept. Without vboot, coreboot answers that the command is
+unsupported, and nothing changes.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/Include/Library/SmmStoreLib.h  | 15 ++++++++++++
+ .../PlatformBootManager.c                     |  5 ++++
+ .../PlatformBootManager.h                     |  9 +++++++
+ .../PlatformBootManagerLib/PlatformCapsule.c  | 24 +++++++++++++++++++
+ UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c | 22 +++++++++++++++++
+ UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h |  5 ++++
+ 6 files changed, 80 insertions(+)
+
+diff --git a/UefiPayloadPkg/Include/Library/SmmStoreLib.h b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+index 950ecf826f..fab6c3385a 100644
+--- a/UefiPayloadPkg/Include/Library/SmmStoreLib.h
++++ b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+@@ -160,6 +160,21 @@ SmmStoreLibEndAnyBlockAccess (
+   VOID
+   );
+ 
++/**
++  Tell coreboot that the firmware booted: if vboot is trying the RW slot that
++  runs, the slot works and is kept.
++
++  @retval EFI_SUCCESS      coreboot recorded it, or had nothing to record.
++  @retval EFI_NO_MEDIA     SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED  coreboot has no vboot nvdata in flash.
++  @retval others           The handler failed.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootSlotGood (
++  VOID
++  );
++
+ /**
+   Function to update a pointer on virtual address change.  Matches the signature
+   and operation of EfiConvertPointer.
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+index 5fa9462bb6..58fc80bc74 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+@@ -475,6 +475,11 @@ PlatformBootManagerAfterConsole (
+     EfiBootManagerRefreshAllBootOption ();
+   }
+ 
++  //
++  // The firmware boots: a new vboot slot is kept.
++  //
++  PlatformMarkFirmwareGood ();
++
+   //
+   // Process TPM PPI request
+   //
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+index 9085f89771..7e63564cdb 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+@@ -163,3 +163,12 @@ BOOLEAN
+ PlatformProcessCapsules (
+   VOID
+   );
++
++/**
++  Tell coreboot that the firmware booted, so that vboot keeps a new RW slot
++  that it is trying.
++**/
++VOID
++PlatformMarkFirmwareGood (
++  VOID
++  );
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+index 3cdae2ad4e..b7f3897255 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+@@ -478,6 +478,30 @@ CapsuleApply (
+   }
+ }
+ 
++/**
++  Tell coreboot that the firmware booted: with vboot, a new RW slot that it is
++  trying (after an update) is then kept, instead of being given up for the
++  other one when its tries run out.  Called once the console is up.
++**/
++VOID
++PlatformMarkFirmwareGood (
++  VOID
++  )
++{
++  EFI_STATUS  Status;
++
++  if (EFI_ERROR (SmmStoreLibInitialize ())) {
++    return;
++  }
++
++  Status = SmmStoreLibVbootSlotGood ();
++  if (Status != EFI_UNSUPPORTED) {
++    DEBUG ((DEBUG_INFO, "Capsules: firmware slot marked good: %r\n", Status));
++  }
++
++  SmmStoreLibDeinitialize ();
++}
++
+ /**
+   Apply the update capsules of this boot, if it has any, and reset after
+   applying one.  Otherwise make sure that the whole flash is no longer
+diff --git a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+index 875b7269b6..e7a6b73c73 100644
+--- a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
++++ b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+@@ -408,6 +408,28 @@ SmmStoreLibEndAnyBlockAccess (
+   return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_USE_FULL_FLASH, 0);
+ }
+ 
++/**
++  Tell coreboot that the firmware booted: if vboot is trying the RW slot that
++  runs, the slot works and is kept.
++
++  @retval EFI_SUCCESS      coreboot recorded it, or had nothing to record.
++  @retval EFI_NO_MEDIA     SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED  coreboot has no vboot nvdata in flash.
++  @retval others           The handler failed.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootSlotGood (
++  VOID
++  )
++{
++  if (mSmmStoreInfo == NULL) {
++    return EFI_NO_MEDIA;
++  }
++
++  return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_VBOOT_SLOT_GOOD, mArgComBufPhys);
++}
++
+ /**
+   Fixup internal data so that EFI can be called in virtual mode.
+   Converts any pointers in lib to virtual mode. This function is meant to
+diff --git a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
+index 6d776756cf..2e78cc89ee 100644
+--- a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
++++ b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
+@@ -19,6 +19,11 @@
+ #define SMMSTORE_CMD_RAW_WRITE  6
+ #define SMMSTORE_CMD_RAW_CLEAR  7
+ 
++//
++// coreboot with vboot: mark the RW slot being tried as working.
++//
++#define SMMSTORE_CMD_VBOOT_SLOT_GOOD  8
++
+ /* Used by capsule updates as a standalone command or modifier to v2 commands */
+ #define SMMSTORE_CMD_USE_FULL_FLASH  0x80
+ 
+-- 
+2.43.0
+

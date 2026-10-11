@@ -50,3 +50,8 @@
 0050-drivers-smmstore-Let-the-payload-end-the-full-flash-.patch
 0051-payloads-external-edk2-Write-the-capsule-certificate.patch
 0052-drivers-smmstore-Don-t-leave-the-full-flash-decision.patch
+0053-mb-lenovo-haswell-Add-an-option-to-keep-the-RO-regio.patch
+0054-drivers-smmstore-Let-the-payload-mark-the-vboot-slot.patch
+0055-security-lockdown-Add-an-option-to-turn-the-boot-med.patch
+0056-mb-lenovo-haswell-Add-Firmware-protection-to-the-set.patch
+0057-security-vboot-Add-an-option-to-leave-the-TPM-to-ram.patch

@@ -190,9 +190,9 @@ EOF
 | File | Use |
 |---|---|
 | \`${rom}\` | **complete 12 MiB flash image**: descriptor (IFD), GbE, Intel ME and coreboot |
-| \`${chip4}\` | its last 4 MiB: all of coreboot, for an external programmer on the 4 MiB chip |
+| \`${chip4}\` | its last 4 MiB: the read-only part and slot B, enough to boot, for an external programmer on the 4 MiB chip |
 | \`${chip8}\` | its first 8 MiB: descriptor, GbE and ME of the machine the blobs come from, for the 8 MiB chip |
-| \`${cap}\` | **signed UEFI capsule**: updates from Linux a W541 that already runs v1.2.0 or later, with \`tools/update.py\` |
+| \`${cap}\` | **signed UEFI capsule**: updates from Linux a W541 that already runs v1.3.0 or later, with \`tools/update.py\` |
 | \`${cab}\` | the same capsule as an **fwupd package** (\`fwupdmgr install\`, once the project certificate is in \`/etc/pki/fwupd\`) |
 | \`${cfg}\` | the complete coreboot \`.config\` |
 | \`${lay}\` | flash layout (FMAP) and CBFS contents |
@@ -203,14 +203,19 @@ byte-identical to the coreboot 4.22 image in \`legacy/coreboot-4.22\`:
 unlocked regions, ME reduced by \`me_cleaner -S\`, and the GbE region with the
 MAC address of the machine these blobs come from. Then, still on the 8 MiB
 chip, the regions coreboot writes at runtime (RAM training, UEFI variables,
-VPD, event log), empty. coreboot itself is alone on the 4 MiB chip. An
+VPD, event log, vboot's state), empty; then the two RW slots, A and B, each
+signed, and at the top of the 4 MiB chip the read-only part, which verifies
+a slot before it runs it
+([docs/vboot.md](https://github.com/${repo}/blob/main/docs/vboot.md)). An
 update from Linux writes only the BIOS region, as below: it keeps the
 machine's own descriptor, ME and MAC address.
 
-**Update with the capsule**, on a W541 that already runs v1.2.0 or later:
-the firmware checks the signature, rewrites coreboot in about a minute and
-starts again; settings, boot entries, Secure Boot keys, VPD and event log
-stay, and *BIOS Lock* can stay on
+**Update with the capsule**, on a W541 that already runs v1.3.0 or later:
+the firmware checks the signature, writes the slot that is not running in
+about a minute and starts again on it; if the new slot does not verify or
+does not boot, vboot goes back to the old one. Settings, boot entries,
+Secure Boot keys, VPD and event log stay, and *BIOS Lock* and *Firmware
+protection* can stay on
 ([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md)).
 
 \`\`\`sh
@@ -223,10 +228,27 @@ Or with fwupd, once the project certificate is trusted
 ([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#fwupd)):
 \`sudo fwupdmgr install ${cab}\`, then reboot.
 
-**Update with flashrom**, the first time (from earlier versions or other
-firmware), on a W541 that already runs coreboot with an unlocked flash: only
-the BIOS region is written (details, VPD and recovery in
+**From v1.2.x**: v1.3.0 changed the flash map (vboot, two RW slots), so a
+v1.2.x firmware does not take its capsule. Write it once with flashrom,
+every region except those written at runtime, which are where they were:
+settings, boot entries, Secure Boot keys, VPD and event log stay. *BIOS
+Lock* must be off
+([details](https://github.com/${repo}/blob/main/docs/flashing.md#from-v12x-to-v130)).
+
+\`\`\`sh
+sha256sum -c SHA256SUMS --ignore-missing
+sudo flashrom -p internal -r backup-\$(date +%F).rom        # whole 12 MiB, keep it off the laptop
+sudo flashrom -p internal --fmap-file ${rom} \\
+  -i RW_MRC_CACHE -i RW_UNUSED -i RW_NVRAM -i RECOVERY_MRC_CACHE \\
+  -i RW_SECTION_A -i RW_SECTION_B -i WP_RO -w ${rom}
+\`\`\`
+
+**Update with flashrom**, from older versions or other firmware, on a W541
+that already runs coreboot with an unlocked flash: only the BIOS region is
+written (details, VPD and recovery in
 [docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md)).
+From v1.3.0 on the laptop, turn off *Firmware protection* (setup menu,
+*Security*) first.
 
 \`\`\`sh
 sha256sum -c SHA256SUMS --ignore-missing
@@ -235,8 +257,8 @@ ls -l backup-*.rom                                        # 12582912 bytes (8388
 sudo flashrom -p internal --ifd -i bios -w ${rom}
 \`\`\`
 
-**External programmer** (recovery): \`${chip4}\` on the 4 MiB chip is all of
-coreboot; leave the 8 MiB chip as it is. \`${chip8}\` would give the laptop
+**External programmer** (recovery): \`${chip4}\` on the 4 MiB chip boots
+(read-only part and slot B); leave the 8 MiB chip as it is. \`${chip8}\` would give the laptop
 the descriptor, ME and MAC address of another machine: see
 [docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md#external-programmer).
 
@@ -265,7 +287,8 @@ firmware did, from the \`RO_VPD\` flash region, which these images leave
 empty. Write it once with \`tools/vpd.py\`; a capsule update leaves it alone,
 flashrom rewrites it, so copy it into the image first (\`tools/vpd.py copy\`,
 [how](https://github.com/${repo}/blob/main/docs/flashing.md#serial-number-and-machine-type-vpd)).
-*BIOS Lock* (setup menu, *Security*) must be off to flash with flashrom.
+*BIOS Lock* (setup menu, *Security*) must be off to flash with flashrom, and
+*Firmware protection* too to write the whole BIOS region.
 
 Inside: coreboot \`${cbdesc}\` ([${cb:0:12}](https://github.com/coreboot/coreboot/commit/${cb}))
 with [${npatch} patches](https://github.com/${repo}/tree/${sha}/patches), EDK2 payload

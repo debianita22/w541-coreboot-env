@@ -27,3 +27,34 @@ field trust the old certificate until they run a firmware with the new one:
 the first release signed with the new key installs with flashrom, or comes
 after one transition release signed with the old key that carries the new
 certificate.
+
+## vboot
+
+[`vboot/`](vboot/) holds the public keys of verified boot
+([docs/vboot.md](../docs/vboot.md)), RSA-4096 with SHA-256, made by
+`tools/vboot-keys.sh`:
+
+| File | |
+|---|---|
+| `root_key.vbpubk` | the root key, in the GBB of `WP_RO`: a ROM runs only RW slots whose keyblock this key signed |
+| `firmware.keyblock` | the firmware data key signed by the root key (flags 7: normal and developer mode) |
+| `firmware_data_key.vbpubk` | the key that signs the slots (`VBLOCK_A`, `VBLOCK_B`) |
+| `recovery_key.vbpubk`, `kernel_subkey.vbpubk` | required in the GBB by coreboot's build; unused (no recovery firmware, no kernel verification) |
+
+```sh
+sha256sum keys/vboot/root_key.vbpubk keys/vboot/firmware_data_key.vbpubk
+# 4f14301e34ec883c73f4f60f62ec1d036c187d418e81f7ff7f17630baa48714b  root_key.vbpubk
+# 37f53ecbc778a295cda2e1522d5fc3626a68b8c25177ca89c853267aa41a412d  firmware_data_key.vbpubk
+```
+
+The private firmware data key is the GitHub Actions secret
+`VBOOT_SIGNING_KEY`, the `.vbprivk` file in base64 on one line
+(`base64 -w0 firmware_data_key.vbprivk`); `tools/build.sh` checks that it
+matches `firmware_data_key.vbpubk`, and a release does not build without it.
+The private root key is only offline: it signs a new `firmware.keyblock`, if
+the data key is ever replaced. `tools/ci-check.sh` fails on a `.vbprivk` in
+the repository.
+
+A new data key, signed by the same root key, needs no flashrom: the new
+keyblock goes in the slots. A new root key does: a ROM trusts the one in its
+`WP_RO`, which capsules never write.

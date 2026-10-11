@@ -31,9 +31,9 @@ Everything else is the same in the two variants.
 | File | Use |
 |---|---|
 | `w541-coreboot-<version>-<variant>.rom` | complete 12 MiB flash image: descriptor, GbE, Intel ME and coreboot |
-| `…-4mb-chip.rom` | last 4 MiB of the image: all of coreboot, for an external programmer on the 4 MiB chip |
+| `…-4mb-chip.rom` | last 4 MiB of the image: the read-only part and slot B (up to v1.2.x all of coreboot), enough to boot, for an external programmer on the 4 MiB chip |
 | `…-8mb-chip.rom` | first 8 MiB of the image: descriptor, GbE and ME **of the machine the blobs come from**, for the 8 MiB chip |
-| `….cap` | signed UEFI capsule (from v1.2.0): updates a laptop that runs v1.2.0 or later from Linux, without flashrom ([docs/update.md](docs/update.md)) |
+| `….cap` | signed UEFI capsule (from v1.2.0): updates a laptop that runs a release with the same flash map (v1.3.0 or later; v1.2.x for v1.2.x) from Linux, without flashrom ([docs/update.md](docs/update.md)) |
 | `….cab` | the same capsule as an fwupd package (from v1.2.2), signed for fwupd with the same key ([docs/update.md](docs/update.md#fwupd)) |
 | `….config` | the complete coreboot configuration |
 | `…-layout.txt` | flash map (FMAP) and CBFS contents |
@@ -48,15 +48,22 @@ The W541 flash is two chips seen as one 12 MiB space. The layout is
 | `0x001000-0x002FFF` | 8 MiB | GbE, with the MAC address of the machine the blobs come from |
 | `0x003000-0x4FFFFF` | 8 MiB | Intel ME 9.1, reduced with `me_cleaner -S` (ROMP and BUP only, AltMeDisable set) |
 | `0x500000-0x597FFF` | 8 MiB | regions coreboot writes at runtime, empty in the image: `RW_MRC_CACHE` (RAM training), `SMMSTORE` (UEFI variables and settings), `RO_VPD`, `RW_ELOG` (event log) |
-| `0x598000-0x7FFFFF` | 8 MiB | unused (`0xFF`) |
-| `0x800000-0xBFFFFF` | 4 MiB | `FMAP` and `COREBOOT` (CBFS): all of coreboot |
+| `0x5A0000-0x5BFFFF` | 8 MiB | `RW_NVRAM` (vboot's state) and `RECOVERY_MRC_CACHE`, empty in the image |
+| `0x5C0000-0x88FFFF` | both | `RW_SECTION_A`: slot A, romstage, ramstage and payload, signed |
+| `0x890000-0xB5FFFF` | 4 MiB | `RW_SECTION_B`: slot B, the same |
+| `0xB60000-0xBFFFFF` | 4 MiB | `WP_RO`: `FMAP`, vboot's root key (GBB), bootblock with verstage, `mrc.bin`, microcode |
 
-The regions written at runtime sit on the 8 MiB chip, as in the coreboot
-24.08 build the laptop runs today and in Libreboot's images for this board;
-coreboot's default map would put them on the 4 MiB chip, where saving the
-RAM training is not proven to work, and S3 resume depends on it. coreboot
-itself lives alone on the 4 MiB chip, so `…-4mb-chip.rom` is a complete
-coreboot for recovery with an external programmer.
+From v1.3.0 coreboot's vboot verifies a slot before it runs it, and a
+capsule writes the slot that is not running: an update cut short, or one
+that does not boot, falls back to the old slot
+([docs/vboot.md](docs/vboot.md)). The regions written at runtime sit on the
+8 MiB chip, at the same offsets as up to v1.2.x (when `0x598000-0x7FFFFF`
+was unused and `0x800000-0xBFFFFF` held all of coreboot), as in the
+coreboot 24.08 build the laptop ran and in Libreboot's images for this
+board: coreboot's default map would put them on the 4 MiB chip, where
+saving the RAM training is not proven to work, and S3 resume depends on it.
+The 4 MiB chip holds the read-only part and slot B, so `…-4mb-chip.rom`
+boots for recovery with an external programmer.
 
 The first 5 MiB are byte-identical to `legacy/coreboot-4.22/coreboot.rom`,
 the image this project started from: `tools/verify-rom.sh` stops a release
@@ -87,7 +94,7 @@ Inside coreboot:
   |---|---|
   | *General* | model, machine type, serial number and UUID (from the VPD), processor, memory and firmware versions; beeps and volume; NMI |
   | *Energy Saver* | battery charge thresholds (OS controlled, 100%, 80%, 60%), Intel SpeedStep, Turbo Boost, C-states, CPU PL1/PL2 limits, cooling policy (active or passive), USB always on, power-on after power failure |
-  | *Security* | BIOS Lock (flash writable only by the firmware, off by default), memory cleared at power-on, Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
+  | *Security* | BIOS Lock (flash writable only by the firmware, off by default), Firmware protection (the read-only part locked at every boot, on by default), memory cleared at power-on, Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
   | *Keyboard* | Fn/Ctrl swap, F1-F12 or special keys, sticky Fn, keyboard backlight, TrackPoint, touchpad |
   | *Hardware* | NVIDIA GPU, graphics stolen memory (native RAM init only: `mrc.bin` reserves a fixed 32 MiB) and aperture, ExpressCard and Thunderbolt ports, Wi-Fi, Bluetooth, WWAN |
 
@@ -103,10 +110,14 @@ Inside coreboot:
   `tools/elog.py` or coreboot's `elogtool`, and POST codes kept in CMOS, so
   that the boot after a hang logs where it stopped
   ([docs/flashing.md](docs/flashing.md#diagnosing-a-hang));
+- verified boot with two RW slots (from v1.3.0): vboot checks the RSA-4096
+  signature of a slot before it runs it, and boots the other one if it does
+  not verify or does not boot ([docs/vboot.md](docs/vboot.md));
 - firmware updates with signed UEFI capsules (from v1.2.0): `tools/update.py`
   stages the capsule of a release on the EFI system partition, and at the
-  next boot the firmware checks its signature and version and rewrites
-  coreboot, keeping settings, VPD and event log, also with *BIOS Lock* on;
+  next boot the firmware checks its signature and version and writes the
+  slot that is not running, keeping settings, VPD and event log, also with
+  *BIOS Lock* and *Firmware protection* on;
   the version is in the ESRT, and from v1.2.2 each release has an fwupd
   package too, `fwupdmgr install`; without an OS, the *Firmware Update* page
   of the setup installs the capsule from a USB drive
@@ -140,15 +151,16 @@ in `legacy/`), from Linux:
 sha256sum -c SHA256SUMS --ignore-missing
 sudo flashrom -p internal -r backup-$(date +%F).rom      # whole 12 MiB: keep it off the laptop
 ls -l backup-*.rom                                        # must be 12582912 bytes
-sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.0.2-mrc.rom
+sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.3.0-mrc.rom
 ```
 
-The UEFI settings and boot entries start from scratch after flashing. Before
+The UEFI settings and boot entries start from scratch after flashing (from
+v1.2.x to v1.3.0 they can stay: [docs/flashing.md](docs/flashing.md#from-v12x-to-v130)). Before
 you reboot, read [docs/flashing.md](docs/flashing.md): boot loader fallback
 path, serial number and machine type in the VPD (and how to keep them
 across updates), external flashing and recovery.
 
-From v1.2.0 on the laptop, the next releases install with their capsule,
+From v1.3.0 on the laptop, the next releases install with their capsule,
 keeping settings, boot entries and VPD, with *BIOS Lock* on or off
 ([docs/update.md](docs/update.md)):
 
@@ -192,8 +204,10 @@ tools/build.sh --help
 
 A release is made by pushing a version tag (`git tag v1.0.0 && git push origin
 v1.0.0`) or with *Run workflow* and a version. It needs the repository secret
-`CAPSULE_SIGNING_KEY`, the key that signs the capsules
-([keys/README.md](keys/README.md)); test builds go without it. Versions with a hyphen
+`CAPSULE_SIGNING_KEY`, the key that signs the capsules, and
+`VBOOT_SIGNING_KEY`, the one that signs the RW slots
+([keys/README.md](keys/README.md)); test builds go without them (vboot's
+test keys). Versions with a hyphen
 (`v1.1.0-rc1`) or the *prerelease* box give two pre-releases. A pre-release
 that works on the laptop becomes a release without rebuilding it:
 
@@ -210,9 +224,9 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
 | `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump |
-| `keys/` | the certificate of the key that signs the capsules ([keys/README.md](keys/README.md)) |
+| `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
-| `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md) |
+| `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |
 
 ## Binary blobs
 

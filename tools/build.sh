@@ -20,7 +20,9 @@
 #                  nessuna riga del defconfig sia andata persa
 #   roms           .config, build, tools/verify-rom.sh, file in dist/; con
 #                  la chiave in CAPSULE_SIGNING_KEY anche la capsula firmata
-#                  di ogni variante (docs/update.md)
+#                  di ogni variante (docs/update.md). Gli slot RW di vboot si
+#                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
+#                  senza, con le chiavi di prova di vboot: build di prova
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
 #
 # Opzioni:
@@ -42,14 +44,16 @@
 # Ogni ROM e' un'immagine completa del flash da 12 MiB (chip da 8 MiB + chip
 # da 4 MiB), con la mappa di configs/w541.fmd: IFD, GbE e ME di blobs/ nei
 # primi 5 MiB (identici a legacy/coreboot-4.22/coreboot.rom), poi le regioni
-# scritte a ogni avvio (training della RAM, variabili UEFI, VPD), vuote,
-# ancora nel chip da 8 MiB; coreboot (FMAP + CBFS) da solo nel chip da 4 MiB.
-# In dist/ anche le immagini dei due chip, per un programmatore esterno.
-# Dall'interno si aggiorna solo la regione BIOS: flashrom --ifd -i bios
-# (docs/flashing.md), o, dalla v1.2.0, con la capsula (docs/update.md).
+# scritte a ogni avvio (training della RAM, variabili UEFI, VPD, registro,
+# dati di vboot), vuote, nel chip da 8 MiB; i due slot RW di vboot (A a
+# cavallo dei chip, B nel chip da 4 MiB) e la regione RO in cima al chip da
+# 4 MiB. In dist/ anche le immagini dei due chip, per un programmatore
+# esterno. Dall'interno si scrive con flashrom (docs/flashing.md), o, dalla
+# v1.3.0, con la capsula, che scrive uno slot (docs/update.md).
 #
 # La capsula (w541-coreboot-<versione>-<variante>.cap): la ROM con il
-# manifest RMAP delle regioni che il firmware riscrive (CAPSULE_REGIONS),
+# manifest RMAP delle regioni che il firmware riscrive (CAPSULE_REGIONS: i
+# due slot, di cui il payload scrive solo quello che non gira),
 # firmata con GenerateCapsule di EDK2. La chiave privata arriva solo
 # dall'ambiente, CAPSULE_SIGNING_KEY (PEM; nella CI il secret omonimo), e
 # deve essere quella del certificato keys/capsule-signing.pem, di cui le ROM
@@ -89,11 +93,21 @@ EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
 	blobs/vbios_10de_11fc_1.rom assets/bootsplash.bmp configs/w541.fmd
 	keys/capsule-signing.pem)
-# Le regioni che una capsula riscrive: coreboot e il training della RAM, che
-# coreboot rifa' (con il codice nuovo) al primo avvio. Le altre restano:
-# variabili UEFI (SMMSTORE), VPD, registro degli eventi, IFD, GbE, ME.
-CAPSULE_REGIONS=(RW_MRC_CACHE COREBOOT)
+# Le regioni che una capsula riscrive: il training della RAM, che il codice
+# nuovo rifa' al primo avvio, e lo slot RW di vboot che non gira (la capsula
+# li porta tutti e due, il payload sceglie: edk2 0015). Le altre restano:
+# la regione RO, variabili UEFI (SMMSTORE), VPD, registro degli eventi,
+# dati di vboot (li aggiorna il payload), IFD, GbE, ME.
+CAPSULE_REGIONS=(RW_MRC_CACHE RW_SECTION_A RW_SECTION_B)
 CAPSULE_CERT=keys/capsule-signing.pem
+# Le chiavi pubbliche di vboot (tools/vboot-keys.sh), in w541/vboot/
+# dell'albero. La chiave privata della chiave dati (firmware_data_key.vbprivk)
+# arriva solo da VBOOT_SIGNING_KEY (base64) e sta nell'albero solo durante le
+# build: senza, i defconfig puntano alle chiavi di prova di vboot.
+VBOOT_KEYS=(keys/vboot/root_key.vbpubk keys/vboot/recovery_key.vbpubk
+	keys/vboot/kernel_subkey.vbpubk keys/vboot/firmware.keyblock
+	keys/vboot/firmware_data_key.vbpubk)
+VBOOT_PRIVKEY_TREE=w541/vboot/firmware_data_key.vbprivk
 # La chiave Optimus (patch 0036, CONFIG_LENOVO_HASWELL_NVIDIA_OPVK): il DSDT
 # la include da questo file, che la patch fa ignorare a git
 OPVK_FILE=blobs/opvk.inc
@@ -198,7 +212,7 @@ state() {
 		edk2_rev
 		while read -r p; do sha256sum "patches/edk2/${p}"; done < <(series edk2)
 		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
-		for p in "${TREE_FILES[@]}"; do sha256sum "${p}"; done
+		for p in "${TREE_FILES[@]}" "${VBOOT_KEYS[@]}"; do sha256sum "${p}"; done
 		sha256sum "${OPVK_FILE}"
 	) | sha256sum | cut -d' ' -f1
 }
@@ -303,6 +317,11 @@ cmd_prepare() {
 	for p in "${TREE_FILES[@]}"; do
 		cp "${O}/${p}" "${TREE}/w541/"
 		echo "  w541/$(basename "${p}")"
+	done
+	mkdir -p "${TREE}/w541/vboot"
+	for p in "${VBOOT_KEYS[@]}"; do
+		cp "${O}/${p}" "${TREE}/w541/vboot/"
+		echo "  w541/vboot/$(basename "${p}")"
 	done
 	cp "${O}/${OPVK_FILE}" "${TREE}/${OPVK_TREE}"
 	echo "  ${OPVK_TREE}"
@@ -467,13 +486,28 @@ cmd_toolchain_key() {
 # soddisfatte sparisce senza errori)
 variant_config() {
 	local v="$1" obj="build-$1" line sym have miss=0
+	: "${VBOOT_KEYS_REAL:=no}"
 	rm -rf "${TREE:?}/${obj}"
 	mkdir -p "${TREE}/${obj}"
 	{
-		cat "${O}/configs/w541-${v}.defconfig"
+		if [ "${VBOOT_KEYS_REAL}" = yes ]; then
+			cat "${O}/configs/w541-${v}.defconfig"
+		else
+			grep -v -E '^CONFIG_VBOOT_(ROOT_KEY|RECOVERY_KEY|KERNEL_KEY|KEYBLOCK|FIRMWARE_PRIVKEY)=' \
+				"${O}/configs/w541-${v}.defconfig"
+		fi
 		echo "CONFIG_LOCALVERSION=\"$(localversion "${v}")\""
 		echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=$(fw_version)"
 		if [ "${TOOLCHAIN}" = host ]; then echo "CONFIG_ANY_TOOLCHAIN=y"; fi
+		if [ "${VBOOT_KEYS_REAL}" != yes ]; then
+			# senza la chiave del progetto: le chiavi di prova di vboot
+			local k
+			for k in ROOT_KEY:root_key.vbpubk RECOVERY_KEY:recovery_key.vbpubk \
+				KERNEL_KEY:kernel_subkey.vbpubk KEYBLOCK:firmware.keyblock \
+				FIRMWARE_PRIVKEY:firmware_data_key.vbprivk; do
+				echo "CONFIG_VBOOT_${k%%:*}=\"\$(VBOOT_SOURCE)/tests/devkeys/${k#*:}\""
+			done
+		fi
 	} > "${TREE}/${obj}/defconfig"
 	mk "${v}" defconfig KBUILD_DEFCONFIG="${obj}/defconfig" > "${TREE}/${obj}/defconfig.log" 2>&1 \
 		|| { cat "${TREE}/${obj}/defconfig.log"; die "${v}: make defconfig fallito"; }
@@ -521,6 +555,8 @@ collect() {
 		"${b}/cbfstool" "${b}/coreboot.rom" layout -w
 		echo
 		"${b}/cbfstool" "${b}/coreboot.rom" print -r COREBOOT
+		echo
+		"${b}/cbfstool" "${b}/coreboot.rom" print -r FW_MAIN_A
 	} > "${DIST}/${n}-layout.txt"
 }
 
@@ -607,6 +643,55 @@ make_capsule() {
 		|| die "${v}: il pacchetto fwupd non passa tools/update.py info"
 }
 
+# La chiave privata degli slot (VBOOT_SIGNING_KEY, base64 di
+# firmware_data_key.vbprivk) nell'albero per la build, e solo per la build:
+# deve essere quella di keys/vboot/firmware_data_key.vbpubk
+install_vboot_key() {
+	local k="${TREE}/${VBOOT_PRIVKEY_TREE}"
+	(umask 077; printf '%s' "${VBOOT_SIGNING_KEY}" | base64 -d > "${k}" 2>/dev/null) \
+		|| die "VBOOT_SIGNING_KEY non e' base64"
+	trap 'rm -f "${TREE}/${VBOOT_PRIVKEY_TREE}"' EXIT
+	python3 - "${k}" "${O}/keys/vboot/firmware_data_key.vbpubk" <<'EOF' \
+		|| die "VBOOT_SIGNING_KEY non e' la chiave di keys/vboot/firmware_data_key.vbpubk"
+import re, struct, subprocess, sys
+priv = open(sys.argv[1], "rb").read()
+pub = open(sys.argv[2], "rb").read()
+# vbprivk: algoritmo (u64) e la chiave RSA in DER
+out = subprocess.run(["openssl", "rsa", "-inform", "DER", "-noout", "-modulus"],
+                     input=priv[8:], capture_output=True).stdout.decode()
+m = re.search(r"Modulus=([0-9A-F]+)", out)
+# vbpubk: vb2_packed_key, poi parole a 32 bit: n, n0inv, il modulo little endian
+off, _, size = struct.unpack_from("<III", pub, 0)
+words = struct.unpack_from("<I", pub, off)[0]
+mod = int.from_bytes(pub[off + 8:off + 8 + 4 * words], "little")
+sys.exit(0 if m and int(m.group(1), 16) == mod else 1)
+EOF
+	echo "  ok  VBOOT_SIGNING_KEY: la chiave di keys/vboot/firmware_data_key.vbpubk"
+}
+
+# Gli slot RW della ROM della variante $1 si verificano con la chiave root del
+# suo GBB, e in una build con la chiave del progetto quella root e' la nostra
+check_vboot() {
+	local v="$1" b="${TREE}/build-$1" f out tmp
+	f="${b}/util/futility/futility"
+	[ -x "${f}" ] || die "${v}: futility non c'e' (${f#"${TREE}/"})"
+	out="$("${f}" verify "${b}/coreboot.rom" 2>&1)" || { echo "${out}" | tail -n 20; die "${v}: futility verify fallito"; }
+	[ "$(grep -c 'Body verification succeeded' <<< "${out}")" = 2 ] \
+		|| { echo "${out}" | tail -n 20; die "${v}: non si verificano tutti e due gli slot"; }
+	if [ "${VBOOT_KEYS_REAL}" = yes ]; then
+		# gbb -g esporta tutta l'area della chiave root (con il riempimento
+		# a 0xFF dopo la chiave): si confrontano i byte della chiave
+		tmp="$(mktemp)"
+		"${f}" gbb -g --rootkey="${tmp}" "${b}/coreboot.rom" > /dev/null
+		cmp -s -n "$(stat -c %s "${O}/keys/vboot/root_key.vbpubk")" "${tmp}" "${O}/keys/vboot/root_key.vbpubk" \
+			|| { rm -f "${tmp}"; die "${v}: la chiave root nel GBB non e' keys/vboot/root_key.vbpubk"; }
+		rm -f "${tmp}"
+		echo "  ok  ${v}: slot A e B firmati, chiave root keys/vboot/root_key.vbpubk"
+	else
+		echo "  ok  ${v}: slot A e B firmati con le chiavi di prova di vboot (build di prova)"
+	fi
+}
+
 cmd_roms() {
 	need_prepared
 	local v capsule=no
@@ -617,6 +702,16 @@ cmd_roms() {
 		elif [ "${RELEASE}" = yes ]; then
 			die "--release ${VERSION}: senza CAPSULE_SIGNING_KEY niente capsula (docs/update.md)"
 		fi
+	fi
+	VBOOT_KEYS_REAL=no
+	if [ -n "${VBOOT_SIGNING_KEY:-}" ]; then
+		install_vboot_key
+		VBOOT_KEYS_REAL=yes
+	elif [ "${RELEASE}" = yes ]; then
+		die "--release: senza VBOOT_SIGNING_KEY gli slot non si firmano con la chiave del progetto (docs/vboot.md)"
+	else
+		note warning "VBOOT_SIGNING_KEY assente: slot firmati con le chiavi di prova di vboot"
+		echo "  !!  VBOOT_SIGNING_KEY assente: slot firmati con le chiavi di prova di vboot (build di prova)"
 	fi
 	if [ "${TOOLCHAIN}" = crossgcc ]; then
 		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
@@ -648,6 +743,7 @@ cmd_roms() {
 		"${O}/tools/verify-rom.sh" "${args[@]}" "${n}.rom" "${n}-8mb-chip.rom" "${n}-4mb-chip.rom" \
 			|| die "${v}: la ROM non passa tools/verify-rom.sh"
 		check_trusted_cert "${v}"
+		check_vboot "${v}"
 		if [ "${capsule}" = yes ]; then
 			say "capsula ${v} ($(fw_version))"
 			make_capsule "${v}"

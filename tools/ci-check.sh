@@ -22,8 +22,9 @@
 #      tools/build.sh copia davvero; la mappa configs/w541.fmd con le regioni
 #      scrivibili nel chip da 8 MiB; i GUID e le regioni delle capsule uguali
 #      in tools/update.py e tools/build.sh
-#   9. le chiavi: in keys/ solo certificati, nessuna chiave privata nei file
-#      del repository
+#   9. le chiavi: in keys/ solo certificati e chiavi pubbliche di vboot, il
+#      keyblock con la chiave dati di keys/vboot, nessuna chiave privata nei
+#      file del repository
 #   8. il pin di coreboot in tools/build.sh: commit intero e describe coerente
 # L'applicazione delle patch e i .config li prova check.yml (job "patch").
 set -u
@@ -119,7 +120,7 @@ cap = update.parse_capsule(data)
 assert (cap["variant"], cap["version"], cap["lsv"]) == ("nri", 0x01020003, 0x01020000)
 assert cap["regions"] == update.REGIONS and cap["image"] == image and cap["signature"] == cert
 assert cap["signed"] == payload + struct.pack("<Q", 7)
-update.check_capsule(cap, "nri")
+update.check_capsule(cap, {"variant": "nri", "legacy": False})
 assert update.version_str(0x01020003) == "v1.2.3"
 # il pacchetto fwupd di tools/fwupd-cab.py, riletto da tools/update.py
 import datetime, importlib.util
@@ -287,24 +288,34 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 		bad "CONFIG_EDK2_TAG_OR_REV: un commit intero, non un ramo"
 	fi
 	# i file che i defconfig cercano in w541/ sono quelli che build.sh copia
-	tree_files="$(sed -n '/^TREE_FILES=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^.*/||p')"
+	# (TREE_FILES in w541/, VBOOT_KEYS in w541/vboot/) o vi scrive (la chiave
+	# privata degli slot)
+	tree_files="$(sed -n '/^TREE_FILES=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^.*/||p'
+		sed -n '/^VBOOT_KEYS=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^keys/vboot/|vboot/|p'
+		sed -n 's|^VBOOT_PRIVKEY_TREE=w541/||p' tools/build.sh)"
 	for f in $(sed -n 's/^CONFIG_[A-Z0-9_]*="w541\/\([^"]*\)"$/\1/p' configs/*.defconfig | sort -u); do
 		grep -qxF "${f}" <<< "${tree_files}" || bad "w541/${f} nei defconfig ma non in TREE_FILES di tools/build.sh"
 	done
 	ok "file in w541/: $(sed -n 's/^CONFIG_[A-Z0-9_]*="w541\/\([^"]*\)"$/\1/p' configs/*.defconfig | sort -u | tr '\n' ' ')"
 	# la mappa del flash: le regioni scritte a ogni avvio nel chip da 8 MiB
-	# (0x500000-0x7FFFFF), FMAP e CBFS nel chip da 4 MiB
+	# (0x500000-0x7FFFFF, in SI_BIOS sotto 0x300000), lo slot B e la regione
+	# RO nel chip da 4 MiB, la RO in fondo a SI_BIOS (il vettore di reset)
 	grep -qx 'CONFIG_FMDFILE="w541/w541.fmd"' configs/w541-mrc.defconfig || bad "w541-mrc: senza CONFIG_FMDFILE=\"w541/w541.fmd\""
 	if [ -f configs/w541.fmd ]; then
-		for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG; do
-			off="$(sed -n "s/^[[:space:]]*${r}@\(0x[0-9a-f]*\) .*/\1/p" configs/w541.fmd)"
-			[ -n "${off}" ] && [ $(( off )) -lt $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 8 MiB (offset in SI_BIOS sotto 0x300000)"
+		fmd() { sed -n "s/^[[:space:]]*${1}@\(0x[0-9a-f]*\) \(0x[0-9a-f]*\).*/\1 \2/p" configs/w541.fmd; }
+		for r in RW_MRC_CACHE SMMSTORE RO_VPD RW_ELOG RW_NVRAM RECOVERY_MRC_CACHE; do
+			read -r off size <<< "$(fmd "${r}")"
+			[ -n "${off}" ] && [ $(( off + size )) -le $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 8 MiB"
 		done
-		for r in FMAP "COREBOOT(CBFS)"; do
-			off="$(sed -n "s/^[[:space:]]*${r}@\(0x[0-9a-f]*\) .*/\1/p" configs/w541.fmd)"
-			[ -n "${off}" ] && [ $(( off )) -ge $(( 0x300000 )) ] || bad "w541.fmd: ${r} non nel chip da 4 MiB (offset in SI_BIOS da 0x300000)"
-		done
-		ok "w541.fmd: regioni scrivibili nel chip da 8 MiB, FMAP e CBFS nel chip da 4 MiB"
+		read -r off size <<< "$(fmd RW_NVRAM)"
+		[ -n "${off}" ] && [ $(( off % 0x10000 )) = 0 ] && [ $(( size % 0x10000 )) = 0 ] \
+			|| bad "w541.fmd: RW_NVRAM non in blocchi da 64 KiB tutti suoi"
+		read -r off size <<< "$(fmd RW_SECTION_B)"
+		[ -n "${off}" ] && [ $(( off )) -ge $(( 0x300000 )) ] || bad "w541.fmd: RW_SECTION_B non nel chip da 4 MiB"
+		read -r off size <<< "$(fmd WP_RO)"
+		[ -n "${off}" ] && [ $(( off + size )) = $(( 0x700000 )) ] && [ $(( off % 0x1000 )) = 0 ] \
+			|| bad "w541.fmd: WP_RO non in fondo a SI_BIOS o non allineata a 4 KiB"
+		ok "w541.fmd: regioni scrivibili nel chip da 8 MiB, slot B e regione RO nel chip da 4 MiB"
 	else
 		bad "configs/w541.fmd non c'e'"
 	fi
@@ -322,10 +333,31 @@ if [ -f keys/capsule-signing.pem ]; then
 else
 	bad "keys/capsule-signing.pem non c'e'"
 fi
-# solo certificati in keys/, e nessuna chiave privata in nessun file
+# solo certificati e chiavi pubbliche in keys/, e nessuna chiave privata in
+# nessun file: niente PEM privati, niente .vbprivk
 for f in $(files | grep '^keys/'); do
-	case "${f}" in keys/README.md|keys/*.pem) ;; *) bad "${f}: in keys/ solo certificati .pem e il README" ;; esac
+	case "${f}" in
+		keys/README.md|keys/*.pem|keys/vboot/*.vbpubk|keys/vboot/firmware.keyblock) ;;
+		*) bad "${f}: in keys/ solo certificati .pem, chiavi pubbliche di vboot e il README" ;;
+	esac
 done
+if files | grep -q '\.vbprivk$'; then bad "chiavi private di vboot nel repository: $(files | grep '\.vbprivk$')"; fi
+# il keyblock porta la chiave dati di keys/vboot/firmware_data_key.vbpubk
+if [ -f keys/vboot/firmware.keyblock ] && [ -f keys/vboot/firmware_data_key.vbpubk ] && python3 - <<'EOF'
+import struct, sys
+kb = open("keys/vboot/firmware.keyblock", "rb").read()
+pub = open("keys/vboot/firmware_data_key.vbpubk", "rb").read()
+# vb2_keyblock: "CHROMEOS", versioni, dimensione, firma, hash, flag, poi la
+# chiave dati (vb2_packed_key) a 0x50 con i suoi dati a key_offset
+off, _, size = struct.unpack_from("<III", kb, 0x50)
+koff, _, ksize = struct.unpack_from("<III", pub, 0)
+sys.exit(0 if kb[:8] == b"CHROMEOS" and kb[0x50 + off:0x50 + off + size] == pub[koff:koff + ksize] else 1)
+EOF
+then
+	ok "keys/vboot: il keyblock porta firmware_data_key.vbpubk"
+else
+	bad "keys/vboot: firmware.keyblock non porta firmware_data_key.vbpubk (o mancano)"
+fi
 k="$(files | while IFS= read -r f; do
 	[ -f "${f}" ] && grep -lE -- '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' "${f}" 2>/dev/null
 done)"

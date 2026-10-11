@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 14:03:17 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add Firmware protection to the setup menu
+
+With BOOTMEDIA_LOCK_RUNTIME_OPTION, show the "bootmedia_lock" option as
+Firmware protection, next to BIOS Lock under Security, Flash protection:
+on by default, off for a boot that writes the protected region with
+flashrom.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/cfr.c | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 61e15a044..94aaed170 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -340,6 +340,24 @@ static const struct sm_object bios_lock = SM_DECLARE_BOOL({
+ 	.default_value	= CONFIG(BOOTMEDIA_SMM_BWP),
+ }, WITH_CALLBACK(update_bios_lock));
+ 
++static void update_bootmedia_lock(struct sm_object *new)
++{
++	if (!CONFIG(BOOTMEDIA_LOCK_RUNTIME_OPTION))
++		new->sm_bool.flags |= CFR_OPTFLAG_SUPPRESS;
++}
++
++/* Read by enable_bootmedia_lock() (security/lockdown/lockdown.h) */
++static const struct sm_object bootmedia_lock = SM_DECLARE_BOOL({
++	.opt_name	= "bootmedia_lock",
++	.ui_name	= "Firmware protection",
++	.ui_helptext	= "Write-protect the read-only part of the firmware (the\n"
++			  "bootblock and the keys of verified boot) from power-on, so\n"
++			  "that no program can change it. Updates with a capsule still\n"
++			  "install. Turn it off only to write the whole flash with\n"
++			  "flashrom, then on again.",
++	.default_value	= true,
++}, WITH_CALLBACK(update_bootmedia_lock));
++
+ /* Read by security_clear_dram_request() (security/memory/memory.c) */
+ static const struct sm_object clear_dram_on_boot = SM_DECLARE_BOOL({
+ 	.opt_name	= "clear_dram_on_boot",
+@@ -351,9 +369,11 @@ static const struct sm_object clear_dram_on_boot = SM_DECLARE_BOOL({
+ });
+ 
+ static const struct sm_object security_flash = SM_DECLARE_FORM({
+-	.flags		= CONFIG(BOOTMEDIA_SMM_BWP_RUNTIME_OPTION) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.flags		= CONFIG(BOOTMEDIA_SMM_BWP_RUNTIME_OPTION) ||
++			  CONFIG(BOOTMEDIA_LOCK_RUNTIME_OPTION) ? 0 : CFR_OPTFLAG_SUPPRESS,
+ 	.ui_name	= "Flash protection",
+ 	.obj_list	= (const struct sm_object *[]) {
++		&bootmedia_lock,
+ 		&bios_lock,
+ 		NULL
+ 	},
+-- 
+2.43.0
+

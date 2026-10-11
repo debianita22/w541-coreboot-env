@@ -2,20 +2,34 @@
  * ThinkPad W541: due chip SPI, 8 MiB (0x000000-0x7FFFFF) e 4 MiB
  * (0x800000-0xBFFFFF), visti come un flash da 12 MiB.
  *
- * Le regioni scritte a ogni avvio (training della RAM, variabili UEFI,
- * VPD) stanno nel chip da 8 MiB, come nella build 24.08 che gira sul
- * portatile e nelle immagini Libreboot per questa scheda: con la mappa
- * di default (CBFS_SIZE=0x400000) finirebbero nel chip da 4 MiB, dove il
- * salvataggio del training non e' provato e senza il quale la ripresa
- * da S3 non funziona. coreboot (FMAP + CBFS) sta da solo nel chip da
- * 4 MiB, che cosi' e' un'immagine completa per un programmatore esterno.
+ * vboot con due slot RW (docs/vboot.md). Le regioni scritte a ogni avvio
+ * (training della RAM, variabili UEFI, VPD, registro degli eventi) restano
+ * nel chip da 8 MiB agli stessi offset della mappa senza vboot (fino alla
+ * v1.2.x): passando a questa mappa con flashrom si scrive il resto, e
+ * impostazioni, VPD e registro restano. Poi RW_NVRAM (lo stato di vboot:
+ * slot da provare, tentativi), in un blocco da 64 KiB tutto suo perche' il
+ * payload, aggiornando, lo cancella quando e' pieno; e la cache del training
+ * per il recovery (vboot la vuole, il recovery qui non c'e').
+ *
+ * RW_SECTION_A e RW_SECTION_B: due copie della parte aggiornabile
+ * (romstage, ramstage, payload), ciascuna firmata (VBLOCK). Una capsula
+ * scrive solo lo slot che non gira e poi chiede a vboot di provarlo: se la
+ * scrittura si interrompe, o lo slot nuovo non si verifica, si riparte da
+ * quello vecchio. RW_SECTION_A sta a cavallo dei due chip, RW_SECTION_B
+ * tutto nel chip da 4 MiB: quel chip da solo (-4mb-chip.rom) avvia sempre,
+ * dallo slot B.
+ *
+ * WP_RO in cima al chip da 4 MiB (il vettore di reset): FMAP, GBB (la
+ * chiave root di vboot) e il CBFS di sola lettura, con bootblock e
+ * verstage, mrc.bin (a indirizzo fisso, 0xfffa0000) e il microcode. Non lo
+ * scrive nessuna capsula; con "Firmware protection" lo proteggono i
+ * Protected Range Register del controller SPI.
  *
  * SI_DESC, SI_GBE, SI_ME e SI_BIOS devono coincidere con le regioni del
  * descrittore (blobs/ifd.bin): lo controlla ifdtool -t alla build.
  * Dimensioni da rispettare: SMMSTORE = CONFIG_SMMSTORE_SIZE (0x80000),
- * RW_MRC_CACHE = CONFIG_MRC_SETTINGS_CACHE_SIZE (0x10000),
- * RO_VPD = CONFIG_VPD_FMAP_SIZE (0x4000). RW_ELOG e' il registro degli
- * eventi (CONFIG_ELOG): coreboot lo formatta al primo avvio.
+ * RW_MRC_CACHE e RECOVERY_MRC_CACHE = CONFIG_MRC_SETTINGS_CACHE_SIZE
+ * (0x10000), RO_VPD = CONFIG_VPD_FMAP_SIZE (0x4000).
  */
 FLASH 0xc00000 {
 	SI_ALL@0x0 0x500000 {
@@ -28,8 +42,25 @@ FLASH 0xc00000 {
 		SMMSTORE@0x10000 0x80000
 		RO_VPD@0x90000 0x4000
 		RW_ELOG@0x94000 0x4000
-		RW_UNUSED@0x98000 0x268000
-		FMAP@0x300000 0x1000
-		COREBOOT(CBFS)@0x301000 0x3ff000
+		RW_UNUSED@0x98000 0x8000
+		RW_NVRAM@0xa0000 0x10000
+		RECOVERY_MRC_CACHE@0xb0000 0x10000
+		RW_SECTION_A@0xc0000 0x2d0000 {
+			VBLOCK_A@0x0 0x10000
+			FW_MAIN_A(CBFS)@0x10000 0x2bffc0
+			RW_FWID_A@0x2cffc0 0x40
+		}
+		RW_SECTION_B@0x390000 0x2d0000 {
+			VBLOCK_B@0x0 0x10000
+			FW_MAIN_B(CBFS)@0x10000 0x2bffc0
+			RW_FWID_B@0x2cffc0 0x40
+		}
+		WP_RO@0x660000 0xa0000 {
+			FMAP@0x0 0x800
+			RO_FRID@0x800 0x40
+			RO_PADDING@0x840 0x7c0
+			GBB@0x1000 0x1f000
+			COREBOOT(CBFS)@0x20000 0x80000
+		}
 	}
 }
