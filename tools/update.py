@@ -915,6 +915,21 @@ def region_releases(data, area):
     return found
 
 
+def flash_image(path):
+    """L'immagine del flash di una release: il .rom, o quella in una capsula (.cap, .cab)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] == b"MSCF" or (len(data) >= 16 and uuid.UUID(bytes_le=data[:16]) == FMP_CAPSULE_GUID):
+        return load_capsule(path)[1]["image"]
+    return data
+
+
+def region_diff(a, b, area, block=0x1000):
+    """I blocchi da 4 KiB di un'area diversi tra due immagini."""
+    off, size = area
+    return [o for o in range(off, off + size, block) if a[o:o + block] != b[o:o + block]]
+
+
 def cmd_vboot(args):
     data = open(args.dump, "rb").read()
     areas = fmap_areas(data)
@@ -930,16 +945,35 @@ def cmd_vboot(args):
     else:
         raise Error("%s: ne' un'immagine del flash con la FMAP ne' una copia di RW_NVRAM" % args.dump)
     slot = "AB"
+    image = None
+    if args.image:
+        if areas is None:
+            raise Error("%s: per --image serve tutto il flash (flashrom -r)" % args.dump)
+        image = flash_image(args.image)
+        iareas = fmap_areas(image)
+        names = ("WP_RO", "RW_SECTION_A", "RW_SECTION_B")
+        if len(image) != len(data) or iareas is None or any(iareas.get(n) != areas.get(n) for n in names):
+            raise Error("%s: un'immagine con un'altra mappa del flash" % args.image)
     if areas is not None:
-        # quale release c'e' nella parte read-only e in ciascuno slot
+        # quale release c'e' nella parte read-only e in ciascuno slot; con
+        # --image, se ogni byte e' quello della release
         head = "contenuto:"
-        for label, name in (("RO", "WP_RO"), ("slot A", "FW_MAIN_A"), ("slot B", "FW_MAIN_B")):
+        for label, name, whole in (("RO", "WP_RO", "WP_RO"), ("slot A", "FW_MAIN_A", "RW_SECTION_A"),
+                                   ("slot B", "FW_MAIN_B", "RW_SECTION_B")):
             if name not in areas or sum(areas[name]) > len(data):
                 continue
             found = region_releases(data, areas[name])
             print("%-12s%-8s%s" % (head, label, " + ".join(found) + (
                 "  (mescolate: scritto a meta'?)" if len(found) > 1 else "")
                 if found else "non riconosciuto: vuoto o rovinato?"))
+            if image is not None:
+                diff = region_diff(data, image, areas[whole])
+                total = areas[whole][1] // 0x1000
+                if not diff:
+                    print("%20s= %s, tutti i %d blocchi da 4 KiB" % ("", os.path.basename(args.image), total))
+                else:
+                    print("%20s!= %s: %d blocchi da 4 KiB su %d, da 0x%06x a 0x%06x" % (
+                        "", os.path.basename(args.image), len(diff), total, diff[0], diff[-1] + 0xfff))
             head = ""
     st = nv_state(region)
     print("RW_NVRAM:   %d record su %d" % (st["used"], st["total"]))
@@ -1143,6 +1177,7 @@ def main():
     p = sub.add_parser("vboot", help="lo stato di vboot (slot, tentativi) in una copia del flash")
     p.add_argument("dump", help="flashrom -r: tutto il flash, o -i RW_NVRAM:FILE")
     p.add_argument("--all", action="store_true", help="anche tutti i record, dal primo")
+    p.add_argument("--image", help="confronta RO e slot con una release (.rom, .cap o .cab)")
     p.set_defaults(func=cmd_vboot)
 
     p = sub.add_parser("vars", help="le variabili UEFI di SMMSTORE in una copia del flash (nomi, mai i dati)")

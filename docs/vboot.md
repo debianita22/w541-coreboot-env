@@ -155,6 +155,14 @@ in `update.py vars`), but the ESRT that Linux reads had no last attempt:
 EsrtDxe publishes a copy that capsules on disk never updated. v1.3.0-rc3
 builds the ESRT from FmpDxe at every boot (patch `edk2/0018`).
 
+Still on rc1, a later boot read a sleep state that was not a resume: vboot
+tried slot B, which verified and booted from the 4 MiB chip, and the
+payload confirmed it. In that boot an rc3 capsule, applied from slot B,
+wrote slot A (the one not running, across the two chips) and asked to try
+it; the boot after took a resume again and stayed on B. `update.py vboot`
+on a copy of the flash: RO rc1, slot A rc3, slot B rc1, *prossimo: slot
+A*.
+
 ## Testing on the laptop
 
 v1.3.0-rc3 is the release to test: rc1 can keep the old slot, rc2 does
@@ -236,6 +244,9 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc3-mrc.cap
    sudo systemctl reboot
    sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_A
+   sudo flashrom -p internal -r flash.bin
+   python3 tools/update.py vboot --image w541-coreboot-v1.3.0-rc3-mrc.cap flash.bin
+   #   slot A  ... = w541-coreboot-v1.3.0-rc3-mrc.cap, tutti i 720 blocchi da 4 KiB
    ```
 6. **Fallback** (programmer at hand): spoil the slot that runs, A, and
    reboot: vboot must find it broken, write that to `RW_NVRAM` and boot B.
