@@ -884,6 +884,21 @@ def nv_state(region):
     return st
 
 
+def nv_coreboot_current(region):
+    """L'offset del record che coreboot (vbnv_flash.c, init_vbnv) prende come corrente:
+    una ricerca binaria del confine tra record usati e vuoti, che si fida che dopo il
+    primo vuoto sia tutto vuoto."""
+    empty = b"\xff" * NV_RECORD
+    used_below, empty_above = 0, len(region) // NV_RECORD
+    while used_below + 1 < empty_above:
+        guess = (used_below + empty_above) // 2
+        if region[guess * NV_RECORD:(guess + 1) * NV_RECORD] == empty:
+            empty_above = guess
+        else:
+            used_below = guess
+    return used_below * NV_RECORD
+
+
 def cmd_vboot(args):
     data = open(args.dump, "rb").read()
     areas = fmap_areas(data)
@@ -904,16 +919,25 @@ def cmd_vboot(args):
     if args.all:
         # la storia: ogni record e' lo stato dopo una scrittura (vboot dal
         # bootblock, il payload con la capsula o la conferma dello slot)
-        print("            #   prossimo  tent.  corrente          precedente")
+        print("            #   prossimo  tent.  corrente          precedente         byte")
         for i in range(st["used"]):
             rec = region[i * NV_RECORD:(i + 1) * NV_RECORD]
             if rec[0] & 0xc3 != 0x40 or nv_crc8(rec[:15]) != rec[15]:
-                print("            %-3d record non valido (%s)" % (i, rec.hex()))
+                print("            %-3d record non valido                                          %s" % (i, rec.hex()))
                 continue
             b1, b2 = rec[1], rec[7]
-            print("            %-3d slot %s    %-5d  slot %s %-10s  slot %s %s" % (
+            print("            %-3d slot %s    %-5d  slot %s %-10s  slot %s %-10s  %s" % (
                 i, slot[(b2 >> 3) & 1], b1 & 0x0f, slot[(b2 >> 2) & 1], NV_RESULTS[b2 & 3],
-                slot[(b2 >> 6) & 1], NV_RESULTS[(b2 >> 4) & 3]))
+                slot[(b2 >> 6) & 1], NV_RESULTS[(b2 >> 4) & 3], rec.hex()))
+        # quello che legge coreboot, e quello che c'e' oltre il primo record vuoto
+        cb = nv_coreboot_current(region)
+        beyond = [o for o in range(st["used"] * NV_RECORD, len(region), NV_RECORD)
+                  if region[o:o + NV_RECORD] != b"\xff" * NV_RECORD]
+        print("coreboot:   legge il record a 0x%04x (#%d)%s" % (
+            cb, cb // NV_RECORD, "" if cb == st["offset"] else ", NON l'ultimo prima del primo vuoto"))
+        if beyond:
+            print("oltre:      %d record non vuoti dopo il primo vuoto, da 0x%04x: %s" % (
+                len(beyond), beyond[0], " ".join("0x%04x" % o for o in beyond[:8])))
     if not st["valid"]:
         print("stato:      nessun record valido: al prossimo avvio vboot riparte dallo slot A")
         return 0
