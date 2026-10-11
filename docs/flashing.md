@@ -263,12 +263,28 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
   Error` and `MBP not ready` with an ME reduced by me_cleaner, `No RW_VPD
   FMAP section` (there is only `RO_VPD`), `RO_VPD is uninitialized` and
   `DMI: Cannot read ... from VPD` without the [VPD](#serial-number-and-machine-type-vpd),
-  `fallback/slic' not found`, and `1c.3: Timeout waiting for 328h` for the
-  unused root port 4.
+  `fallback/slic' not found`, `1c.3: Timeout waiting for 328h` for the
+  unused root port 4, and from v1.3.0 `Pre-CBMEM romstage console
+  overflowed`: vboot's messages fill the console kept before the memory;
+  which slot it chose and why, `update.py vboot-work` tells
+  ([docs/vboot.md](vboot.md)).
+- Linux log, also normal: `SystemIO range ... conflicts with OpRegion
+  ... GPLV` (`gpio_ich` stays unloaded, the GPIOs belong to ACPI), and
+  `failed to evaluate _DSM` with the path `\` for an Intel Wi-Fi card,
+  which has no node in the ACPI tables (optional settings of `iwlwifi`).
+  Up to v1.3.0-rc3, `mei mei0: hw_start failed` too: the ME's interface
+  was visible though *Intel Management Engine* was *Disabled*.
 - VT-d: the firmware enables it and writes the DMAR table, but Linux
   kernels that leave the IOMMU off by default only use it for interrupt
-  remapping: add `intel_iommu=on` to the kernel command line for device
-  passthrough (`/sys/class/iommu/` then lists `dmar0` and `dmar1`).
+  remapping: add `intel_iommu=on iommu=pt` to the kernel command line for
+  device passthrough (`/sys/class/iommu/` then lists `dmar0` and `dmar1`).
+  `iommu=pt` keeps the laptop's own devices out of the translation and
+  leaves it to the devices given to a virtual machine. With
+  `intel_iommu=on` alone, Linux 7.2 on the W541 translated the DMA of the
+  SATA controller too and some of it faulted (`DMAR: [DMA Write]
+  Request device [0000:00:1f.2] ... fault reason 0x0c] non-zero reserved
+  fields in PTE`): the reads came back as zeros, which btrfs reports as
+  `csum failed` with the checksum of an empty block (`0x8941f998`).
 - Event log: coreboot records every boot, the wake source of a resume
   (lid, Fn, a GPE), each entry into S3 and S5, power failures, watchdog
   resets, the ME state and the last POST code of a boot that hung, in the

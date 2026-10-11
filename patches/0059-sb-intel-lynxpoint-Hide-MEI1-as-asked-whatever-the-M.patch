@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 22:13:40 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Hide MEI1 as asked whatever the ME state
+
+intel_me_finalize() hides the PCI interface of the ME (MEI1) when the
+me_disable option asks for it, but returns before that for an ME that
+is not in normal mode, which only needs to be spared End Of Post. An ME
+reduced with me_cleaner stays in its bring-up phase (working state
+"Initializing", operation mode "Debug"), so its interface stayed
+visible: on a ThinkPad W541, Linux's mei_me reset it three times, two
+seconds each, then gave up with "hw_start failed" and "initialization
+failed".
+
+Spare only End Of Post to an ME that is not in normal mode, and hide the
+interface whenever the option asks.
+
+TEST=Built for lenovo/w541.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/me.c | 21 +++++++++++++--------
+ 1 file changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/me.c b/src/southbridge/intel/lynxpoint/me.c
+index d59040c9b..1a6de29b2 100644
+--- a/src/southbridge/intel/lynxpoint/me.c
++++ b/src/southbridge/intel/lynxpoint/me.c
+@@ -598,14 +598,19 @@ static void intel_me_finalize(struct device *dev)
+ 	/* Make sure ME is in a mode that expects EOP */
+ 	hfs.raw = pci_read_config32(dev, PCI_ME_HFS);
+ 
+-	/* Abort and leave device alone if not normal mode */
+-	if (hfs.fpt_bad ||
+-	    hfs.working_state != ME_HFS_CWS_NORMAL ||
+-	    hfs.operation_mode != ME_HFS_MODE_NORMAL)
+-		return;
+-
+-	/* Try to send EOP command so ME stops accepting other commands */
+-	mkhi_end_of_post();
++	/*
++	 * Only an ME in normal mode takes EOP. One that is not (for example
++	 * reduced with me_cleaner, which stops it in the bring-up phase) can
++	 * still have its PCI interface hidden below, as the me_disable option
++	 * asks: otherwise the OS finds the device and its driver times out
++	 * on it.
++	 */
++	if (!hfs.fpt_bad &&
++	    hfs.working_state == ME_HFS_CWS_NORMAL &&
++	    hfs.operation_mode == ME_HFS_MODE_NORMAL) {
++		/* Try to send EOP command so ME stops accepting other commands */
++		mkhi_end_of_post();
++	}
+ #endif
+ 
+ 	if (!get_uint_option("me_disable", CONFIG(DISABLE_ME_PCI)))
