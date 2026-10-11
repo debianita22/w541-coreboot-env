@@ -167,7 +167,10 @@ the release (487 had changed from rc1, 16 of them on the 4 MiB chip).
 v1.3.0-rc3, installed with flashrom over rc1: the two boots after it chose
 the slot from nvdata (`vboot-work`: *CHOSE_SLOT*, no *S3_RESUME*), the
 second with *Firmware protection* back on; a suspend came back to the
-desktop with *S3_RESUME* on the same slot.
+desktop with *S3_RESUME* on the same slot. With the protection on, the
+rc3 capsule asked for slot B: the next boot tried it and the payload
+confirmed it, and `update.py vboot --image` found the read-only part and
+both slots equal to the release.
 
 ## Testing on the laptop
 

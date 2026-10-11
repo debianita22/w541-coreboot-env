@@ -915,6 +915,15 @@ def region_releases(data, area):
     return found
 
 
+def need_whole_flash(path, data, areas):
+    """Una copia da 8 MiB senza FMAP e' solo il primo chip: flashrom e' passato
+    da /dev/mtd0 perche' il driver del kernel teneva il controller SPI."""
+    if areas is None and len(data) == 8 << 20:
+        raise Error("%s: 8 MiB, solo il primo chip: flashrom e' passato da /dev/mtd0 (driver "
+                    "spi_intel caricato). sudo modprobe -r spi_intel_platform spi_intel, poi "
+                    "rileggi: deve venire di 12 MiB" % path)
+
+
 def flash_image(path):
     """L'immagine del flash di una release: il .rom, o quella in una capsula (.cap, .cab)."""
     with open(path, "rb") as f:
@@ -933,6 +942,7 @@ def region_diff(a, b, area, block=0x1000):
 def cmd_vboot(args):
     data = open(args.dump, "rb").read()
     areas = fmap_areas(data)
+    need_whole_flash(args.dump, data, areas)
     if areas is not None:
         if "RW_NVRAM" not in areas:
             raise Error("%s: la FMAP non ha RW_NVRAM: un firmware senza vboot (prima della v1.3.0)" % args.dump)
@@ -1073,6 +1083,7 @@ def var_store(region):
 def cmd_vars(args):
     data = open(args.dump, "rb").read()
     areas = fmap_areas(data)
+    need_whole_flash(args.dump, data, areas)
     if areas is not None and "SMMSTORE" in areas:
         o, s = areas["SMMSTORE"]
         region = data[o:o + s]
