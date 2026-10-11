@@ -110,11 +110,11 @@ at_offset() {
 }
 hex() { printf '0x%x' "$1"; }
 
-# La versione dell'ESRT di un CONFIG_LOCALVERSION w541-vX.Y.Z[-...]-<variante>[+...]
+# La versione dell'ESRT di un CONFIG_LOCALVERSION ouroBIOS-vX.Y.Z[-...]-<variante>[+...]
 # (come fw_version di tools/build.sh), 0x00000000 per le altre
 fw_version_of() {
 	local x y z
-	if [[ "$1" =~ ^w541-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?-${VARIANT}(\+.*)?$ ]]; then
+	if [[ "$1" =~ ^ouroBIOS-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?-${VARIANT}(\+.*)?$ ]]; then
 		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
 		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 65535 ]; then
 			printf '0x%08x' $(( (x << 24) | (y << 16) | z ))

@@ -235,7 +235,7 @@ flavour() {
 	printf '%s' "${f}"
 }
 # CONFIG_LOCALVERSION della variante $1, e il nome dei suoi file in dist/
-localversion() { printf 'w541-%s-%s' "${VERSION}" "$(flavour "$1")"; }
+localversion() { printf 'ouroBIOS-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 romname()      { printf 'w541-coreboot-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 
 # La versione per l'ESRT e la capsula: vX.Y.Z[-...] -> (X << 24) | (Y << 16) | Z,

@@ -14,3 +14,4 @@
 0014-UefiPayloadPkg-Tell-coreboot-that-the-firmware-boote.patch
 0015-UefiPayloadPkg-FmpDeviceSmmLib-Update-one-vboot-slot.patch
 0016-UefiPayloadPkg-FmpDeviceSmmLib-Print-the-manifest-en.patch
+0017-UefiPayloadPkg-Name-the-firmware-ouroBIOS.patch

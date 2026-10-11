@@ -1,4 +1,11 @@
-# ThinkPad W541 coreboot
+<p align="center">
+  <img src="assets/ourobios.svg" width="128" height="128" alt="ouroBIOS">
+</p>
+
+<h1 align="center">ouroBIOS</h1>
+
+<p align="center"><b>REBORN BY DESIGN.</b><br>
+<sub>COREBOOT &middot; EDK II &middot; THINKPAD W541</sub></p>
 
 [![MRC release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-mrc&style=flat-square&label=mrc)](https://github.com/debianita22/w541-coreboot-env/releases)
 [![NRI release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-nri&style=flat-square&label=nri)](https://github.com/debianita22/w541-coreboot-env/releases)
@@ -8,11 +15,11 @@
 
 ---
 
-[coreboot](https://www.coreboot.org) firmware for the **Lenovo ThinkPad W541**
-(Intel Haswell, Lynx Point QM87, NVIDIA Quadro K2100M), with the
-[EDK2](https://github.com/mrchromebox/edk2) UEFI payload. GitHub Actions builds
-it from a pinned upstream coreboot commit plus the patches in this repository
-and publishes two complete flash images per version:
+ouroBIOS is a [coreboot](https://www.coreboot.org) firmware for the **Lenovo
+ThinkPad W541** (Intel Haswell, Lynx Point QM87, NVIDIA Quadro K2100M), with
+the [EDK II](https://github.com/mrchromebox/edk2) UEFI payload. GitHub Actions
+builds it from a pinned upstream coreboot commit plus the patches in this
+repository and publishes two complete flash images per version:
 
 | Release | RAM initialization | Status |
 |---|---|---|
@@ -20,6 +27,17 @@ and publishes two complete flash images per version:
 | `vX.Y.Z-nri` | coreboot's native RAM init (NRI), no `mrc.bin` | always a pre-release: upstream still labels it *[NOT COMPLETE]* ([Libreboot](https://libreboot.org/docs/install/w541_external.html) ships it on the W541) |
 
 Everything else is the same in the two variants.
+
+The name: *ouro* is the ouroboros, the snake that bites its own tail, a cycle
+of transformation and renewal; *BIOS* is what it replaces, the firmware that
+starts the machine. A laptop past the end of its vendor's support gets a new
+life from an independent firmware: the cycle of hardware evolution. The logo,
+[`assets/ourobios.svg`](assets/ourobios.svg), is that ouroboros as a printed
+circuit with an infinity inside, 16 x 16 pixels so that it reads in the
+firmware too: it is in the menu bar of the setup, and `tools/logo.py`
+turns it into the LVGL image and into PNGs. The firmware reports itself as
+`ouroBIOS-vX.Y.Z-<variant>` (coreboot's `CONFIG_LOCALVERSION`, in SMBIOS and
+in the *About* card of the setup) and as *ouroBIOS* to the UEFI system table.
 
 > [!WARNING]
 > Flashing firmware can leave the laptop unable to boot. Keep a backup of the
@@ -220,10 +238,10 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | Path | Contents |
 |---|---|
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
-| `assets/` | the EDK2 boot splash |
+| `assets/` | the boot splash and the logo, `ourobios.svg` |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |

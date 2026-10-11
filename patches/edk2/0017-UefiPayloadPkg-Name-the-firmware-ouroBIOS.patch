@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 15:29:09 +0200
+Subject: [PATCH] UefiPayloadPkg: Name the firmware ouroBIOS
+
+The firmware of this payload is ouroBIOS: set the name the LVGL setup
+shows next to its logo in the menu bar (PcdLvglAptioHeaderVendor) and
+the vendor of the UEFI system table (PcdFirmwareVendor, "EDK II" by
+default; Linux prints it at boot, "efi: EFI v2.x by ouroBIOS").
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/UefiPayloadPkg.dsc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 66d9a81d5f..9809c89e14 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -773,6 +773,7 @@
+ 
+ [PcdsFixedAtBuild]
+   gEfiMdePkgTokenSpaceGuid.PcdHardwareErrorRecordLevel|1
++  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"ouroBIOS"
+   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVariableSize|0x8000
+   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxHardwareErrorVariableSize|0x8000
+   gEfiMdeModulePkgTokenSpaceGuid.PcdVariableStoreSize|0x10000
+@@ -793,7 +794,7 @@
+   #
+   gLvglPkgTokenSpaceGuid.PcdLvglHelpPaneWidthPct|25
+   gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderTitle|"System Preferences"
+-  gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderVendor|""
++  gLvglPkgTokenSpaceGuid.PcdLvglAptioHeaderVendor|"ouroBIOS"
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameEnabled|TRUE
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameHeightPct|90
+   gLvglPkgTokenSpaceGuid.PcdLvglCenteredFrameAspectNum|16

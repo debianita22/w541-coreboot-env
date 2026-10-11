@@ -164,7 +164,7 @@ cmd_notes() {
 	case "${version}" in *-*) pre=yes ;; esac
 	if [ "${PRERELEASE:-false}" = true ]; then pre=yes; fi
 
-	echo "coreboot for the **Lenovo ThinkPad W541**, ${version}, $(title_of "${v}") variant."
+	echo "**ouroBIOS** ${version}, $(title_of "${v}") variant: coreboot and EDK II for the **Lenovo ThinkPad W541**, reborn by design."
 	echo
 	if [ "${v}" = mrc ]; then
 		cat <<'EOF'
@@ -374,7 +374,7 @@ cmd_publish() {
 		local flags=()
 		if [ "${pre}" = true ] || [ "${v}" = nri ]; then flags+=(--prerelease); fi
 		gh release create "${t}" --repo "${GITHUB_REPOSITORY}" --draft --target "${sha}" \
-			--title "ThinkPad W541 coreboot ${VERSION} - $(title_of "${v}")" \
+			--title "ouroBIOS ${VERSION} - $(title_of "${v}")" \
 			--notes-file "${d}/release-${v}/NOTES.md" "${flags[@]}"
 		(cd "${d}/release-${v}" && gh release upload "${t}" --repo "${GITHUB_REPOSITORY}" --clobber \
 			./w541-coreboot-* SHA256SUMS)

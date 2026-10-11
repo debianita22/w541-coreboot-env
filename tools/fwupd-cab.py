@@ -87,15 +87,15 @@ def make_cab(files, when):
 def metainfo(variant, guid, version, date, url):
     vid = "io.github.debianita22.w541coreboot.%s.firmware" % variant
     return """<?xml version="1.0" encoding="UTF-8"?>
-<!-- Copyright 2026 w541-coreboot-env contributors -->
+<!-- Copyright 2026 ouroBIOS (w541-coreboot-env) contributors -->
 <component type="firmware">
   <id>{vid}</id>
-  <name>ThinkPad W541 coreboot ({variant})</name>
+  <name>ouroBIOS ({variant})</name>
   <name_variant_suffix>{variant}</name_variant_suffix>
-  <summary>coreboot and EDK2 system firmware for the ThinkPad W541</summary>
+  <summary>ouroBIOS: coreboot and EDK II system firmware for the ThinkPad W541</summary>
   <description>
     <p>
-      w541-coreboot-env system firmware, {variant} variant (memory
+      ouroBIOS, the coreboot firmware of the ThinkPad W541, {variant} variant (memory
       initialisation: {descen}), verified by vboot. The update writes the RW
       slot that is not running, and the firmware tries it on the next boot:
       if the write is cut short or the new slot fails, the old one boots.
@@ -108,7 +108,7 @@ def metainfo(variant, guid, version, date, url):
   <url type="homepage">{repo}</url>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-only</project_license>
-  <developer_name>w541-coreboot-env</developer_name>
+  <developer_name>ouroBIOS</developer_name>
   <categories>
     <category>X-System</category>
   </categories>

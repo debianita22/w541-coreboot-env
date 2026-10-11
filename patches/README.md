@@ -48,6 +48,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `edk2/0008-0011` | firmware updates with UEFI capsules: only images with a region manifest that fits the running flash layout are written (upstream rewrites the whole BIOS region otherwise, settings and VPD included), with the reason of a refusal in the ESRT; capsules on disk (`\EFI\UpdateCapsule`) applied in the same boot, before EndOfDxe, after a battery check; a reset after an update, otherwise the whole-flash access given up (asked to the SMI handler, not inferred from `OsIndications`) before Driver#### options, option ROMs or the OS run; the firmware reported as the system firmware of the ESRT |
 | `edk2/0012-0013` | capsules on disk read from USB drives too; a *Firmware Update* setup page: version, lowest accepted version, result of the last update, and an update from a USB drive (the capsule checked, then requested for the next boot) |
 | `edk2/0014-0016` | vboot A/B: the slot that booted marked good once the console is up (`PlatformBootManagerAfterConsole`); a capsule with both slots writes only the one that is not running, then appends a record to `RW_NVRAM` (*try next* that slot, two tries), erasing the region when it is full; a `%s` for an ASCII string in a DEBUG message of `FmpDeviceSmmLib` changed to `%a` |
+| `edk2/0017` | the firmware named ouroBIOS: next to its logo in the menu bar of the setup (`PcdLvglAptioHeaderVendor`) and as the vendor of the UEFI system table (`PcdFirmwareVendor`) |
 | `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
 | `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
 | `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |
@@ -56,6 +57,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `lvglpkg/0011` | a dynamic wallpaper (sky gradient and soft orbs of color, in a palette that follows the hour), the menu bar and the dock translucent and blurred over it, softer shadows |
 | `lvglpkg/0012` | the cursor moved by the speed of the pointer: 12 px/mm when slow, up to 3x when fast, the same move counted the same whether it arrives in one read or several |
 | `lvglpkg/0013` | the *Firmware Update* page under *General*, with its icon |
+| `lvglpkg/0014` | the ouroBIOS logo (`assets/ourobios.svg`, 16 x 16 pixel art as an LVGL image, enlarged by whole factors only) and the firmware name at the left of the menu bar, in place of the settings symbol |
 
 ## Optional patches
 

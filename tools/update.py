@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# update.py - aggiorna il firmware del W541 da Linux con una capsula UEFI
+# update.py - aggiorna ouroBIOS, il firmware del W541, da Linux con una capsula UEFI
 # (docs/update.md). Ogni release ha, per variante, una capsula firmata
 # (w541-coreboot-vX.Y.Z-mrc.cap): la si copia in \EFI\UpdateCapsule
 # dell'ESP, si accende il bit "capsule su disco" di OsIndications e al
@@ -669,7 +669,7 @@ def print_capsule(path, cap):
         print("           %s" % " ".join(sorted(cap["cab"]["files"])))
     print("capsula:   %s" % (path if "cab" not in cap else "firmware.bin"))
     legacy = legacy_variant_of(cap["type_id"])
-    print("firmware:  W541 coreboot, variante %s%s (%s)" % (cap["variant"] or legacy or "?",
+    print("firmware:  ouroBIOS, variante %s%s (%s)" % (cap["variant"] or legacy or "?",
                                                          ", v1.2.x senza vboot" if legacy else "", cap["type_id"]))
     print("versione:  %s, minima %s" % (version_str(cap["version"]), version_str(cap["lsv"])))
     print("regioni:   %s" % (" ".join(cap["regions"]) or "tutto il flash"))
@@ -719,7 +719,7 @@ def cmd_status(args):
     if fw is None:
         print("firmware:  %s, senza aggiornamento con capsula (prima della v1.2.0?)" % (bios or "?"))
         return 0
-    print("firmware:  W541 coreboot, variante %s (BIOS %s)" % (fw["variant"], bios or "?"))
+    print("firmware:  ouroBIOS, variante %s (BIOS %s)" % (fw["variant"], bios or "?"))
     if fw["legacy"]:
         print("mappa:     senza vboot (v1.2.x): la v1.3.0 si installa una volta con flashrom (%s)" % MIGRATION)
     else:
