@@ -170,7 +170,9 @@ second with *Firmware protection* back on; a suspend came back to the
 desktop with *S3_RESUME* on the same slot. With the protection on, the
 rc3 capsule asked for slot B: the next boot tried it and the payload
 confirmed it, and `update.py vboot --image` found the read-only part and
-both slots equal to the release.
+both slots equal to the release. Three more boots stayed on B, the second
+using the last try (`prossimo: slot B`, `corrente: slot B, -`), and
+`update.py status` showed *ultimo: v1.3.0, riuscito*.
 
 ## Testing on the laptop
 
@@ -241,13 +243,14 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    #   corrente:   slot B, -        (the slot of this boot: "in prova", "confermato")
    #   precedente: slot B, -
    ```
-5. **A whole slot written by the capsule** (programmer at hand): erase
+5. **A whole slot written by the capsule** (programmer at hand, *BIOS
+   Lock* off for the flashrom writes of steps 5 and 6): erase
    slot A, which is not running, and let the capsule rewrite all of it,
    2.8 MiB across the two chips.
 
    ```sh
    cp w541-coreboot-v1.3.0-rc3-mrc.rom bad.rom
-   dd if=/dev/zero of=bad.rom bs=64K seek=$((0x5C0000 / 0x10000)) count=45 conv=notrunc
+   dd if=/dev/zero of=bad.rom bs=64K seek=92 count=45 conv=notrunc    # RW_SECTION_A, 0x5C0000
    sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
    sudo systemctl reboot                             # still slot B
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc3-mrc.cap
@@ -259,10 +262,12 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    ```
 6. **Fallback** (programmer at hand): spoil the slot that runs, A, and
    reboot: vboot must find it broken, write that to `RW_NVRAM` and boot B.
+   With B running, the same with `seek=138` (`FW_MAIN_B`, 0x8A0000) and
+   `-i RW_SECTION_B`: the boot goes back to A.
 
    ```sh
    cp w541-coreboot-v1.3.0-rc3-mrc.rom bad.rom
-   dd if=/dev/zero of=bad.rom bs=64K seek=$((0x5D0000 / 0x10000)) count=1 conv=notrunc
+   dd if=/dev/zero of=bad.rom bs=64K seek=93 count=1 conv=notrunc     # FW_MAIN_A, 0x5D0000
    sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
    sudo systemctl reboot
    sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_B
