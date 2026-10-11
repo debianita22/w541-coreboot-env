@@ -94,7 +94,9 @@ capsule to `\EFI\UpdateCapsule\w541-coreboot.cap` on the ESP and sets the
 restarts straight away.
 
 After the reboot, `update.py status` shows the new version and, under
-*ultimo* (last), the result of the update.
+*ultimo* (last), the result of the update. Releases before v1.3.0 (and
+v1.3.0-rc1 and rc2) never put the result in the ESRT: there *ultimo* stays
+*nessun aggiornamento con capsula*.
 
 ## What happens at boot
 
@@ -237,7 +239,9 @@ Any tool that delivers capsules on disk works the same way:
   recover it with an external programmer and the `-4mb-chip.rom` of a
   release, as in [docs/flashing.md](flashing.md#recovery).
 - The new version does not show up after the update: vboot went back to the
-  old slot (the new one did not verify, or did not boot twice).
+  old slot (the new one did not verify, or did not boot twice). *ultimo*
+  still shows the update as done: it is the result of writing the slot, not
+  of booting it.
   `update.py vboot` on a copy of the flash shows *precedente: slot X,
   fallito*; `cbmem -c` (*falling back*) tells the case of the two tries.
 
@@ -248,7 +252,10 @@ The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 - coreboot (`DRIVERS_EFI_FW_INFO`) tells the payload the GUID and the version
   of the firmware, which the EDK2 payload publishes in the ESRT through
   FmpDxe, as the system firmware (`fw_type` 1, patch `edk2/0011`); Linux
-  shows it in `/sys/firmware/efi/esrt`.
+  shows it in `/sys/firmware/efi/esrt`. The ESRT is built again at every
+  boot (EsrtFmpDxe, patch `edk2/0018`), with the version and the result of
+  the last capsule (`last_attempt_version`, `last_attempt_status`), which
+  FmpDxe keeps in its `FmpState` variable.
 - `OsIndicationsSupported` announces capsules on disk. When `OsIndications`
   asks for them, coreboot (`DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT`) switches
   its SMMSTORE handler to the whole flash for that boot only.

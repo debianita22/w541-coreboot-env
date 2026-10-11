@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 20:27:49 +0200
+Subject: [PATCH] UefiPayloadPkg: Build the ESRT from FmpDxe at every boot
+
+EsrtDxe publishes at ReadyToBoot the ESRT entries cached in its EsrtFmp
+variable, which only SyncEsrtFmp() writes. ProcessCapsules() calls it,
+but PlatformBootManagerLib hands each capsule on disk straight to
+ProcessCapsuleImage(), so the variable is never created and EsrtDxe
+publishes nothing: the OS sees the ESRT that BlSupportDxe builds from the
+bootloader's firmware info, where the last attempt is always zero, and
+can't tell whether an update was applied or why it failed. A synced cache
+would go stale anyway: after the flash is rewritten without a capsule
+(flashrom, a programmer), or while a firmware that doesn't sync runs, it
+still describes the firmware that wrote it.
+
+Use EsrtFmpDxe, which builds the ESRT at ReadyToBoot from what FmpDxe
+reports in this boot, last attempt version and status included, and
+keeps nothing in variables. The entry is otherwise the one BlSupportDxe
+publishes: same class, type (PcdSystemFmpCapsuleImageTypeIdGuid),
+version and capsule flags; the lowest supported version is the one
+FmpDxe checks capsules against. Without an FMP instance EsrtFmpDxe
+installs nothing, and BlSupportDxe's ESRT stays.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ UefiPayloadPkg/UefiPayloadPkg.dsc | 6 +++++-
+ UefiPayloadPkg/UefiPayloadPkg.fdf | 2 +-
+ 2 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 9809c89e14..966d2d4179 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -1266,7 +1266,11 @@
+       FmpDeviceLib|FmpDevicePkg/Library/FmpDeviceLibNull/FmpDeviceLibNull.inf
+ !endif
+   }
+-  MdeModulePkg/Universal/EsrtDxe/EsrtDxe.inf
++  # The ESRT built from FmpDxe at each boot, last attempt included.  EsrtDxe
++  # publishes a cache that only ProcessCapsules() updates, never the capsules
++  # on disk of PlatformBootManagerLib, and that outlives a flash rewritten
++  # with a programmer.
++  MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
+   UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+ !endif
+ 
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.fdf b/UefiPayloadPkg/UefiPayloadPkg.fdf
+index a0330ce983..d3784ac37d 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.fdf
++++ b/UefiPayloadPkg/UefiPayloadPkg.fdf
+@@ -549,7 +549,7 @@ INF ShellPkg/Application/Shell/Shell.inf
+ !if $(CAPSULE_EMBED_FMP_DXE) == FALSE
+ INF  FILE_GUID = $(CAPSULE_MAIN_FW_GUID) FmpDevicePkg/FmpDxe/FmpDxe.inf
+ !endif
+-INF MdeModulePkg/Universal/EsrtDxe/EsrtDxe.inf
++INF MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
+ INF UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+ !endif
+ 
