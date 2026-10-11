@@ -31,7 +31,7 @@ from xml.sax.saxutils import escape
 
 # l'inizializzazione della RAM di ogni variante, per la descrizione
 VARIANTS = {"mrc": "Intel mrc.bin", "nri": "native RAM init"}
-REPO = "https://github.com/debianita22/w541-coreboot-env"
+REPO = "https://github.com/debianita22/ourobios"
 CHUNK = 32768
 
 
@@ -85,9 +85,9 @@ def make_cab(files, when):
 
 
 def metainfo(variant, guid, version, date, url):
-    vid = "io.github.debianita22.w541coreboot.%s.firmware" % variant
+    vid = "io.github.debianita22.ourobios.%s.firmware" % variant
     return """<?xml version="1.0" encoding="UTF-8"?>
-<!-- Copyright 2026 ouroBIOS (w541-coreboot-env) contributors -->
+<!-- Copyright 2026 ouroBIOS contributors -->
 <component type="firmware">
   <id>{vid}</id>
   <name>ouroBIOS ({variant})</name>

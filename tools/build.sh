@@ -115,8 +115,8 @@ OPVK_TREE=src/mainboard/lenovo/haswell/acpi/opvk.inc
 
 # git am: il committer e le date fisse rendono uguale ogni volta il commit in
 # cima all'albero (genbuild_h.sh ne prende data e hash)
-export GIT_COMMITTER_NAME="w541-coreboot-env"
-export GIT_COMMITTER_EMAIL="w541-coreboot-env@users.noreply.github.com"
+export GIT_COMMITTER_NAME="ourobios"
+export GIT_COMMITTER_EMAIL="ourobios@users.noreply.github.com"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die()  { note error "$*"; printf '\033[31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -597,7 +597,7 @@ make_capsule() {
 	[ -n "${guid}" ] && [ -n "${lsv}" ] || die "${v}: GUID o LSV mancanti nel .config"
 	# la data del commit, non quella della build
 	date="$(git -C "${O}" log -1 --format=%cs 2>/dev/null || date -u +%F)"
-	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
+	repo="${GITHUB_REPOSITORY:-debianita22/ourobios}"
 	tmp="$(mktemp -d)"
 	chmod 700 "${tmp}"
 	# la chiave privata solo in questa cartella e solo per GenerateCapsule

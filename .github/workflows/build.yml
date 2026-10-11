@@ -33,7 +33,7 @@
 #   - pre-release tutte e due con la casella "prerelease" o un trattino nella
 #     versione (v1.1.0-rc1); le release vere solo dal ramo principale. Una
 #     pre-release provata sul portatile diventa release senza ricostruirla:
-#       gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=false --latest
+#       gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --latest
 #   - il job Release si puo' rilanciare: le bozze di un tentativo fallito si
 #     cancellano e si rifanno; un tag che c'e' gia' deve essere sul commit della
 #     build.

@@ -75,8 +75,8 @@ file names; `tools/verify-rom.sh --release` rejects such an image.
 After a change in a coreboot tree based on `COREBOOT_COMMIT`:
 
 ```sh
-git format-patch --zero-commit -o /path/to/w541-coreboot-env/patches/ <COREBOOT_COMMIT>..HEAD
-ls /path/to/w541-coreboot-env/patches/0*.patch | xargs -n1 basename > /path/to/w541-coreboot-env/patches/series
+git format-patch --zero-commit -o /path/to/ourobios/patches/ <COREBOOT_COMMIT>..HEAD
+ls /path/to/ourobios/patches/0*.patch | xargs -n1 basename > /path/to/ourobios/patches/series
 ```
 
 The same for EDK2 (a tree at `CONFIG_EDK2_TAG_OR_REV`) and for its LvglPkg

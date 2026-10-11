@@ -88,7 +88,7 @@ check_coreboot() {
 	ahead="$(git -C "${work}/cb" rev-list --count HEAD)"
 	git -C "${work}/cb" log --format=%s HEAD > "${work}/subjects"
 
-	export GIT_COMMITTER_NAME="w541-coreboot-env" GIT_COMMITTER_EMAIL="w541-coreboot-env@users.noreply.github.com"
+	export GIT_COMMITTER_NAME="ourobios" GIT_COMMITTER_EMAIL="ourobios@users.noreply.github.com"
 	while read -r p; do
 		# il Subject della mail, anche se va a capo, senza [PATCH]
 		sub="$(sed -n '/^Subject: /{:a;N;/\n[^ ]/!ba;p;q}' "${O}/patches/${p}" | sed '$d' | tr -d '\n' \

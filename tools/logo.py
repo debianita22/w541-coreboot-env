@@ -7,6 +7,10 @@
   tools/logo.py png OUT.png [SCALA] [SFONDO] un PNG, pixel ingranditi di SCALA
                                             (default 32), sfondo esadecimale
                                             (default trasparente)
+  tools/logo.py splash OUT.bmp               il boot splash (assets/bootsplash.bmp):
+                                            logo, nome e motto su nero, BMP 24 bit
+                                            che EDK2 centra sullo schermo (serve
+                                            Pillow, con i font DejaVu)
 
 Il logo e' pixel art 16x16: nel SVG ogni <rect> e' un pixel (o una fila di
 pixel) con il suo colore. Solo la libreria standard, piu' zlib per il PNG.
@@ -17,6 +21,20 @@ import sys
 import zlib
 
 SIZE = 16
+
+# Il boot splash: sfondo nero (EDK2 cancella lo schermo in nero attorno
+# all'immagine), logo a 12x, poi il nome e il motto nei colori del tema
+SPLASH_W, SPLASH_H = 640, 470
+SPLASH_LOGO_SCALE = 12
+SPLASH_BG = 0x000000
+SPLASH_NAME = "ouroBIOS"
+SPLASH_NAME_COLOR = 0xF5F5F7
+SPLASH_TAGLINE = "REBORN BY DESIGN."
+SPLASH_TAGLINE_COLOR = 0xA1A1A6
+SPLASH_LINE = "COREBOOT  \u00b7  EDK II  \u00b7  THINKPAD W541"
+SPLASH_LINE_COLOR = 0x636366
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
 def pixels(svg):
@@ -77,10 +95,50 @@ def as_png(grid, scale, bg):
             + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
+def spaced(draw, xy, text, font, fill, spacing):
+    """Testo con spaziatura tra le lettere, centrato su xy[0]."""
+    widths = [draw.textlength(ch, font=font) for ch in text]
+    total = sum(widths) + spacing * (len(text) - 1)
+    x = xy[0] - total / 2
+    for ch, w in zip(text, widths):
+        draw.text((x, xy[1]), ch, font=font, fill=fill)
+        x += w + spacing
+
+
+def as_splash(grid):
+    from PIL import Image, ImageDraw, ImageFont
+
+    def rgb(c):
+        return ((c >> 16) & 255, (c >> 8) & 255, c & 255)
+
+    img = Image.new("RGB", (SPLASH_W, SPLASH_H), rgb(SPLASH_BG))
+    draw = ImageDraw.Draw(img)
+    size = SIZE * SPLASH_LOGO_SCALE
+    x0 = (SPLASH_W - size) // 2
+    y0 = 48
+    for y, row in enumerate(grid):
+        for x, p in enumerate(row):
+            if p is not None:
+                draw.rectangle([x0 + x * SPLASH_LOGO_SCALE, y0 + y * SPLASH_LOGO_SCALE,
+                                x0 + (x + 1) * SPLASH_LOGO_SCALE - 1, y0 + (y + 1) * SPLASH_LOGO_SCALE - 1], fill=rgb(p))
+    name = ImageFont.truetype(FONT_BOLD, 56)
+    tag = ImageFont.truetype(FONT, 18)
+    line = ImageFont.truetype(FONT, 14)
+    y = y0 + size + 36
+    draw.text((SPLASH_W / 2, y), SPLASH_NAME, font=name, fill=rgb(SPLASH_NAME_COLOR), anchor="mt")
+    y += 56 + 22
+    spaced(draw, (SPLASH_W / 2, y), SPLASH_TAGLINE, tag, rgb(SPLASH_TAGLINE_COLOR), 4)
+    y += 18 + 18
+    spaced(draw, (SPLASH_W / 2, y), SPLASH_LINE, line, rgb(SPLASH_LINE_COLOR), 2)
+    return img
+
+
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("c", "png"):
+    if len(argv) < 2 or argv[1] not in ("c", "png", "splash"):
         sys.exit(__doc__)
-    if argv[1] == "c":
+    if argv[1] == "splash":
+        as_splash(pixels(open("assets/ourobios.svg").read())).save(argv[2], "BMP")
+    elif argv[1] == "c":
         svg = argv[2] if len(argv) > 2 else "assets/ourobios.svg"
         sys.stdout.write(as_c(pixels(open(svg).read())))
     else:

@@ -143,7 +143,7 @@ index cc18dc8..7f5dc45 100644
    MdePkg/MdePkg.dec
 diff --git a/LvglDisplayEngineDxe/LvglLogo.h b/LvglDisplayEngineDxe/LvglLogo.h
 new file mode 100644
-index 0000000..72f6d3e
+index 0000000..a548206
 --- /dev/null
 +++ b/LvglDisplayEngineDxe/LvglLogo.h
 @@ -0,0 +1,51 @@
@@ -153,7 +153,7 @@ index 0000000..72f6d3e
 +  theme (ring THEME_COLOR_ACCENT, infinity THEME_COLOR_TEXT_SECONDARY, eye
 +  THEME_COLOR_TEXT_PRIMARY).
 +
-+  Generated from assets/ourobios.svg of w541-coreboot-env by
++  Generated from assets/ourobios.svg of the ouroBIOS repository by
 +  tools/logo.py c: edit the SVG, not this file.
 +
 +  SPDX-License-Identifier: BSD-2-Clause-Patent

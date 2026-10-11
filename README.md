@@ -7,11 +7,11 @@
 <p align="center"><b>REBORN BY DESIGN.</b><br>
 <sub>COREBOOT &middot; EDK II &middot; THINKPAD W541</sub></p>
 
-[![MRC release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-mrc&style=flat-square&label=mrc)](https://github.com/debianita22/w541-coreboot-env/releases)
-[![NRI release](https://img.shields.io/github/v/release/debianita22/w541-coreboot-env?include_prereleases&sort=semver&filter=*-nri&style=flat-square&label=nri)](https://github.com/debianita22/w541-coreboot-env/releases)
-[![Check](https://img.shields.io/github/actions/workflow/status/debianita22/w541-coreboot-env/check.yml?branch=main&style=flat-square&label=check)](https://github.com/debianita22/w541-coreboot-env/actions/workflows/check.yml)
-[![Build](https://img.shields.io/github/actions/workflow/status/debianita22/w541-coreboot-env/build.yml?style=flat-square&label=build)](https://github.com/debianita22/w541-coreboot-env/actions/workflows/build.yml)
-[![License](https://img.shields.io/github/license/debianita22/w541-coreboot-env?style=flat-square)](LICENSE)
+[![MRC release](https://img.shields.io/github/v/release/debianita22/ourobios?include_prereleases&sort=semver&filter=*-mrc&style=flat-square&label=mrc)](https://github.com/debianita22/ourobios/releases)
+[![NRI release](https://img.shields.io/github/v/release/debianita22/ourobios?include_prereleases&sort=semver&filter=*-nri&style=flat-square&label=nri)](https://github.com/debianita22/ourobios/releases)
+[![Check](https://img.shields.io/github/actions/workflow/status/debianita22/ourobios/check.yml?branch=main&style=flat-square&label=check)](https://github.com/debianita22/ourobios/actions/workflows/check.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/debianita22/ourobios/build.yml?style=flat-square&label=build)](https://github.com/debianita22/ourobios/actions/workflows/build.yml)
+[![License](https://img.shields.io/github/license/debianita22/ourobios?style=flat-square)](LICENSE)
 
 ---
 
@@ -34,10 +34,11 @@ starts the machine. A laptop past the end of its vendor's support gets a new
 life from an independent firmware: the cycle of hardware evolution. The logo,
 [`assets/ourobios.svg`](assets/ourobios.svg), is that ouroboros as a printed
 circuit with an infinity inside, 16 x 16 pixels so that it reads in the
-firmware too: it is in the menu bar of the setup, and `tools/logo.py`
-turns it into the LVGL image and into PNGs. The firmware reports itself as
-`ouroBIOS-vX.Y.Z-<variant>` (coreboot's `CONFIG_LOCALVERSION`, in SMBIOS and
-in the *About* card of the setup) and as *ouroBIOS* to the UEFI system table.
+firmware too: it is the boot splash and the badge of the setup's menu bar,
+and `tools/logo.py` turns it into the LVGL image, the splash and PNGs. The
+firmware reports itself as `ouroBIOS-vX.Y.Z-<variant>` (coreboot's
+`CONFIG_LOCALVERSION`, in SMBIOS and in the *About* card of the setup) and
+as *ouroBIOS* to the UEFI system table.
 
 > [!WARNING]
 > Flashing firmware can leave the laptop unable to boot. Keep a backup of the
@@ -193,8 +194,8 @@ Debian or Ubuntu:
 ```sh
 sudo apt install build-essential bison flex gnat libncurses-dev zlib1g-dev m4 \
     curl git python3 uuid-dev imagemagick
-git clone https://github.com/debianita22/w541-coreboot-env.git
-cd w541-coreboot-env
+git clone https://github.com/debianita22/ourobios.git
+cd ourobios
 tools/build.sh                      # both variants, into dist/
 ```
 
@@ -230,7 +231,7 @@ test keys). Versions with a hyphen
 that works on the laptop becomes a release without rebuilding it:
 
 ```sh
-gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=false --latest
+gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --latest
 ```
 
 ## Repository layout
@@ -238,7 +239,7 @@ gh release edit v1.0.0-mrc --repo debianita22/w541-coreboot-env --prerelease=fal
 | Path | Contents |
 |---|---|
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
-| `assets/` | the boot splash and the logo, `ourobios.svg` |
+| `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
 | `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `logo.py`, the logo as an LVGL image or a PNG |

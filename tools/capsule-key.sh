@@ -40,7 +40,7 @@ distinguished_name = dn
 x509_extensions = ext
 prompt = no
 [dn]
-O = w541-coreboot-env
+O = ouroBIOS
 CN = W541 coreboot capsule signing
 [ext]
 basicConstraints = critical,CA:FALSE

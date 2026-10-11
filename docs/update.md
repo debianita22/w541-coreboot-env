@@ -7,7 +7,7 @@ flash map before vboot, installs the capsules of v1.2.x only: see
 [The first time](#the-first-time)):
 
 ```sh
-curl -LO https://raw.githubusercontent.com/debianita22/w541-coreboot-env/main/tools/update.py
+curl -LO https://raw.githubusercontent.com/debianita22/ourobios/main/tools/update.py
 sudo python3 update.py status
 sudo python3 update.py stage --latest
 sudo systemctl reboot
@@ -156,7 +156,7 @@ packages signed by a certificate in `/etc/pki/fwupd`, so trust the project
 certificate once:
 
 ```sh
-sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/w541-coreboot-env.pem
+sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem
 sudo systemctl restart fwupd
 fwupdmgr get-devices                       # System Firmware, version 16908289 (= 1.2.1)
 sudo fwupdmgr install w541-coreboot-v1.2.2-mrc.cab

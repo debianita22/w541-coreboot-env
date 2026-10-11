@@ -43,7 +43,7 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
-REPO = "debianita22/w541-coreboot-env"
+REPO = "debianita22/ourobios"
 
 # Il GUID dell'ESRT (DRIVERS_EFI_MAIN_FW_GUID nei defconfig) di ogni variante,
 # con la mappa del flash di vboot (dalla v1.3.0)

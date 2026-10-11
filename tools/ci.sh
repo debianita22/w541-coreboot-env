@@ -144,7 +144,7 @@ cmd_version() {
 cmd_notes() {
 	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cab cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
 	: "${VERSION:?}"
-	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
+	repo="${GITHUB_REPOSITORY:-debianita22/ourobios}"
 	sha="${GITHUB_SHA:-$(git -C "${O}" rev-parse HEAD)}"
 	version="${VERSION}"
 	rom="w541-coreboot-${version}-${v}.rom"
