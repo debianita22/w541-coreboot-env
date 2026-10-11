@@ -899,6 +899,22 @@ def nv_coreboot_current(region):
     return used_below * NV_RECORD
 
 
+# La release scritta in una regione: coreboot mette la sua versione, con
+# CONFIG_LOCALVERSION, nel banner del bootblock e di ogni stage. Due release
+# nella stessa regione: una scrittura rimasta a meta'.
+RELEASE_RE = re.compile(rb"(?:ouroBIOS|w541)-v\d+\.\d+\.\d+(?:-rc\d+)?-(?:mrc|nri)")
+
+
+def region_releases(data, area):
+    off, size = area
+    found = []
+    for m in RELEASE_RE.finditer(data[off:off + size]):
+        name = m.group().decode()
+        if name not in found:
+            found.append(name)
+    return found
+
+
 def cmd_vboot(args):
     data = open(args.dump, "rb").read()
     areas = fmap_areas(data)
@@ -914,6 +930,17 @@ def cmd_vboot(args):
     else:
         raise Error("%s: ne' un'immagine del flash con la FMAP ne' una copia di RW_NVRAM" % args.dump)
     slot = "AB"
+    if areas is not None:
+        # quale release c'e' nella parte read-only e in ciascuno slot
+        head = "contenuto:"
+        for label, name in (("RO", "WP_RO"), ("slot A", "FW_MAIN_A"), ("slot B", "FW_MAIN_B")):
+            if name not in areas or sum(areas[name]) > len(data):
+                continue
+            found = region_releases(data, areas[name])
+            print("%-12s%-8s%s" % (head, label, " + ".join(found) + (
+                "  (mescolate: scritto a meta'?)" if len(found) > 1 else "")
+                if found else "non riconosciuto: vuoto o rovinato?"))
+            head = ""
     st = nv_state(region)
     print("RW_NVRAM:   %d record su %d" % (st["used"], st["total"]))
     if args.all:
@@ -933,8 +960,11 @@ def cmd_vboot(args):
         cb = nv_coreboot_current(region)
         beyond = [o for o in range(st["used"] * NV_RECORD, len(region), NV_RECORD)
                   if region[o:o + NV_RECORD] != b"\xff" * NV_RECORD]
-        print("coreboot:   legge il record a 0x%04x (#%d)%s" % (
-            cb, cb // NV_RECORD, "" if cb == st["offset"] else ", NON l'ultimo prima del primo vuoto"))
+        if st["used"] == 0 and not beyond:
+            print("coreboot:   nessun record da leggere")
+        else:
+            print("coreboot:   legge il record a 0x%04x (#%d)%s" % (
+                cb, cb // NV_RECORD, "" if cb == st["offset"] else ", NON l'ultimo prima del primo vuoto"))
         if beyond:
             print("oltre:      %d record non vuoti dopo il primo vuoto, da 0x%04x: %s" % (
                 len(beyond), beyond[0], " ".join("0x%04x" % o for o in beyond[:8])))

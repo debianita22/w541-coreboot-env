@@ -219,6 +219,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    ```sh
    sudo flashrom -p internal -r flash.bin
    python3 tools/update.py vboot flash.bin
+   #   contenuto:  RO, slot A, slot B: the release written in each
    #   prossimo:   slot B           (the slot of the next boot, and its tries)
    #   corrente:   slot B, -        (the slot of this boot: "in prova", "confermato")
    #   precedente: slot B, -
