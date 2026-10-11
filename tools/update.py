@@ -954,6 +954,90 @@ def cmd_vboot(args):
     return 0
 
 
+# --- le variabili UEFI in SMMSTORE ---------------------------------------------
+#
+# Lo store di EDK2 nella regione SMMSTORE: un firmware volume
+# (EFI_SYSTEM_NV_DATA_FV), poi VARIABLE_STORE_HEADER e le variabili una dopo
+# l'altra, allineate a 4 byte (MdeModulePkg, VariableFormat.h). Si mostrano
+# nomi, GUID, stato, attributi e dimensioni, mai i dati.
+VAR_STATES = {0x3f: "valida", 0x3e: "valida (in cancellazione)", 0x3d: "cancellata",
+              0x3c: "cancellata", 0x7f: "solo header", 0xff: "vuota"}
+AUTH_VAR_GUID = bytes.fromhex("782cf3aa7b949a43a1802e144ec37792")
+
+
+def guid_str(b):
+    a, c, d = struct.unpack_from("<IHH", b, 0)
+    return "%08x-%04x-%04x-%s-%s" % (a, c, d, b[8:10].hex(), b[10:16].hex())
+
+
+def var_store(region):
+    """Le variabili dello store: lista di dict, e i dati dello store."""
+    if region[0x28:0x2c] != b"_FVH":
+        raise Error("SMMSTORE: niente firmware volume")
+    hlen = struct.unpack_from("<H", region, 0x30)[0]
+    fv_len = struct.unpack_from("<Q", region, 0x20)[0]
+    sig = region[hlen:hlen + 16]
+    size, fmt, state = struct.unpack_from("<IBB", region, hlen + 16)
+    auth = sig == AUTH_VAR_GUID
+    hsize = 60 if auth else 32
+    start = hlen + 28
+    end = min(hlen + size, len(region))
+    out = []
+    off = start
+    while off + hsize <= end:
+        if struct.unpack_from("<H", region, off)[0] != 0x55aa:
+            break
+        st, attrs = region[off + 2], struct.unpack_from("<I", region, off + 4)[0]
+        if auth:
+            nsize, dsize = struct.unpack_from("<II", region, off + 36)
+            guid = region[off + 44:off + 60]
+        else:
+            nsize, dsize = struct.unpack_from("<II", region, off + 8)
+            guid = region[off + 16:off + 32]
+        if nsize > end or dsize > end:
+            out.append({"off": off, "state": st, "name": "?", "guid": guid, "attrs": attrs,
+                        "size": dsize, "bad": True})
+            break
+        name = region[off + hsize:off + hsize + nsize].decode("utf-16-le", "replace").rstrip("\0")
+        out.append({"off": off, "state": st, "name": name, "guid": guid, "attrs": attrs, "size": dsize})
+        off = (off + hsize + nsize + dsize + 3) & ~3
+    info = {"fv_len": fv_len, "store_size": size, "format": fmt, "health": state, "auth": auth,
+            "used": off - start, "free": end - off}
+    return out, info
+
+
+def cmd_vars(args):
+    data = open(args.dump, "rb").read()
+    areas = fmap_areas(data)
+    if areas is not None and "SMMSTORE" in areas:
+        o, s = areas["SMMSTORE"]
+        region = data[o:o + s]
+    else:
+        region = data
+    vars_, info = var_store(region)
+    print("store:      %s, %d KiB, formato 0x%02x, stato 0x%02x%s" % (
+        "autenticato" if info["auth"] else "normale", info["store_size"] // 1024, info["format"],
+        info["health"], "" if info["health"] == 0xfe else " (NON sano)"))
+    states = {}
+    for v in vars_:
+        states[VAR_STATES.get(v["state"], "0x%02x" % v["state"])] = states.get(
+            VAR_STATES.get(v["state"], "0x%02x" % v["state"]), 0) + 1
+    print("variabili:  %s" % ", ".join("%d %s" % (n, k) for k, n in sorted(states.items())))
+    print("spazio:     %d KiB usati, %d KiB liberi" % (info["used"] // 1024, info["free"] // 1024))
+    pat = re.compile(args.grep, re.I) if args.grep else None
+    for v in vars_:
+        if pat and not (pat.search(v["name"]) or pat.search(guid_str(v["guid"]))):
+            continue
+        if not args.all and v["state"] not in (0x3f, 0x3e, 0x7f) and not pat:
+            continue
+        a = v["attrs"]
+        flags = "".join(c for b, c in ((0, "N"), (1, "B"), (2, "R"), (5, "T")) if a >> b & 1)
+        print("  %06x %-26s %-4s %6d  %s  %s" % (
+            v["off"], VAR_STATES.get(v["state"], "0x%02x" % v["state"]), flags, v["size"],
+            guid_str(v["guid"]), v["name"]))
+    return 0
+
+
 # --- vboot: cosa ha deciso verstage in questo avvio ----------------------------
 #
 # La workbuf di vboot resta in CBMEM ("VBOOT WORK", id 0x78007343): all'inizio
@@ -1030,6 +1114,12 @@ def main():
     p.add_argument("dump", help="flashrom -r: tutto il flash, o -i RW_NVRAM:FILE")
     p.add_argument("--all", action="store_true", help="anche tutti i record, dal primo")
     p.set_defaults(func=cmd_vboot)
+
+    p = sub.add_parser("vars", help="le variabili UEFI di SMMSTORE in una copia del flash (nomi, mai i dati)")
+    p.add_argument("dump")
+    p.add_argument("--grep", help="solo le variabili con questo nome o GUID (regex)")
+    p.add_argument("--all", action="store_true", help="anche quelle cancellate")
+    p.set_defaults(func=cmd_vars)
 
     p = sub.add_parser("vboot-work", help="cosa ha deciso vboot in questo avvio (sudo cbmem -r 0x78007343 > FILE)")
     p.add_argument("dump")
