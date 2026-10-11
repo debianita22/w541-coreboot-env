@@ -55,3 +55,4 @@
 0055-security-lockdown-Add-an-option-to-turn-the-boot-med.patch
 0056-mb-lenovo-haswell-Add-Firmware-protection-to-the-set.patch
 0057-security-vboot-Add-an-option-to-leave-the-TPM-to-ram.patch
+0058-sb-intel-lynxpoint-Set-up-the-ACPI-I-O-space-in-the-.patch

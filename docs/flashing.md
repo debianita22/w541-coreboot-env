@@ -218,7 +218,14 @@ first error:
 
 If the kernel has `spi-intel` built in, `modprobe -r` does nothing and the
 backup comes out at 8 MiB: the `test` stops there, unbind the device as in
-[Before you start](#before-you-start). flashrom checks after writing the
+[Before you start](#before-you-start).
+
+The same command updates the read-only part of a laptop that already runs
+v1.3.0 or later (a fix in the bootblock, as from v1.3.0-rc1 to rc2), which a
+capsule never writes: first turn *Firmware protection* off in the setup
+(*Security* -> *Flash protection*), save and reboot, check that
+`sudo flashrom -p internal 2>&1 | grep PR0` prints nothing, then run it, and
+turn the protection on again afterwards. flashrom checks after writing the
 whole chip, the regions it kept included, against what it read before.
 
 `--fmap-file` takes the map of the new image; flashrom must end with

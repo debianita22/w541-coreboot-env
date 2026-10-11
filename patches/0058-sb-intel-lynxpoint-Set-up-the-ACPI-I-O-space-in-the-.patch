@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 19:51:14 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Set up the ACPI I/O space in the
+ bootblock
+
+With vboot in the bootblock (HASWELL_VBOOT_IN_BOOTBLOCK), verstage asks
+platform_is_resuming() whether this is an S3 resume, which reads PM1_STS
+and PM1_CNT through PMBASE. romstage programs PMBASE and ACPI_EN only
+later, in early_pch_init(), so verstage read I/O 0 and 4 instead: the
+legacy DMA controller. A cold boot can then look like an S3 resume, and
+vboot keeps the slot of the last boot without consuming the tries: a new
+slot that an update asked to try is never booted.
+
+Seen on a ThinkPad W541 after an A/B update: nvdata asked for slot B
+with two tries, and vboot's work buffer of the next cold boot had
+VB2_CONTEXT_S3_RESUME set and no VB2_SD_STATUS_CHOSE_SLOT, so slot A
+booted and nvdata was left as it was.
+
+Program PMBASE and enable the ACPI I/O space in the bootblock, as
+romstage does again later.
+
+TEST=Built for lenovo/w541.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/bootblock.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/src/southbridge/intel/lynxpoint/bootblock.c b/src/southbridge/intel/lynxpoint/bootblock.c
+index d7e719f1c..c11950553 100644
+--- a/src/southbridge/intel/lynxpoint/bootblock.c
++++ b/src/southbridge/intel/lynxpoint/bootblock.c
+@@ -39,9 +39,23 @@ static void set_spi_speed(void)
+ 	RCBA8(SPIBAR_SSFC + 2) = ssfc;
+ }
+ 
++/*
++ * The ACPI I/O space, which romstage sets up again. With vboot in the
++ * bootblock, verstage tells an S3 resume from PM1_STS and PM1_CNT
++ * (platform_is_resuming()): with PMBASE still at its reset value it read the
++ * legacy DMA controller at I/O 0 instead, and could take a cold boot for a
++ * resume, which keeps the slot of the last boot and ignores a slot to try.
++ */
++static void enable_acpi_io(void)
++{
++	pci_write_config32(PCH_LPC_DEV, PMBASE, DEFAULT_PMBASE | 1);
++	pci_write_config8(PCH_LPC_DEV, ACPI_CNTL, ACPI_EN);
++}
++
+ void bootblock_early_southbridge_init(void)
+ {
+ 	map_rcba();
++	enable_acpi_io();
+ 	enable_spi_prefetching_and_caching();
+ 	enable_port80_on_lpc();
+ 	set_spi_speed();
