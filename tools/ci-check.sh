@@ -8,7 +8,7 @@
 #   1. shellcheck (livello warning) sugli script, riconosciuti dalla prima riga
 #   2. Python: la sintassi dei file .py, la VPD che scrive tools/vpd.py
 #      riletta uguale, una capsula letta da tools/update.py come la scrive
-#      GenerateCapsule
+#      GenerateCapsule, e il suo pacchetto fwupd (tools/fwupd-cab.py)
 #   3. i workflow (actionlint, se c'e')
 #   4. blobs/, assets/ e legacy/: i file corrispondono ai loro SHA256SUMS
 #   5. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
@@ -121,9 +121,21 @@ assert cap["regions"] == update.REGIONS and cap["image"] == image and cap["signa
 assert cap["signed"] == payload + struct.pack("<Q", 7)
 update.check_capsule(cap, "nri")
 assert update.version_str(0x01020003) == "v1.2.3"
+# il pacchetto fwupd di tools/fwupd-cab.py, riletto da tools/update.py
+import datetime, importlib.util
+spec = importlib.util.spec_from_file_location("fwupd_cab", "tools/fwupd-cab.py")
+fc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fc)
+meta = fc.metainfo("nri", str(update.VARIANTS["nri"]), "1.2.3", "2026-10-11", "https://example.org/")
+cab = fc.make_cab([("firmware.bin", data), ("firmware.metainfo.xml", meta.encode())],
+                  datetime.datetime(2026, 10, 11))
+files = update.read_cab(cab)
+assert files == {"firmware.bin": data, "firmware.metainfo.xml": meta.encode()}
+capdata, cap2 = update.load_cab("prova.cab", cab)
+assert capdata == data and cap2["version"] == 0x01020003 and cap2["cab"]["meta"]["format"] == "triplet"
 EOF
 	then
-		ok "tools/update.py: capsula letta"
+		ok "tools/update.py: capsula e pacchetto fwupd letti"
 	else
 		bad "tools/update.py: la capsula di prova non si legge come atteso"
 	fi

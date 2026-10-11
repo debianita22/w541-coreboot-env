@@ -9,3 +9,5 @@
 0009-UefiPayloadPkg-SmmStoreLib-Let-the-caller-end-the-wh.patch
 0010-UefiPayloadPkg-PlatformBootManagerLib-Apply-capsules.patch
 0011-UefiPayloadPkg-Make-the-FMP-of-CAPSULE_MAIN_FW_GUID-.patch
+0012-UefiPayloadPkg-PlatformBootManagerLib-Capsules-on-di.patch
+0013-UefiPayloadPkg-Add-a-Firmware-Update-setup-page.patch

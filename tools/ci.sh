@@ -142,7 +142,7 @@ cmd_version() {
 
 # Le note della release della variante $2, dai file di $1
 cmd_notes() {
-	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
+	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cab cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
 	: "${VERSION:?}"
 	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
 	sha="${GITHUB_SHA:-$(git -C "${O}" rev-parse HEAD)}"
@@ -151,9 +151,10 @@ cmd_notes() {
 	chip8="w541-coreboot-${version}-${v}-8mb-chip.rom"
 	chip4="w541-coreboot-${version}-${v}-4mb-chip.rom"
 	cap="w541-coreboot-${version}-${v}.cap"
+	cab="w541-coreboot-${version}-${v}.cab"
 	cfg="w541-coreboot-${version}-${v}.config"
 	lay="w541-coreboot-${version}-${v}-layout.txt"
-	for f in "${rom}" "${chip8}" "${chip4}" "${cap}" "${cfg}" "${lay}"; do [ -f "${d}/${f}" ] || die "${d}/${f} non c'e'"; done
+	for f in "${rom}" "${chip8}" "${chip4}" "${cap}" "${cab}" "${cfg}" "${lay}"; do [ -f "${d}/${f}" ] || die "${d}/${f} non c'e'"; done
 	cb="$(pin COREBOOT_COMMIT)"
 	cbdesc="$(pin COREBOOT_DESCRIBE)"
 	edk2="$(sed -n 's/^CONFIG_EDK2_TAG_OR_REV="\(.*\)"$/\1/p' "${O}/configs/w541-${v}.defconfig")"
@@ -192,6 +193,7 @@ EOF
 | \`${chip4}\` | its last 4 MiB: all of coreboot, for an external programmer on the 4 MiB chip |
 | \`${chip8}\` | its first 8 MiB: descriptor, GbE and ME of the machine the blobs come from, for the 8 MiB chip |
 | \`${cap}\` | **signed UEFI capsule**: updates from Linux a W541 that already runs v1.2.0 or later, with \`tools/update.py\` |
+| \`${cab}\` | the same capsule as an **fwupd package** (\`fwupdmgr install\`, once the project certificate is in \`/etc/pki/fwupd\`) |
 | \`${cfg}\` | the complete coreboot \`.config\` |
 | \`${lay}\` | flash layout (FMAP) and CBFS contents |
 | \`SHA256SUMS\` | checksums of the files above |
@@ -216,6 +218,10 @@ curl -LO https://raw.githubusercontent.com/${repo}/main/tools/update.py
 sudo python3 update.py stage --latest       # or: sudo python3 update.py stage ${cap}
 sudo systemctl reboot
 \`\`\`
+
+Or with fwupd, once the project certificate is trusted
+([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#fwupd)):
+\`sudo fwupdmgr install ${cab}\`, then reboot.
 
 **Update with flashrom**, the first time (from earlier versions or other
 firmware), on a W541 that already runs coreboot with an unlocked flash: only
@@ -336,7 +342,7 @@ cmd_publish() {
 		local f
 		for f in "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom" \
 			"w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.cap" \
-			"w541-coreboot-${VERSION}-${v}.config" "w541-coreboot-${VERSION}-${v}-layout.txt"; do
+			"w541-coreboot-${VERSION}-${v}.cab" "w541-coreboot-${VERSION}-${v}.config" "w541-coreboot-${VERSION}-${v}-layout.txt"; do
 			[ -f "${d}/${f}" ] || fail "Pubblica" "${f} non c'e' negli artifact"
 			cp "${d}/${f}" "${d}/release-${v}/"
 		done

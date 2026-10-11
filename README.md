@@ -34,6 +34,7 @@ Everything else is the same in the two variants.
 | `…-4mb-chip.rom` | last 4 MiB of the image: all of coreboot, for an external programmer on the 4 MiB chip |
 | `…-8mb-chip.rom` | first 8 MiB of the image: descriptor, GbE and ME **of the machine the blobs come from**, for the 8 MiB chip |
 | `….cap` | signed UEFI capsule (from v1.2.0): updates a laptop that runs v1.2.0 or later from Linux, without flashrom ([docs/update.md](docs/update.md)) |
+| `….cab` | the same capsule as an fwupd package (from v1.2.2), signed for fwupd with the same key ([docs/update.md](docs/update.md#fwupd)) |
 | `….config` | the complete coreboot configuration |
 | `…-layout.txt` | flash map (FMAP) and CBFS contents |
 | `SHA256SUMS` | checksums |
@@ -106,7 +107,10 @@ Inside coreboot:
   stages the capsule of a release on the EFI system partition, and at the
   next boot the firmware checks its signature and version and rewrites
   coreboot, keeping settings, VPD and event log, also with *BIOS Lock* on;
-  the version is in the ESRT, for fwupd too ([docs/update.md](docs/update.md));
+  the version is in the ESRT, and from v1.2.2 each release has an fwupd
+  package too, `fwupdmgr install`; without an OS, the *Firmware Update* page
+  of the setup installs the capsule from a USB drive
+  ([docs/update.md](docs/update.md));
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI

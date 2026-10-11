@@ -53,7 +53,8 @@
 # firmata con GenerateCapsule di EDK2. La chiave privata arriva solo
 # dall'ambiente, CAPSULE_SIGNING_KEY (PEM; nella CI il secret omonimo), e
 # deve essere quella del certificato keys/capsule-signing.pem, di cui le ROM
-# si fidano. La versione nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
+# si fidano. Accanto, il pacchetto per fwupd (.cab, tools/fwupd-cab.py), con
+# la capsula firmata anche per fwupd da jcat-tool. La versione nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
 # (il "triplet" di fwupd: X << 24 | Y << 16 | Z); con le altre versioni (dev,
 # ci-...) e' 0 e la capsula non si fa.
 set -euo pipefail
@@ -224,7 +225,12 @@ localversion() { printf 'w541-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 romname()      { printf 'w541-coreboot-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 
 # La versione per l'ESRT e la capsula: vX.Y.Z[-...] -> (X << 24) | (Y << 16) | Z,
-# 0x00000000 per le altre
+# 0x00000000 per le altre; fw_triplet: la stessa come X.Y.Z (fwupd)
+fw_triplet() {
+	local v
+	v=$(( $(fw_version) ))
+	printf '%d.%d.%d' $(( v >> 24 )) $(( (v >> 16) & 255 )) $(( v & 65535 ))
+}
 fw_version() {
 	local x y z
 	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?$ ]]; then
@@ -547,12 +553,15 @@ sys.exit(0 if der and pcd[:4] == len(der).to_bytes(4, "big") and pcd[4:4 + len(d
 # ricontrollata con tools/update.py info (GUID, versioni, regioni, immagine
 # uguale alla ROM, firma valida per keys/capsule-signing.pem)
 make_capsule() {
-	local v="$1" n guid lsv fwv tmp r regions=()
+	local v="$1" n guid lsv fwv tmp r f date repo regions=()
 	n="${DIST}/$(romname "${v}")"
 	guid="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_GUID="\(.*\)"$/\1/p' "${TREE}/build-${v}/.config")"
 	lsv="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_LSV=\(0x[0-9a-fA-F]*\)$/\1/p' "${TREE}/build-${v}/.config")"
 	fwv="$(fw_version)"
 	[ -n "${guid}" ] && [ -n "${lsv}" ] || die "${v}: GUID o LSV mancanti nel .config"
+	# la data del commit, non quella della build
+	date="$(git -C "${O}" log -1 --format=%cs 2>/dev/null || date -u +%F)"
+	repo="${GITHUB_REPOSITORY:-debianita22/w541-coreboot-env}"
 	tmp="$(mktemp -d)"
 	chmod 700 "${tmp}"
 	# la chiave privata solo in questa cartella e solo per GenerateCapsule
@@ -564,7 +573,6 @@ make_capsule() {
 			"$(openssl x509 -in "${O}/${CAPSULE_CERT}" -noout -pubkey)" ] \
 			|| die "CAPSULE_SIGNING_KEY non e' la chiave di ${CAPSULE_CERT}"
 		cat "${tmp}/key.pem" "${O}/${CAPSULE_CERT}" > "${tmp}/signer.pem"
-		rm -f "${tmp}/key.pem"
 		for r in "${CAPSULE_REGIONS[@]}"; do regions+=(-r "${r}"); done
 		python3 "${EDK2_DIR}/UefiPayloadPkg/Tools/AppendRmapManifest.py" -o "${tmp}/image.bin" \
 			"${regions[@]}" "${n}.rom" > /dev/null || die "${v}: AppendRmapManifest.py fallito"
@@ -574,11 +582,29 @@ make_capsule() {
 			--signer-private-cert "${tmp}/signer.pem" \
 			--other-public-cert "${O}/${CAPSULE_CERT}" --trusted-public-cert "${O}/${CAPSULE_CERT}" \
 			"${tmp}/image.bin" || die "${v}: GenerateCapsule fallito"
+		# il pacchetto fwupd: la capsula, il metainfo e la loro firma
+		mkdir "${tmp}/cab"
+		cp "${n}.cap" "${tmp}/cab/firmware.bin"
+		python3 "${O}/tools/fwupd-cab.py" metainfo --variant "${v}" --guid "${guid}" \
+			--version "$(fw_triplet)" --date "${date}" \
+			--url "https://github.com/${repo}/releases/tag/${VERSION}-$(flavour "${v}")" \
+			> "${tmp}/cab/firmware.metainfo.xml" || die "${v}: metainfo fallito"
+		for f in firmware.bin firmware.metainfo.xml; do
+			(cd "${tmp}/cab" && jcat-tool self-sign firmware.jcat "${f}" --kind sha256 > /dev/null \
+				&& jcat-tool sign firmware.jcat "${f}" "${O}/${CAPSULE_CERT}" "${tmp}/key.pem" > /dev/null) \
+				|| die "${v}: jcat-tool fallito su ${f}"
+		done
+		python3 "${O}/tools/fwupd-cab.py" pack --date "${date}" -o "${n}.cab" \
+			"${tmp}/cab/firmware.bin" "${tmp}/cab/firmware.metainfo.xml" "${tmp}/cab/firmware.jcat" \
+			|| die "${v}: fwupd-cab.py pack fallito"
 	) || exit 1
-	chmod 644 "${n}.cap"
+	chmod 644 "${n}.cap" "${n}.cab"
 	python3 "${O}/tools/update.py" info --cert "${O}/${CAPSULE_CERT}" --rom "${n}.rom" \
 		--guid "${guid}" --fw-version "${fwv}" --lsv "${lsv}" "${n}.cap" \
 		|| die "${v}: la capsula non passa tools/update.py info"
+	python3 "${O}/tools/update.py" info --cert "${O}/${CAPSULE_CERT}" --guid "${guid}" \
+		--fw-version "${fwv}" --lsv "${lsv}" --same-as "${n}.cap" "${n}.cab" \
+		|| die "${v}: il pacchetto fwupd non passa tools/update.py info"
 }
 
 cmd_roms() {
@@ -587,6 +613,7 @@ cmd_roms() {
 	if [ "$(fw_version)" != 0x00000000 ]; then
 		if [ -n "${CAPSULE_SIGNING_KEY:-}" ]; then
 			capsule=yes
+			command -v jcat-tool > /dev/null || die "serve jcat-tool (pacchetto jcat) per il pacchetto fwupd"
 		elif [ "${RELEASE}" = yes ]; then
 			die "--release ${VERSION}: senza CAPSULE_SIGNING_KEY niente capsula (docs/update.md)"
 		fi

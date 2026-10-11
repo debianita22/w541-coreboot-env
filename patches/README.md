@@ -45,6 +45,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `edk2/0006` | the messages of the password driver (UserAuthenticationDxe) as HII popups, so that the graphical UI draws them |
 | `edk2/0007` | Ps2MouseDxe at 100 reports per second and 8 counts/mm, every waiting packet taken at each poll, packets with the middle button pressed recognized |
 | `edk2/0008-0011` | firmware updates with UEFI capsules: only images with a region manifest that fits the running flash layout are written (upstream rewrites the whole BIOS region otherwise, settings and VPD included), with the reason of a refusal in the ESRT; capsules on disk (`\EFI\UpdateCapsule`) applied in the same boot, before EndOfDxe, after a battery check; a reset after an update, otherwise the whole-flash access given up (asked to the SMI handler, not inferred from `OsIndications`) before Driver#### options, option ROMs or the OS run; the firmware reported as the system firmware of the ESRT |
+| `edk2/0012-0013` | capsules on disk read from USB drives too; a *Firmware Update* setup page: version, lowest accepted version, result of the last update, and an update from a USB drive (the capsule checked, then requested for the next boot) |
 | `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
 | `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
 | `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |
@@ -52,6 +53,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `lvglpkg/0007-0010` | fixes from the review of the UI: UTF-8 text fields, keys kept from the form while a popup is up, the previous screen deleted, information popups titled as such |
 | `lvglpkg/0011` | a dynamic wallpaper (sky gradient and soft orbs of color, in a palette that follows the hour), the menu bar and the dock translucent and blurred over it, softer shadows |
 | `lvglpkg/0012` | the cursor moved by the speed of the pointer: 12 px/mm when slow, up to 3x when fast, the same move counted the same whether it arrives in one read or several |
+| `lvglpkg/0013` | the *Firmware Update* page under *General*, with its icon |
 
 ## Optional patches
 

@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 13:31:41 +0200
+Subject: [PATCH] UefiPayloadPkg/PlatformBootManagerLib: Capsules on disk from
+ USB drives
+
+Capsules on disk are read from \EFI\UpdateCapsule of the EFI system
+partitions only, so the firmware can be updated only through an OS that
+puts the capsule there.
+
+Read them from the file systems of USB drives too, recognized by a USB
+node in their device path: a FAT stick without an EFI system partition
+is the usual way to carry an update. The capsules are authenticated by
+FmpDxe as before; this only widens the files that a boot with the
+capsule-on-disk request reads and deletes. The message when there is
+none names both places.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../PlatformBootManagerLib/PlatformCapsule.c  | 47 +++++++++++++++++--
+ 1 file changed, 42 insertions(+), 5 deletions(-)
+
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+index 7f0ac10d4e..3cdae2ad4e 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+@@ -7,8 +7,8 @@
+   announced by EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED in
+   OsIndications.  The payload has no PEI phase that could load the files of
+   a capsule on disk into memory on a later boot, so they are read from
+-  \EFI\UpdateCapsule of the EFI system partitions and applied in the same
+-  boot, before EndOfDxe locks the FMP instances.
++  \EFI\UpdateCapsule of the EFI system partitions and of USB drives, and
++  applied in the same boot, before EndOfDxe locks the FMP instances.
+ 
+   After a capsule is applied the system resets.  Otherwise, before EndOfDxe
+   and before any Driver#### option, option ROM or OS can reach the whole
+@@ -301,7 +301,40 @@ CapsuleLoadDirectory (
+ }
+ 
+ /**
+-  Load the capsules on disk, from the EFI system partitions.
++  Whether capsules on disk are read from a file system: an EFI system
++  partition, or a USB drive, which lets the firmware be updated without an
++  OS.  Each capsule is authenticated anyway; this only limits the files
++  that are read and deleted.  FirmwareUpdateDxe uses the same rule.
++
++  @param[in] Handle  The handle of the file system.
++**/
++STATIC
++BOOLEAN
++CapsuleIsSource (
++  IN EFI_HANDLE  Handle
++  )
++{
++  VOID                      *Interface;
++  EFI_DEVICE_PATH_PROTOCOL  *Node;
++
++  if (!EFI_ERROR (gBS->HandleProtocol (Handle, &gEfiPartTypeSystemPartGuid, &Interface))) {
++    return TRUE;
++  }
++
++  for (Node = DevicePathFromHandle (Handle); (Node != NULL) && !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++    if ((DevicePathType (Node) == MESSAGING_DEVICE_PATH) &&
++        ((DevicePathSubType (Node) == MSG_USB_DP) || (DevicePathSubType (Node) == MSG_USB_CLASS_DP) ||
++         (DevicePathSubType (Node) == MSG_USB_WWID_DP)))
++    {
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  Load the capsules on disk, from the EFI system partitions and USB drives.
+ 
+   @param[out] Capsules  The capsules.
+   @param[in]  Max       The capacity of Capsules.
+@@ -324,12 +357,16 @@ CapsuleLoadFromDisk (
+   EFI_FILE_PROTOCOL                *Root;
+ 
+   Count  = 0;
+-  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiPartTypeSystemPartGuid, NULL, &HandleCount, &Handles);
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandleCount, &Handles);
+   if (EFI_ERROR (Status)) {
+     return 0;
+   }
+ 
+   for (Index = 0; (Index < HandleCount) && (Count < Max); Index++) {
++    if (!CapsuleIsSource (Handles[Index])) {
++      continue;
++    }
++
+     Status = gBS->HandleProtocol (Handles[Index], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&FileSystem);
+     if (EFI_ERROR (Status)) {
+       continue;
+@@ -507,7 +544,7 @@ PlatformProcessCapsules (
+         EfiBootManagerConnectAll ();
+         Count = CapsuleLoadFromDisk (Capsules, ARRAY_SIZE (Capsules));
+         if (Count == 0) {
+-          CapsuleMessage (L"No firmware update found in %s", CAPSULE_ON_DISK_DIR);
++          CapsuleMessage (L"No firmware update found in %s of the EFI partitions and USB drives", CAPSULE_ON_DISK_DIR);
+           gBS->Stall (CAPSULE_MESSAGE_DELAY);
+         } else {
+           Applied = TRUE;
+-- 
+2.43.0
+

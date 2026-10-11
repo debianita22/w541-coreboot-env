@@ -19,6 +19,8 @@ the new version.
 - [The first time](#the-first-time)
 - [tools/update.py](#toolsupdatepy)
 - [What happens at boot](#what-happens-at-boot)
+- [From the setup, with a USB drive](#from-the-setup-with-a-usb-drive)
+- [fwupd](#fwupd)
 - [Versions, variants, downgrades](#versions-variants-downgrades)
 - [Without tools/update.py](#without-toolsupdatepy)
 - [If it goes wrong](#if-it-goes-wrong)
@@ -62,7 +64,7 @@ partition (ESP) mounted (`/boot/efi`, `/efi`; elsewhere: `--esp DIR`).
 | `stage --latest` | downloads the newest release of the running variant from GitHub (`--pre`: pre-releases too; `nri` releases are always pre-releases), checks its `SHA256SUMS` |
 | `stage FILE.cap` | a capsule already downloaded |
 | `cancel` | removes the waiting capsule and the request |
-| `info FILE.cap` | variant, version, regions and signer of a capsule |
+| `info FILE.cap` | variant, version, regions and signer of a capsule (or of the fwupd package, `FILE.cab`) |
 
 `stage` checks what the firmware would check, so that a reboot is not
 wasted: the variant (an `nri` capsule is refused on `mrc`), the version (not
@@ -87,7 +89,7 @@ for that boot only, and the payload, before anything else runs:
    least 25%, otherwise postpones the update (the capsule stays on the ESP:
    `update.py stage` again to retry);
 3. reads and deletes the files in `\EFI\UpdateCapsule` of every EFI system
-   partition;
+   partition and USB drive;
 4. verifies each capsule: signature, variant, version, flash layout;
 5. writes it, showing a progress bar under the logo and *Updating the
    firmware: do not turn off the computer*;
@@ -100,6 +102,65 @@ firmware, and `update.py status` shows why (*firma non valida*: signature,
 manifest or the wrong size, *mappa del flash diversa*: a capsule for
 another flash layout). If there is no capsule to apply, the firmware gives
 the write access back and boots on.
+
+## From the setup, with a USB drive
+
+From v1.2.2, without an OS: *System Preferences* (Esc at power-on) →
+*System Configuration* → *Firmware Update* shows the installed version, the
+lowest version a capsule may have, and the result of the last update
+(version and *successful*, or why it was refused).
+
+1. Copy the `.cap` of the release into the folder `EFI/UpdateCapsule` of a
+   USB drive formatted FAT (FAT32), and nothing else in that folder.
+2. Connect the drive and the AC adapter, open *Firmware Update* and choose
+   *Update from a USB drive*.
+3. The setup checks the file (a capsule of the variant that runs, not older
+   than the lowest accepted version, the only file in `EFI\UpdateCapsule` of
+   the USB drives and of the ESP) and asks to confirm, with the two
+   versions. *Yes* restarts: the firmware applies the capsule as in
+   [What happens at boot](#what-happens-at-boot), signature check included,
+   deletes the file from the drive and starts again on the new version.
+
+If the setup refuses (*No update found*, *not an update for this firmware*,
+*older than the oldest accepted update*, *N files*), nothing is changed.
+
+## fwupd
+
+From v1.2.2 each release also has `w541-coreboot-vX.Y.Z-mrc.cab` (and
+`-nri.cab`): the same capsule as an fwupd package, with its metadata (the
+ESRT GUID of the variant, the version in fwupd's *triplet* format) and a
+`firmware.jcat` that signs both with the capsule key. fwupd installs only
+packages signed by a certificate in `/etc/pki/fwupd`, so trust the project
+certificate once:
+
+```sh
+sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/w541-coreboot-env.pem
+sudo systemctl restart fwupd
+fwupdmgr get-devices                       # System Firmware, version 16908289 (= 1.2.1)
+sudo fwupdmgr install w541-coreboot-v1.2.2-mrc.cab
+sudo systemctl reboot
+```
+
+fwupd checks the variant, the version (`--allow-older`, `--allow-reinstall`)
+and the AC adapter, copies the capsule unchanged to
+`\EFI\UpdateCapsule\fwupd-<GUID>.cap` and sets the same `OsIndications` bit
+as `tools/update.py`: the firmware applies it in the same way, and after the
+reboot `fwupdmgr get-devices` shows the new version and `fwupdmgr
+get-history` the result. Tested here with fwupd 2.0.20 on a simulated ESRT
+(the staging; the boot side is the one of `tools/update.py`).
+
+- Without the certificate fwupd refuses the package (*firmware signature
+  missing or not trusted*, or *version formats were different*): do not set
+  `OnlyTrusted=false` instead.
+- A certificate in `/etc/pki/fwupd` is trusted for any device, not only for
+  the firmware: whoever holds the project key could sign a package that fwupd
+  would install on that computer for another device. Only packages that root
+  installs by hand, since no fwupd remote serves this project; remove the file
+  when you no longer need it.
+- The releases are not on LVFS, so `fwupdmgr update` and GNOME Software do
+  not offer them: download the `.cab` of the release.
+- `tools/update.py info FILE.cab` checks a package: capsule, metadata,
+  signatures.
 
 ## Versions, variants, downgrades
 
@@ -121,11 +182,10 @@ other image with flashrom ([docs/flashing.md](flashing.md#internal-update)).
 
 Any tool that delivers capsules on disk works the same way:
 
-- fwupd: the firmware appears in `fwupdmgr get-devices` (*System
-  Firmware*) with its version and the result of the last update. There is no
-  `.cab` in the releases for `fwupdmgr install`; `sudo fwupdtool
-  install-blob w541-coreboot-vX.Y.Z-mrc.cap` with that device should stage
-  the capsule the same way (not tested here).
+- fwupd: the `.cab` of the release, see [fwupd](#fwupd). For v1.2.0 and
+  v1.2.1, which have no `.cab`, `sudo fwupdtool install-blob
+  w541-coreboot-vX.Y.Z-mrc.cap` with the *System Firmware* device should
+  stage the capsule the same way (not tested).
 - By hand: copy the capsule into `EFI/UpdateCapsule/` on the ESP and set bit
   2 (`0x4`) of `OsIndications-8be4df61-93ca-11d2-aa0d-00e098032b8c` in
   efivarfs, keeping the other bits (4 bytes of attributes `07 00 00 00`, then
@@ -166,7 +226,7 @@ The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 - `OsIndicationsSupported` announces capsules on disk. When `OsIndications`
   asks for them, coreboot (`DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT`) switches
   its SMMSTORE handler to the whole flash for that boot only.
-- The payload (patches `edk2/0008-0011`) applies the capsules on disk before
+- The payload (patches `edk2/0008-0013`) applies the capsules on disk before
   EndOfDxe, the point after which FmpDxe refuses to write: the payload has no
   PEI phase that could load them on a later boot. FmpDxe checks the PKCS#7
   signature against the certificate built into the ROM

@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 13:31:42 +0200
+Subject: [PATCH] LvglDisplayEngineDxe: Give the Firmware Update page an icon
+ and an area
+
+The Firmware Update page of UefiPayloadPkg falls under More, with a
+letter for an icon.
+
+Show it under General, with an upload symbol on green.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index 18e0671..d0a303c 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -584,6 +584,7 @@ LookupPromptIcon (
+     { "Secure Boot",          LV_SYMBOL_OK,        THEME_COLOR_ICON_BLUE   },
+     { "Splash",               LV_SYMBOL_IMAGE,     THEME_COLOR_ICON_TEAL   },
+     { "Graphical UI",         LV_SYMBOL_TINT,      THEME_COLOR_ICON_PURPLE },
++    { "Firmware Update",      LV_SYMBOL_UPLOAD,    THEME_COLOR_ICON_GREEN  },
+     { "Shell",                LV_SYMBOL_KEYBOARD,  THEME_COLOR_ICON_GRAY   },
+     { "USB",                  LV_SYMBOL_USB,       THEME_COLOR_ICON_BLUE   },
+     { "CD",                   LV_SYMBOL_EJECT,     THEME_COLOR_ICON_GRAY   },
+@@ -646,6 +647,7 @@ LookupMenuArea (
+     { "Time",          LvglAreaGeneral  },
+     { "Date",          LvglAreaGeneral  },
+     { "Language",      LvglAreaGeneral  },
++    { "Firmware",      LvglAreaGeneral  },
+     { "Configuration", LvglAreaSystem   },
+     { "Platform",      LvglAreaDevices  },
+     { "Device",        LvglAreaDevices  },
+-- 
+2.43.0
+

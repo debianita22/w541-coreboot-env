@@ -78,7 +78,7 @@ CONFIG_BOOTMEDIA_SMM_BWP_RUNTIME_OPTION=y
 # release (DRIVERS_EFI_MAIN_FW_VERSION, la mette tools/build.sh), capsule su
 # disco (\EFI\UpdateCapsule dell'ESP) applicate dal payload nello stesso
 # avvio, solo se firmate dalla chiave di keys/capsule-signing.pem (patch
-# 0048-0052, edk2 0008-0011). La capsula riscrive RW_MRC_CACHE e COREBOOT:
+# 0048-0052, edk2 0008-0013). La capsula riscrive RW_MRC_CACHE e COREBOOT:
 # variabili UEFI, VPD e registro degli eventi restano. Il GUID e' della
 # variante: una capsula nri non si applica sulla mrc, e viceversa. Con
 # un'altra mappa del flash le capsule si rifiutano (edk2 0008): GUID nuovi.

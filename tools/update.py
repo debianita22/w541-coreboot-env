@@ -13,6 +13,9 @@
 #   sudo python3 tools/update.py cancel
 #   python3 tools/update.py info w541-coreboot-v1.2.1-mrc.cap
 #
+# Al posto della .cap va bene anche il pacchetto fwupd della release (.cab,
+# tools/fwupd-cab.py): se ne usa la capsula che contiene.
+#
 # Il firmware che gira deve essere una release dalla v1.2.0 in su: la prima
 # volta si scrive con flashrom (docs/flashing.md). Il firmware applica solo
 # capsule della sua variante (mrc o nri, un GUID ciascuna nell'ESRT), firmate
@@ -23,6 +26,7 @@
 # firma (con --cert, o keys/capsule-signing.pem accanto a questo script).
 import argparse
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -34,6 +38,7 @@ import sys
 import tempfile
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 
 REPO = "debianita22/w541-coreboot-env"
 
@@ -251,10 +256,133 @@ def default_cert():
     return cert if os.path.isfile(cert) else None
 
 
+# --- il pacchetto fwupd ------------------------------------------------------
+
+JCAT_SHA256 = 1
+JCAT_PKCS7 = 3
+
+
+def cab_checksum(data, seed=0):
+    """CSUMCompute di [MS-CAB] (come tools/fwupd-cab.py)."""
+    csum = seed
+    n = len(data) // 4
+    for (w,) in struct.iter_unpack("<I", data[:n * 4]):
+        csum ^= w
+    ul = 0
+    for b in data[n * 4:]:
+        ul = (ul << 8) | b
+    return csum ^ ul
+
+
+def read_cab(data):
+    """I file di un cabinet senza compressione, come lo fa tools/fwupd-cab.py."""
+    if len(data) < 36 or data[:4] != b"MSCF":
+        raise Error("non e' un cabinet")
+    (_, _, total, _, coff_files, _, _, _, nfolders, nfiles, flags, _, _) = \
+        struct.unpack_from("<4sIIIIIBBHHHHH", data, 0)
+    if flags != 0 or total != len(data):
+        raise Error("cabinet multi-volume, con dati riservati o troncato")
+    folders = []
+    pos = 36
+    for _ in range(nfolders):
+        coff, ndata, comp = struct.unpack_from("<IHH", data, pos)
+        pos += 8
+        if comp != 0:
+            raise Error("cabinet compresso: estrai firmware.bin con gcab -x")
+        parts = []
+        p = coff
+        for _ in range(ndata):
+            csum, cb, cbu = struct.unpack_from("<IHH", data, p)
+            chunk = data[p + 8:p + 8 + cb]
+            if len(chunk) != cb or cb != cbu:
+                raise Error("blocco CFDATA non valido")
+            if csum and cab_checksum(data[p + 4:p + 8], cab_checksum(chunk)) != csum:
+                raise Error("checksum di un blocco CFDATA sbagliato: cabinet corrotto")
+            parts.append(chunk)
+            p += 8 + cb
+        folders.append(b"".join(parts))
+    files = {}
+    pos = coff_files
+    for _ in range(nfiles):
+        size, off, ifolder = struct.unpack_from("<IIH", data, pos)
+        pos += 16
+        end = data.index(b"\0", pos)
+        name = data[pos:end].decode("ascii", "replace")
+        pos = end + 1
+        if ifolder >= len(folders) or off + size > len(folders[ifolder]):
+            raise Error("%s fuori dal cabinet" % name)
+        files[name] = folders[ifolder][off:off + size]
+    return files
+
+
+def parse_metainfo(xml):
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as e:
+        raise Error("firmware.metainfo.xml non valido: %s" % e)
+    guids = [e.text.strip().lower() for e in root.iter("firmware") if e.get("type") == "flashed" and e.text]
+    rels = root.findall("releases/release")
+    fmt = [e.text for e in root.iter("value") if e.get("key") == "LVFS::VersionFormat"]
+    if len(guids) != 1 or len(rels) != 1:
+        raise Error("metainfo: attesi un GUID e una release")
+    return {"id": root.findtext("id"), "guid": uuid.UUID(guids[0]), "version": rels[0].get("version"),
+            "format": fmt[0] if fmt else None}
+
+
+def verify_jcat(jcat, files, cert):
+    """SHA-256 e firma PKCS#7 di ogni file del pacchetto, come le controlla
+    fwupd con il certificato in /etc/pki/fwupd."""
+    if not shutil.which("openssl"):
+        raise Error("serve openssl per verificare la firma")
+    try:
+        items = {i["Id"]: i["Blobs"] for i in json.loads(gzip.decompress(jcat))["Items"]}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise Error("firmware.jcat non valido: %s" % e)
+    for name in ("firmware.bin", "firmware.metainfo.xml"):
+        blobs = items.get(name, [])
+        sums = [b["Data"] for b in blobs if b.get("Kind") == JCAT_SHA256]
+        sigs = [b["Data"] for b in blobs if b.get("Kind") == JCAT_PKCS7]
+        if sums != [hashlib.sha256(files[name]).hexdigest()]:
+            raise Error("firmware.jcat: SHA-256 di %s mancante o sbagliato" % name)
+        if len(sigs) != 1:
+            raise Error("firmware.jcat: %s senza firma PKCS#7" % name)
+        with tempfile.TemporaryDirectory() as tmp:
+            sig = os.path.join(tmp, "sig.pem")
+            content = os.path.join(tmp, "content.bin")
+            with open(sig, "w") as f:
+                f.write(sigs[0])
+            with open(content, "wb") as f:
+                f.write(files[name])
+            r = openssl("smime", "-verify", "-binary", "-inform", "PEM", "-in", sig, "-content", content,
+                        "-CAfile", cert, "-purpose", "any", "-partial_chain", "-out", os.devnull)
+        if r.returncode != 0:
+            raise Error("firmware.jcat: firma di %s non valida per %s" % (name, cert))
+
+
+def load_cab(path, data):
+    files = read_cab(data)
+    for name in ("firmware.bin", "firmware.metainfo.xml"):
+        if name not in files:
+            raise Error("pacchetto fwupd senza %s" % name)
+    meta = parse_metainfo(files["firmware.metainfo.xml"])
+    cap = parse_capsule(files["firmware.bin"])
+    v = cap["version"]
+    if meta["guid"] != cap["type_id"]:
+        raise Error("metainfo per %s, capsula per %s" % (meta["guid"], cap["type_id"]))
+    if meta["format"] != "triplet" or meta["version"] != version_str(v)[1:]:
+        raise Error("metainfo: versione %s (%s), la capsula e' %s" % (meta["version"], meta["format"],
+                                                                    version_str(v)[1:]))
+    cap["cab"] = {"files": files, "meta": meta}
+    return files["firmware.bin"], cap
+
+
 def load_capsule(path):
+    """Una capsula, o la capsula di un pacchetto fwupd (.cab)."""
     with open(path, "rb") as f:
         data = f.read()
     try:
+        if data[:4] == b"MSCF":
+            return load_cab(path, data)
         return data, parse_capsule(data)
     except Error as e:
         raise Error("%s: %s" % (path, e))
@@ -504,7 +632,10 @@ def need_firmware():
 
 
 def print_capsule(path, cap):
-    print("capsula:   %s" % path)
+    if "cab" in cap:
+        print("pacchetto: %s (fwupd, %s)" % (path, cap["cab"]["meta"]["id"]))
+        print("           %s" % " ".join(sorted(cap["cab"]["files"])))
+    print("capsula:   %s" % (path if "cab" not in cap else "firmware.bin"))
     print("firmware:  W541 coreboot, variante %s (%s)" % (cap["variant"] or "?", cap["type_id"]))
     print("versione:  %s, minima %s" % (version_str(cap["version"]), version_str(cap["lsv"])))
     print("regioni:   %s" % (" ".join(cap["regions"]) or "tutto il flash"))
@@ -529,10 +660,20 @@ def cmd_info(args):
             if f.read() != cap["image"]:
                 raise Error("l'immagine nella capsula non e' %s" % args.rom)
         print("immagine:  uguale a %s" % args.rom)
+    if args.same_as:
+        with open(args.same_as, "rb") as f:
+            if f.read() != data:
+                raise Error("la capsula non e' %s" % args.same_as)
+        print("capsula:   uguale a %s" % args.same_as)
     cert = args.cert or default_cert()
     if cert and (args.cert or shutil.which("openssl")):
         verify_signature(cap, cert)
         print("firma:     valida per %s" % cert)
+        if "cab" in cap:
+            if "firmware.jcat" not in cap["cab"]["files"]:
+                raise Error("pacchetto fwupd senza firmware.jcat: fwupd non lo installa")
+            verify_jcat(cap["cab"]["files"]["firmware.jcat"], cap["cab"]["files"], cert)
+            print("fwupd:     firmware.jcat valido per %s" % cert)
     elif args.cert is None:
         print("firma:     non verificata (serve openssl e keys/capsule-signing.pem)")
     return 0
@@ -659,7 +800,7 @@ def main():
 
     p = sub.add_parser("stage", help="prepara una capsula per il prossimo avvio")
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("capsule", nargs="?", help="file .cap di una release")
+    g.add_argument("capsule", nargs="?", help="file .cap (o .cab) di una release")
     g.add_argument("--latest", action="store_true", help="scarica l'ultima release della variante che gira")
     p.add_argument("--pre", action="store_true", help="con --latest anche le pre-release")
     p.add_argument("--allow-older", action="store_true", help="anche la stessa versione o una piu' vecchia")
@@ -675,8 +816,9 @@ def main():
     p.set_defaults(func=cmd_cancel)
 
     num = lambda s: int(s, 0)
-    p = sub.add_parser("info", help="mostra e controlla una capsula (anche tools/build.sh)")
+    p = sub.add_parser("info", help="mostra e controlla una capsula o un .cab (anche tools/build.sh)")
     p.add_argument("capsule")
+    p.add_argument("--same-as", help="la capsula deve essere questo file (per un .cab)")
     p.add_argument("--cert", help="verifica la firma con questo certificato")
     p.add_argument("--rom", help="l'immagine nella capsula deve essere questa")
     p.add_argument("--guid", help="GUID atteso")

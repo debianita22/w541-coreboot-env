@@ -1,0 +1,1143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Sun, 11 Oct 2026 13:31:41 +0200
+Subject: [PATCH] UefiPayloadPkg: Add a Firmware Update setup page
+
+An update capsule can be staged only from an OS, and the setup shows
+nothing of the system firmware: its version, the lowest version it
+accepts, or how its last update went.
+
+Add FirmwareUpdateDxe, built with CAPSULE_SUPPORT: a Platform Setup page
+with the system firmware of the ESRT (the FMP instance of
+PcdSystemFmpCapsuleImageTypeIdGuid) -- the BIOS version of SMBIOS, the
+version, the lowest supported version, the last attempt version and
+status -- read when the page opens.
+
+"Update from a USB drive" checks \EFI\UpdateCapsule of the USB drives
+and EFI system partitions, the places PlatformBootManagerLib reads:
+exactly one file, an FMP capsule for this firmware, not older than the
+lowest supported version. After a confirmation that names the versions
+and the file, it sets EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED
+in OsIndications and restarts, so that the next boot applies the capsule
+like one staged by an OS, signature check included. Nothing is written
+here.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../FirmwareUpdateDxe/FirmwareUpdate.c        | 855 ++++++++++++++++++
+ .../FirmwareUpdateDxe/FirmwareUpdate.uni      |  37 +
+ .../FirmwareUpdateDxe/FirmwareUpdateDxe.inf   |  68 ++
+ .../FirmwareUpdateDxe/FirmwareUpdateVfr.vfr   |  52 ++
+ .../Include/Guid/FirmwareUpdateConfig.h       |  18 +
+ UefiPayloadPkg/UefiPayloadPkg.dec             |   3 +
+ UefiPayloadPkg/UefiPayloadPkg.dsc             |   1 +
+ UefiPayloadPkg/UefiPayloadPkg.fdf             |   1 +
+ 8 files changed, 1035 insertions(+)
+ create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
+ create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
+ create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+ create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
+ create mode 100644 UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
+
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
+new file mode 100644
+index 0000000000..89703514b4
+--- /dev/null
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
+@@ -0,0 +1,855 @@
++/** @file
++  Firmware Update setup page.
++
++  Shows the system firmware of the ESRT, the FMP instance whose image type
++  is PcdSystemFmpCapsuleImageTypeIdGuid: its version, the lowest version it
++  accepts and the result of its last update.
++
++  Updates it from a USB drive: the capsule in \EFI\UpdateCapsule of a USB
++  drive or of an EFI system partition is checked here (one file, for this
++  firmware, not older than the lowest supported version), then a capsule on
++  disk is requested in OsIndications and the system restarts.  The update
++  itself, with the signature check, is the one of the capsules an OS
++  stages: PlatformBootManagerLib applies it at the next boot, which coreboot
++  starts with the whole flash writable.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include <Guid/FileInfo.h>
++#include <Guid/FirmwareUpdateConfig.h>
++#include <Guid/FmpCapsule.h>
++#include <Guid/GlobalVariable.h>
++#include <Guid/Gpt.h>
++#include <Guid/HiiPlatformSetupFormset.h>
++#include <IndustryStandard/SmBios.h>
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/DevicePathLib.h>
++#include <Library/HiiLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Library/PcdLib.h>
++#include <Library/PrintLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiLib.h>
++#include <Library/UefiRuntimeServicesTableLib.h>
++#include <Protocol/DevicePath.h>
++#include <Protocol/FirmwareManagement.h>
++#include <Protocol/HiiConfigAccess.h>
++#include <Protocol/HiiPopup.h>
++#include <Protocol/SimpleFileSystem.h>
++#include <Protocol/Smbios.h>
++
++#define CAPSULE_DIR         L"\\EFI\\UpdateCapsule"
++#define CAPSULE_PROBE_SIZE  SIZE_64KB         // enough for the headers and the signature
++#define FILE_INFO_SIZE      (SIZE_OF_EFI_FILE_INFO + 256 * sizeof (CHAR16))
++#define FILE_NAME_LENGTH    64
++#define VERSION_LENGTH      16
++
++//
++// The FMP_PAYLOAD_HEADER of FmpPayloadHeaderLibV1, in front of the image.
++//
++#define FMP_PAYLOAD_HEADER_SIGNATURE  SIGNATURE_32 ('M', 'S', 'S', '1')
++
++typedef struct {
++  UINT32    Signature;
++  UINT32    HeaderSize;
++  UINT32    FwVersion;
++  UINT32    LowestSupportedVersion;
++} FMP_PAYLOAD_HEADER_V1;
++
++typedef struct {
++  VENDOR_DEVICE_PATH          VendorDevicePath;
++  EFI_DEVICE_PATH_PROTOCOL    End;
++} HII_VENDOR_DEVICE_PATH;
++
++typedef struct {
++  BOOLEAN    Found;
++  UINT32     Version;
++  UINT32     Lowest;
++  UINT32     LastVersion;
++  UINT32     LastStatus;
++} SYSTEM_FIRMWARE_INFO;
++
++//
++// The files of the \EFI\UpdateCapsule folders that the next boot would read.
++//
++typedef struct {
++  UINTN     Files;
++  UINTN     Capsules;     // capsules for this firmware
++  UINT32    Version;      // the version of the last one
++  CHAR16    Name[FILE_NAME_LENGTH];
++} CAPSULE_SCAN;
++
++extern UINT8  FirmwareUpdateVfrBin[];
++extern UINT8  FirmwareUpdateDxeStrings[];
++
++STATIC EFI_HII_CONFIG_ACCESS_PROTOCOL  mConfigAccess;
++STATIC EFI_HANDLE                      mDriverHandle;
++STATIC EFI_HII_HANDLE                  mHiiHandle;
++
++STATIC HII_VENDOR_DEVICE_PATH  mVendorDevicePath = {
++  {
++    {
++      HARDWARE_DEVICE_PATH,
++      HW_VENDOR_DP,
++      {
++        (UINT8)(sizeof (VENDOR_DEVICE_PATH)),
++        (UINT8)((sizeof (VENDOR_DEVICE_PATH)) >> 8)
++      }
++    },
++    FIRMWARE_UPDATE_FORMSET_GUID
++  },
++  {
++    END_DEVICE_PATH_TYPE,
++    END_ENTIRE_DEVICE_PATH_SUBTYPE,
++    {
++      (UINT8)(END_DEVICE_PATH_LENGTH),
++      (UINT8)((END_DEVICE_PATH_LENGTH) >> 8)
++    }
++  }
++};
++
++/**
++  A version of the ESRT as the releases number it: (X << 24) | (Y << 16) | Z.
++**/
++STATIC
++VOID
++FormatVersion (
++  IN  UINT32  Version,
++  OUT CHAR16  *Buffer,
++  IN  UINTN   BufferSize
++  )
++{
++  UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, Version & 0xFFFF);
++}
++
++/**
++  The LastAttemptStatus of the ESRT (UEFI 2.10, 23.4), and the codes of
++  FmpDeviceSmmLib from LAST_ATTEMPT_STATUS_DEVICE_LIBRARY_MIN_ERROR_CODE_VALUE.
++**/
++STATIC
++VOID
++FormatAttemptStatus (
++  IN  UINT32  Status,
++  OUT CHAR16  *Buffer,
++  IN  UINTN   BufferSize
++  )
++{
++  STATIC CONST CHAR16  *Text[] = {
++    L"successful",
++    L"failed",
++    L"failed: not enough resources",
++    L"refused: version not accepted",
++    L"refused: invalid capsule",
++    L"refused: signature not valid",
++    L"postponed: AC adapter needed",
++    L"postponed: battery too low",
++    L"refused: dependencies not met"
++  };
++
++  if (Status < ARRAY_SIZE (Text)) {
++    StrCpyS (Buffer, BufferSize / sizeof (CHAR16), Text[Status]);
++  } else if (Status == 0x1800) {
++    StrCpyS (Buffer, BufferSize / sizeof (CHAR16), L"refused: image without region manifest");
++  } else if (Status == 0x1801) {
++    StrCpyS (Buffer, BufferSize / sizeof (CHAR16), L"refused: capsule for another flash layout");
++  } else if (Status == 0x1802) {
++    StrCpyS (Buffer, BufferSize / sizeof (CHAR16), L"failed: flash write error");
++  } else {
++    UnicodeSPrint (Buffer, BufferSize, L"failed: error 0x%x", Status);
++  }
++}
++
++/**
++  The system firmware of the ESRT, from its FMP instance.
++**/
++STATIC
++VOID
++GetSystemFirmwareInfo (
++  OUT SYSTEM_FIRMWARE_INFO  *Info
++  )
++{
++  EFI_STATUS                        Status;
++  CONST EFI_GUID                    *Ours;
++  EFI_HANDLE                        *Handles;
++  UINTN                             HandleCount;
++  UINTN                             Index;
++  UINTN                             Item;
++  EFI_FIRMWARE_MANAGEMENT_PROTOCOL  *Fmp;
++  EFI_FIRMWARE_IMAGE_DESCRIPTOR     *Images;
++  EFI_FIRMWARE_IMAGE_DESCRIPTOR     *Image;
++  UINTN                             Size;
++  UINT32                            DescriptorVersion;
++  UINT8                             DescriptorCount;
++  UINTN                             DescriptorSize;
++  UINT32                            PackageVersion;
++  CHAR16                            *PackageVersionName;
++
++  ZeroMem (Info, sizeof (*Info));
++  if (PcdGetSize (PcdSystemFmpCapsuleImageTypeIdGuid) < sizeof (EFI_GUID)) {
++    return;
++  }
++
++  Ours   = (CONST EFI_GUID *)PcdGetPtr (PcdSystemFmpCapsuleImageTypeIdGuid);
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiFirmwareManagementProtocolGuid, NULL, &HandleCount, &Handles);
++  if (EFI_ERROR (Status)) {
++    return;
++  }
++
++  for (Index = 0; (Index < HandleCount) && !Info->Found; Index++) {
++    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiFirmwareManagementProtocolGuid, (VOID **)&Fmp))) {
++      continue;
++    }
++
++    Size               = 0;
++    PackageVersionName = NULL;
++    Status             = Fmp->GetImageInfo (Fmp, &Size, NULL, &DescriptorVersion, &DescriptorCount, &DescriptorSize, &PackageVersion, &PackageVersionName);
++    if ((Status != EFI_BUFFER_TOO_SMALL) || (Size == 0)) {
++      continue;
++    }
++
++    Images = AllocateZeroPool (Size);
++    if (Images == NULL) {
++      continue;
++    }
++
++    PackageVersionName = NULL;
++    Status             = Fmp->GetImageInfo (Fmp, &Size, Images, &DescriptorVersion, &DescriptorCount, &DescriptorSize, &PackageVersion, &PackageVersionName);
++    if (PackageVersionName != NULL) {
++      FreePool (PackageVersionName);
++    }
++
++    if (!EFI_ERROR (Status) && (DescriptorSize >= sizeof (EFI_FIRMWARE_IMAGE_DESCRIPTOR))) {
++      for (Item = 0; Item < DescriptorCount; Item++) {
++        Image = (EFI_FIRMWARE_IMAGE_DESCRIPTOR *)((UINT8 *)Images + Item * DescriptorSize);
++        if (CompareGuid (&Image->ImageTypeId, Ours)) {
++          Info->Found   = TRUE;
++          Info->Version = Image->Version;
++          if (DescriptorVersion >= 2) {
++            Info->Lowest = Image->LowestSupportedImageVersion;
++          }
++
++          if (DescriptorVersion >= 3) {
++            Info->LastVersion = Image->LastAttemptVersion;
++            Info->LastStatus  = Image->LastAttemptStatus;
++          }
++
++          break;
++        }
++      }
++    }
++
++    FreePool (Images);
++  }
++
++  FreePool (Handles);
++}
++
++/**
++  The BIOS version of SMBIOS type 0, or NULL.
++**/
++STATIC
++CONST CHAR8 *
++GetBiosVersion (
++  VOID
++  )
++{
++  EFI_SMBIOS_PROTOCOL      *Smbios;
++  EFI_SMBIOS_HANDLE        Handle;
++  EFI_SMBIOS_TYPE          Type;
++  EFI_SMBIOS_TABLE_HEADER  *Record;
++  SMBIOS_TABLE_TYPE0       *Type0;
++  CHAR8                    *String;
++  UINTN                    Index;
++
++  if (EFI_ERROR (gBS->LocateProtocol (&gEfiSmbiosProtocolGuid, NULL, (VOID **)&Smbios))) {
++    return NULL;
++  }
++
++  Handle = SMBIOS_HANDLE_PI_RESERVED;
++  Type   = EFI_SMBIOS_TYPE_BIOS_INFORMATION;
++  if (EFI_ERROR (Smbios->GetNext (Smbios, &Handle, &Type, &Record, NULL))) {
++    return NULL;
++  }
++
++  Type0 = (SMBIOS_TABLE_TYPE0 *)Record;
++  if ((Record->Length < sizeof (SMBIOS_STRUCTURE) + 3) || (Type0->BiosVersion == 0)) {
++    return NULL;
++  }
++
++  String = (CHAR8 *)Record + Record->Length;
++  for (Index = 1; Index < Type0->BiosVersion; Index++) {
++    String += AsciiStrLen (String) + 1;
++    if (*String == '\0') {
++      return NULL;
++    }
++  }
++
++  return String;
++}
++
++/**
++  Fill in the values of the page.
++**/
++STATIC
++VOID
++RefreshInfo (
++  VOID
++  )
++{
++  SYSTEM_FIRMWARE_INFO  Info;
++  CONST CHAR8           *Bios;
++  CHAR16                Value[128];
++  CHAR16                Version[VERSION_LENGTH];
++  CHAR16                Result[64];
++
++  Bios = GetBiosVersion ();
++  if (Bios != NULL) {
++    UnicodeSPrint (Value, sizeof (Value), L"%a", Bios);
++    HiiSetString (mHiiHandle, STRING_TOKEN (STR_FIRMWARE_VALUE), Value, NULL);
++  }
++
++  GetSystemFirmwareInfo (&Info);
++  if (!Info.Found) {
++    return;
++  }
++
++  FormatVersion (Info.Version, Value, sizeof (Value));
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_VERSION_VALUE), Value, NULL);
++  FormatVersion (Info.Lowest, Value, sizeof (Value));
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_LOWEST_VALUE), Value, NULL);
++
++  if ((Info.LastVersion == 0) && (Info.LastStatus == 0)) {
++    StrCpyS (Value, ARRAY_SIZE (Value), L"None");
++  } else {
++    FormatVersion (Info.LastVersion, Version, sizeof (Version));
++    FormatAttemptStatus (Info.LastStatus, Result, sizeof (Result));
++    UnicodeSPrint (Value, sizeof (Value), L"%s, %s", Version, Result);
++  }
++
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_LAST_VALUE), Value, NULL);
++}
++
++/**
++  Show a message, with the popups of the display engine when it has them.
++
++  @return The button chosen.
++**/
++STATIC
++EFI_HII_POPUP_SELECTION
++EFIAPI
++ShowPopup (
++  IN EFI_HII_POPUP_STYLE  Style,
++  IN EFI_HII_POPUP_TYPE   Type,
++  IN CONST CHAR16         *Format,
++  ...
++  )
++{
++  VA_LIST                  Marker;
++  CHAR16                   Message[512];
++  EFI_HII_POPUP_PROTOCOL   *HiiPopup;
++  EFI_HII_POPUP_SELECTION  Selection;
++  EFI_INPUT_KEY            Key;
++
++  VA_START (Marker, Format);
++  UnicodeVSPrint (Message, sizeof (Message), Format, Marker);
++  VA_END (Marker);
++  DEBUG ((DEBUG_INFO, "FirmwareUpdate: %s\n", Message));
++
++  if (!EFI_ERROR (gBS->LocateProtocol (&gEfiHiiPopupProtocolGuid, NULL, (VOID **)&HiiPopup)) &&
++      (HiiSetString (mHiiHandle, STRING_TOKEN (STR_POPUP_MESSAGE), Message, NULL) != 0) &&
++      !EFI_ERROR (HiiPopup->CreatePopup (HiiPopup, Style, Type, mHiiHandle, STRING_TOKEN (STR_POPUP_MESSAGE), &Selection)))
++  {
++    return Selection;
++  }
++
++  CreatePopUp (
++    EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE,
++    &Key,
++    Message,
++    L"",
++    (Type == EfiHiiPopupTypeYesNo) ? L"Press Y to continue, any other key to cancel" : L"Press any key to continue",
++    NULL
++    );
++  if (Type != EfiHiiPopupTypeYesNo) {
++    return EfiHiiPopupSelectionOk;
++  }
++
++  return ((Key.UnicodeChar == L'y') || (Key.UnicodeChar == L'Y')) ? EfiHiiPopupSelectionYes : EfiHiiPopupSelectionNo;
++}
++
++/**
++  Whether the next boot reads capsules from this file system: an EFI system
++  partition, or a USB drive.  PlatformBootManagerLib uses the same rule.
++**/
++STATIC
++BOOLEAN
++IsCapsuleSource (
++  IN EFI_HANDLE  Handle
++  )
++{
++  VOID                      *Interface;
++  EFI_DEVICE_PATH_PROTOCOL  *Node;
++
++  if (!EFI_ERROR (gBS->HandleProtocol (Handle, &gEfiPartTypeSystemPartGuid, &Interface))) {
++    return TRUE;
++  }
++
++  for (Node = DevicePathFromHandle (Handle); (Node != NULL) && !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++    if ((DevicePathType (Node) == MESSAGING_DEVICE_PATH) &&
++        ((DevicePathSubType (Node) == MSG_USB_DP) || (DevicePathSubType (Node) == MSG_USB_CLASS_DP) ||
++         (DevicePathSubType (Node) == MSG_USB_WWID_DP)))
++    {
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  The image type and the version of an FMP capsule with one signed image,
++  as GenerateCapsule makes it, from its first bytes.
++
++  @retval TRUE   It is one.
++  @retval FALSE  It is not, or its headers don't fit in Size.
++**/
++STATIC
++BOOLEAN
++ParseCapsule (
++  IN  CONST UINT8  *Buffer,
++  IN  UINTN        Size,
++  OUT EFI_GUID     *TypeId,
++  OUT UINT32       *Version
++  )
++{
++  CONST EFI_CAPSULE_HEADER                            *Capsule;
++  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER        *Fmp;
++  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER  *Image;
++  CONST EFI_FIRMWARE_IMAGE_AUTHENTICATION             *Auth;
++  CONST FMP_PAYLOAD_HEADER_V1                         *Payload;
++  UINTN                                               FmpOffset;
++  UINTN                                               ImageOffset;
++  UINTN                                               AuthOffset;
++  UINTN                                               PayloadOffset;
++  UINTN                                               Items;
++  UINT64                                              ItemOffset;
++
++  Capsule = (CONST EFI_CAPSULE_HEADER *)Buffer;
++  if ((Size < sizeof (EFI_CAPSULE_HEADER)) || !CompareGuid (&Capsule->CapsuleGuid, &gEfiFmpCapsuleGuid)) {
++    return FALSE;
++  }
++
++  FmpOffset = Capsule->HeaderSize;
++  if ((FmpOffset < sizeof (EFI_CAPSULE_HEADER)) || (FmpOffset > Size) ||
++      (Size - FmpOffset < sizeof (EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER)))
++  {
++    return FALSE;
++  }
++
++  Fmp = (CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER *)(Buffer + FmpOffset);
++  if ((Fmp->Version != EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER_INIT_VERSION) || (Fmp->PayloadItemCount == 0)) {
++    return FALSE;
++  }
++
++  Items = (UINTN)Fmp->EmbeddedDriverCount + Fmp->PayloadItemCount;
++  if (Size - FmpOffset < sizeof (EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER) + Items * sizeof (UINT64)) {
++    return FALSE;
++  }
++
++  //
++  // The offsets of the drivers, then of the payloads, follow the header.
++  //
++  ItemOffset = ReadUnaligned64 (
++                 (CONST UINT64 *)(Buffer + FmpOffset + sizeof (EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER) +
++                                  (UINTN)Fmp->EmbeddedDriverCount * sizeof (UINT64))
++                 );
++  if ((ItemOffset > Size - FmpOffset) ||
++      (Size - FmpOffset - (UINTN)ItemOffset < sizeof (EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER)))
++  {
++    return FALSE;
++  }
++
++  ImageOffset = FmpOffset + (UINTN)ItemOffset;
++  Image       = (CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER *)(Buffer + ImageOffset);
++  if ((Image->Version < EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER_INIT_VERSION) ||
++      ((Image->ImageCapsuleSupport & CAPSULE_SUPPORT_DEPENDENCY) != 0))
++  {
++    return FALSE;
++  }
++
++  AuthOffset = ImageOffset + sizeof (EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER);
++  if (Size - AuthOffset < OFFSET_OF (EFI_FIRMWARE_IMAGE_AUTHENTICATION, AuthInfo.CertData)) {
++    return FALSE;
++  }
++
++  Auth = (CONST EFI_FIRMWARE_IMAGE_AUTHENTICATION *)(Buffer + AuthOffset);
++  if ((Auth->AuthInfo.Hdr.dwLength < OFFSET_OF (WIN_CERTIFICATE_UEFI_GUID, CertData)) ||
++      (Auth->AuthInfo.Hdr.dwLength > Size - AuthOffset - sizeof (UINT64)))
++  {
++    return FALSE;
++  }
++
++  PayloadOffset = AuthOffset + sizeof (UINT64) + Auth->AuthInfo.Hdr.dwLength;
++  if (Size - PayloadOffset < sizeof (FMP_PAYLOAD_HEADER_V1)) {
++    return FALSE;
++  }
++
++  Payload = (CONST FMP_PAYLOAD_HEADER_V1 *)(Buffer + PayloadOffset);
++  if (Payload->Signature != FMP_PAYLOAD_HEADER_SIGNATURE) {
++    return FALSE;
++  }
++
++  CopyGuid (TypeId, &Image->UpdateImageTypeId);
++  *Version = Payload->FwVersion;
++  return TRUE;
++}
++
++/**
++  Count the files in \EFI\UpdateCapsule of a file system, and the capsules
++  for this firmware among them.
++**/
++STATIC
++VOID
++ScanDirectory (
++  IN     EFI_FILE_PROTOCOL  *Root,
++  IN     CONST EFI_GUID     *Ours,
++  IN OUT CAPSULE_SCAN       *Scan
++  )
++{
++  EFI_STATUS         Status;
++  EFI_FILE_PROTOCOL  *Dir;
++  EFI_FILE_PROTOCOL  *File;
++  EFI_FILE_INFO      *Info;
++  UINT8              *Buffer;
++  UINTN              Size;
++  EFI_GUID           TypeId;
++  UINT32             Version;
++
++  if (EFI_ERROR (Root->Open (Root, &Dir, CAPSULE_DIR, EFI_FILE_MODE_READ, 0))) {
++    return;
++  }
++
++  Info   = AllocatePool (FILE_INFO_SIZE);
++  Buffer = AllocatePool (CAPSULE_PROBE_SIZE);
++  while ((Info != NULL) && (Buffer != NULL)) {
++    Size   = FILE_INFO_SIZE;
++    Status = Dir->Read (Dir, &Size, Info);
++    if (EFI_ERROR (Status) || (Size == 0)) {
++      break;
++    }
++
++    if ((Info->Attribute & EFI_FILE_DIRECTORY) != 0) {
++      continue;
++    }
++
++    Scan->Files++;
++    StrnCpyS (Scan->Name, ARRAY_SIZE (Scan->Name), Info->FileName, ARRAY_SIZE (Scan->Name) - 1);
++    if (EFI_ERROR (Dir->Open (Dir, &File, Info->FileName, EFI_FILE_MODE_READ, 0))) {
++      continue;
++    }
++
++    Size   = (UINTN)MIN (Info->FileSize, CAPSULE_PROBE_SIZE);
++    Status = File->Read (File, &Size, Buffer);
++    File->Close (File);
++    if (!EFI_ERROR (Status) && ParseCapsule (Buffer, Size, &TypeId, &Version) && CompareGuid (&TypeId, Ours)) {
++      Scan->Capsules++;
++      Scan->Version = Version;
++    }
++  }
++
++  if (Info != NULL) {
++    FreePool (Info);
++  }
++
++  if (Buffer != NULL) {
++    FreePool (Buffer);
++  }
++
++  Dir->Close (Dir);
++}
++
++/**
++  Connect the drives, then look at the capsules the next boot would read.
++**/
++STATIC
++VOID
++ScanCapsules (
++  OUT CAPSULE_SCAN  *Scan
++  )
++{
++  EFI_STATUS                       Status;
++  EFI_HANDLE                       *Handles;
++  UINTN                            HandleCount;
++  UINTN                            Index;
++  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *FileSystem;
++  EFI_FILE_PROTOCOL                *Root;
++
++  ZeroMem (Scan, sizeof (*Scan));
++  if (PcdGetSize (PcdSystemFmpCapsuleImageTypeIdGuid) < sizeof (EFI_GUID)) {
++    return;
++  }
++
++  //
++  // A drive connected after the boot devices were: its file system too.
++  //
++  Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &HandleCount, &Handles);
++  if (!EFI_ERROR (Status)) {
++    for (Index = 0; Index < HandleCount; Index++) {
++      gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
++    }
++
++    FreePool (Handles);
++  }
++
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &HandleCount, &Handles);
++  if (EFI_ERROR (Status)) {
++    return;
++  }
++
++  for (Index = 0; Index < HandleCount; Index++) {
++    if (!IsCapsuleSource (Handles[Index]) ||
++        EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiSimpleFileSystemProtocolGuid, (VOID **)&FileSystem)) ||
++        EFI_ERROR (FileSystem->OpenVolume (FileSystem, &Root)))
++    {
++      continue;
++    }
++
++    ScanDirectory (Root, (CONST EFI_GUID *)PcdGetPtr (PcdSystemFmpCapsuleImageTypeIdGuid), Scan);
++    Root->Close (Root);
++  }
++
++  FreePool (Handles);
++}
++
++/**
++  Check the capsule on the USB drive, then request it and restart.
++**/
++STATIC
++VOID
++UpdateFromDrive (
++  VOID
++  )
++{
++  EFI_STATUS            Status;
++  UINT64                Value;
++  UINTN                 Size;
++  SYSTEM_FIRMWARE_INFO  Info;
++  CAPSULE_SCAN          Scan;
++  CHAR16                New[VERSION_LENGTH];
++  CHAR16                Old[VERSION_LENGTH];
++
++  Size = sizeof (Value);
++  if (EFI_ERROR (gRT->GetVariable (EFI_OS_INDICATIONS_SUPPORT_VARIABLE_NAME, &gEfiGlobalVariableGuid, NULL, &Size, &Value)) ||
++      ((Value & EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED) == 0))
++  {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"This firmware does not install update capsules from a drive.");
++    return;
++  }
++
++  GetSystemFirmwareInfo (&Info);
++  if (!Info.Found) {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"The system firmware is not in the EFI System Resource Table: it cannot be updated with a capsule.");
++    return;
++  }
++
++  ScanCapsules (&Scan);
++  if (Scan.Files == 0) {
++    ShowPopup (
++      EfiHiiPopupStyleInfo,
++      EfiHiiPopupTypeOk,
++      L"No update found.\nCopy the .cap file of a release into the folder EFI\\UpdateCapsule of a FAT USB drive, connect the drive and try again."
++      );
++    return;
++  }
++
++  if (Scan.Files > 1) {
++    ShowPopup (
++      EfiHiiPopupStyleWarning,
++      EfiHiiPopupTypeOk,
++      L"%u files in EFI\\UpdateCapsule, on the USB drives and the EFI system partitions: the next boot would apply all of them. Leave only the capsule to install.",
++      (UINT32)Scan.Files
++      );
++    return;
++  }
++
++  if (Scan.Capsules == 0) {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"%s is not an update for this firmware: a capsule of the other variant, of another computer, or not a capsule.",
++      Scan.Name
++      );
++    return;
++  }
++
++  FormatVersion (Scan.Version, New, sizeof (New));
++  FormatVersion (Info.Version, Old, sizeof (Old));
++  if (Scan.Version < Info.Lowest) {
++    FormatVersion (Info.Lowest, Old, sizeof (Old));
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"%s is version %s, older than the oldest accepted update, %s.", Scan.Name, New, Old);
++    return;
++  }
++
++  if (ShowPopup (
++        EfiHiiPopupStyleWarning,
++        EfiHiiPopupTypeYesNo,
++        L"Install firmware %s (now %s) from %s?\nThe computer restarts, checks the signature and writes the update, in about a minute: do not turn it off. Unsaved changes in the setup are lost.",
++        New,
++        Old,
++        Scan.Name
++        ) != EfiHiiPopupSelectionYes)
++  {
++    return;
++  }
++
++  Size = sizeof (Value);
++  if (EFI_ERROR (gRT->GetVariable (EFI_OS_INDICATIONS_VARIABLE_NAME, &gEfiGlobalVariableGuid, NULL, &Size, &Value)) ||
++      (Size != sizeof (Value)))
++  {
++    Value = 0;
++  }
++
++  Value |= EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED;
++  Status = gRT->SetVariable (
++                  EFI_OS_INDICATIONS_VARIABLE_NAME,
++                  &gEfiGlobalVariableGuid,
++                  EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++                  sizeof (Value),
++                  &Value
++                  );
++  if (EFI_ERROR (Status)) {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"The update could not be requested (%r).", Status);
++    return;
++  }
++
++  DEBUG ((DEBUG_INFO, "FirmwareUpdate: capsule on disk requested, restarting\n"));
++  gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
++  CpuDeadLoop ();
++}
++
++/**
++  No varstore: nothing to extract.
++**/
++STATIC
++EFI_STATUS
++EFIAPI
++FirmwareUpdateExtractConfig (
++  IN  CONST EFI_HII_CONFIG_ACCESS_PROTOCOL  *This,
++  IN  CONST EFI_STRING                      Request,
++  OUT EFI_STRING                            *Progress,
++  OUT EFI_STRING                            *Results
++  )
++{
++  if ((Progress == NULL) || (Results == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  *Progress = Request;
++  return EFI_NOT_FOUND;
++}
++
++/**
++  No varstore: nothing to route.
++**/
++STATIC
++EFI_STATUS
++EFIAPI
++FirmwareUpdateRouteConfig (
++  IN  CONST EFI_HII_CONFIG_ACCESS_PROTOCOL  *This,
++  IN  CONST EFI_STRING                      Configuration,
++  OUT EFI_STRING                            *Progress
++  )
++{
++  if ((Configuration == NULL) || (Progress == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  *Progress = Configuration;
++  return EFI_NOT_FOUND;
++}
++
++/**
++  Refresh the page when it opens; update when the entry is selected (the
++  browser calls a goto question only with EFI_BROWSER_ACTION_CHANGING).
++**/
++STATIC
++EFI_STATUS
++EFIAPI
++FirmwareUpdateCallback (
++  IN  CONST EFI_HII_CONFIG_ACCESS_PROTOCOL  *This,
++  IN  EFI_BROWSER_ACTION                    Action,
++  IN  EFI_QUESTION_ID                       QuestionId,
++  IN  UINT8                                 Type,
++  IN  EFI_IFR_TYPE_VALUE                    *Value,
++  OUT EFI_BROWSER_ACTION_REQUEST            *ActionRequest
++  )
++{
++  if ((This == NULL) || (ActionRequest == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  *ActionRequest = EFI_BROWSER_ACTION_REQUEST_NONE;
++  if (Action == EFI_BROWSER_ACTION_FORM_OPEN) {
++    RefreshInfo ();
++    return EFI_SUCCESS;
++  }
++
++  if (Action != EFI_BROWSER_ACTION_CHANGING) {
++    return EFI_UNSUPPORTED;
++  }
++
++  if (QuestionId == FIRMWARE_UPDATE_INSTALL_QUESTION_ID) {
++    UpdateFromDrive ();
++  }
++
++  return EFI_SUCCESS;
++}
++
++/**
++  Driver entry point: publish the page.
++**/
++EFI_STATUS
++EFIAPI
++FirmwareUpdateDxeEntryPoint (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++  EFI_STATUS  Status;
++
++  mConfigAccess.ExtractConfig = FirmwareUpdateExtractConfig;
++  mConfigAccess.RouteConfig   = FirmwareUpdateRouteConfig;
++  mConfigAccess.Callback      = FirmwareUpdateCallback;
++  mDriverHandle               = NULL;
++
++  Status = gBS->InstallMultipleProtocolInterfaces (
++                  &mDriverHandle,
++                  &gEfiDevicePathProtocolGuid,
++                  &mVendorDevicePath,
++                  &gEfiHiiConfigAccessProtocolGuid,
++                  &mConfigAccess,
++                  NULL
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  mHiiHandle = HiiAddPackages (&gFirmwareUpdateFormSetGuid, mDriverHandle, FirmwareUpdateDxeStrings, FirmwareUpdateVfrBin, NULL);
++  if (mHiiHandle == NULL) {
++    gBS->UninstallMultipleProtocolInterfaces (
++           mDriverHandle,
++           &gEfiDevicePathProtocolGuid,
++           &mVendorDevicePath,
++           &gEfiHiiConfigAccessProtocolGuid,
++           &mConfigAccess,
++           NULL
++           );
++    return EFI_OUT_OF_RESOURCES;
++  }
++
++  return EFI_SUCCESS;
++}
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
+new file mode 100644
+index 0000000000..f27a00cbbe
+--- /dev/null
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
+@@ -0,0 +1,37 @@
++/** @file
++  Firmware Update setup page strings.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#langdef en-US "English"
++
++#string STR_FORMSET_TITLE        #language en-US "Firmware Update"
++#string STR_FORMSET_HELP         #language en-US "The installed firmware, its last update, and updates from a USB drive"
++#string STR_FORM_TITLE           #language en-US "Firmware Update"
++
++#string STR_INSTALLED_SUBTITLE   #language en-US "Installed firmware"
++
++#string STR_FIRMWARE_PROMPT      #language en-US "Firmware"
++#string STR_FIRMWARE_HELP        #language en-US "The BIOS version of the running firmware."
++#string STR_FIRMWARE_VALUE       #language en-US "Unknown"
++
++#string STR_VERSION_PROMPT       #language en-US "Version"
++#string STR_VERSION_HELP         #language en-US "The version of the system firmware in the EFI System Resource Table, as an operating system sees it."
++#string STR_VERSION_VALUE        #language en-US "Unknown"
++
++#string STR_LOWEST_PROMPT        #language en-US "Oldest accepted update"
++#string STR_LOWEST_HELP          #language en-US "Update capsules older than this version are refused: an older firmware has to be written with an external programmer or flashrom."
++#string STR_LOWEST_VALUE         #language en-US "Unknown"
++
++#string STR_LAST_PROMPT          #language en-US "Last update"
++#string STR_LAST_HELP            #language en-US "The version and the result of the last update capsule that the firmware processed."
++#string STR_LAST_VALUE           #language en-US "None"
++
++#string STR_UPDATE_SUBTITLE      #language en-US "Update"
++
++#string STR_INSTALL_PROMPT       #language en-US "Update from a USB drive"
++#string STR_INSTALL_HELP         #language en-US "Copy the capsule of a release (the .cap file) into the folder EFI\\UpdateCapsule of a FAT USB drive, and connect the drive and the AC adapter. The firmware checks the capsule, restarts, and writes it before anything else starts, in about a minute. Settings, boot entries and Secure Boot keys are kept. Unsaved changes in the setup are lost.\n\nFrom Linux, tools/update.py and fwupd install the same capsules."
++
++#string STR_POPUP_MESSAGE        #language en-US ""
++#string STR_NULL_STRING          #language en-US ""
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+new file mode 100644
+index 0000000000..ea77ceaae9
+--- /dev/null
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+@@ -0,0 +1,68 @@
++## @file
++#  Firmware Update setup page
++#
++#  Shows the system firmware of the ESRT (the FMP instance of
++#  PcdSystemFmpCapsuleImageTypeIdGuid): version, lowest supported version
++#  and the result of its last update. Updates it from a USB drive: checks
++#  the capsule in \EFI\UpdateCapsule, then requests a capsule on disk and
++#  restarts, so that PlatformBootManagerLib applies it.
++#
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++#
++##
++
++[Defines]
++  INF_VERSION                    = 0x00010019
++  BASE_NAME                      = FirmwareUpdateDxe
++  FILE_GUID                      = 2D6F6E3A-63B5-4A0F-8E0B-3D0E7C9B5A41
++  MODULE_TYPE                    = DXE_DRIVER
++  VERSION_STRING                 = 1.0
++  ENTRY_POINT                    = FirmwareUpdateDxeEntryPoint
++
++[Sources]
++  FirmwareUpdate.c
++  FirmwareUpdateVfr.vfr
++  FirmwareUpdate.uni
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++  UefiPayloadPkg/UefiPayloadPkg.dec
++
++[LibraryClasses]
++  BaseLib
++  BaseMemoryLib
++  DebugLib
++  DevicePathLib
++  HiiLib
++  MemoryAllocationLib
++  PcdLib
++  PrintLib
++  UefiBootServicesTableLib
++  UefiDriverEntryPoint
++  UefiLib
++  UefiRuntimeServicesTableLib
++
++[Guids]
++  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES
++  gFirmwareUpdateFormSetGuid                    ## PRODUCES
++  gEfiGlobalVariableGuid                        ## CONSUMES ## Variable:L"OsIndications"
++  gEfiFmpCapsuleGuid                            ## CONSUMES
++  gEfiPartTypeSystemPartGuid                    ## CONSUMES
++  gEfiFileInfoGuid                              ## CONSUMES
++
++[Protocols]
++  gEfiDevicePathProtocolGuid                    ## PRODUCES
++  gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
++  gEfiFirmwareManagementProtocolGuid            ## CONSUMES
++  gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
++  gEfiHiiPopupProtocolGuid                      ## SOMETIMES_CONSUMES
++  gEfiSmbiosProtocolGuid                        ## SOMETIMES_CONSUMES
++
++[Pcd]
++  gEfiMdeModulePkgTokenSpaceGuid.PcdSystemFmpCapsuleImageTypeIdGuid  ## CONSUMES
++
++[Depex]
++  gEfiHiiDatabaseProtocolGuid AND
++  gEfiVariableArchProtocolGuid AND
++  gEfiVariableWriteArchProtocolGuid
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
+new file mode 100644
+index 0000000000..aeb41d8817
+--- /dev/null
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
+@@ -0,0 +1,52 @@
++/** @file
++  Firmware Update setup page: the installed system firmware, the result of
++  its last update, and an update from a USB drive.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Guid/HiiPlatformSetupFormset.h>
++#include <Guid/FirmwareUpdateConfig.h>
++
++formset
++  guid      = FIRMWARE_UPDATE_FORMSET_GUID,
++  title     = STRING_TOKEN(STR_FORMSET_TITLE),
++  help      = STRING_TOKEN(STR_FORMSET_HELP),
++  classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
++
++  form formid = FIRMWARE_UPDATE_FORM_ID,
++    title = STRING_TOKEN(STR_FORM_TITLE);
++
++    subtitle text = STRING_TOKEN(STR_INSTALLED_SUBTITLE);
++
++    text
++      help = STRING_TOKEN(STR_FIRMWARE_HELP),
++      text = STRING_TOKEN(STR_FIRMWARE_PROMPT),
++      text = STRING_TOKEN(STR_FIRMWARE_VALUE);
++
++    text
++      help = STRING_TOKEN(STR_VERSION_HELP),
++      text = STRING_TOKEN(STR_VERSION_PROMPT),
++      text = STRING_TOKEN(STR_VERSION_VALUE);
++
++    text
++      help = STRING_TOKEN(STR_LOWEST_HELP),
++      text = STRING_TOKEN(STR_LOWEST_PROMPT),
++      text = STRING_TOKEN(STR_LOWEST_VALUE);
++
++    text
++      help = STRING_TOKEN(STR_LAST_HELP),
++      text = STRING_TOKEN(STR_LAST_PROMPT),
++      text = STRING_TOKEN(STR_LAST_VALUE);
++
++    subtitle text = STRING_TOKEN(STR_NULL_STRING);
++    subtitle text = STRING_TOKEN(STR_UPDATE_SUBTITLE);
++
++    goto FIRMWARE_UPDATE_FORM_ID,
++      prompt = STRING_TOKEN(STR_INSTALL_PROMPT),
++      help   = STRING_TOKEN(STR_INSTALL_HELP),
++      flags  = INTERACTIVE,
++      key    = FIRMWARE_UPDATE_INSTALL_QUESTION_ID;
++
++  endform;
++endformset;
+diff --git a/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h b/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
+new file mode 100644
+index 0000000000..68939a0c47
+--- /dev/null
++++ b/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
+@@ -0,0 +1,18 @@
++/** @file
++  Firmware Update setup page.
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef FIRMWARE_UPDATE_CONFIG_H_
++#define FIRMWARE_UPDATE_CONFIG_H_
++
++#define FIRMWARE_UPDATE_FORMSET_GUID \
++  { \
++    0x04e8b12f, 0xc919, 0x4cd9, { 0x89, 0x3d, 0x64, 0x23, 0x40, 0x4d, 0xc0, 0x2d } \
++  }
++
++#define FIRMWARE_UPDATE_FORM_ID              0x1000
++#define FIRMWARE_UPDATE_INSTALL_QUESTION_ID  0x1001
++
++#endif
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dec b/UefiPayloadPkg/UefiPayloadPkg.dec
+index 715e4f6254..5035b573d1 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dec
++++ b/UefiPayloadPkg/UefiPayloadPkg.dec
+@@ -32,6 +32,9 @@
+   gUefiPayloadBootSplashGuid = { 0x8a7c3e21, 0x4f5b, 0x4d91, { 0x9c, 0x2e, 0x1a, 0x3b, 0x5d, 0x7f, 0x8e, 0x90 } }
+   gBootSplashConfigFormSetGuid = { 0xb2d4e6f8, 0x1a3c, 0x4e5f, { 0x8b, 0x9d, 0x0c, 0x2e, 0x4a, 0x6f, 0x8d, 0xb1 } }
+ 
++  ## Include/Guid/FirmwareUpdateConfig.h
++  gFirmwareUpdateFormSetGuid = { 0x04e8b12f, 0xc919, 0x4cd9, { 0x89, 0x3d, 0x64, 0x23, 0x40, 0x4d, 0xc0, 0x2d } }
++
+   #
+   ## Defines the token space for the UEFI Payload Package PCDs.
+   #
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 6cfa73653b..66d9a81d5f 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -1266,6 +1266,7 @@
+ !endif
+   }
+   MdeModulePkg/Universal/EsrtDxe/EsrtDxe.inf
++  UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+ !endif
+ 
+ 
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.fdf b/UefiPayloadPkg/UefiPayloadPkg.fdf
+index 3577a4df13..a0330ce983 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.fdf
++++ b/UefiPayloadPkg/UefiPayloadPkg.fdf
+@@ -550,6 +550,7 @@ INF ShellPkg/Application/Shell/Shell.inf
+ INF  FILE_GUID = $(CAPSULE_MAIN_FW_GUID) FmpDevicePkg/FmpDxe/FmpDxe.inf
+ !endif
+ INF MdeModulePkg/Universal/EsrtDxe/EsrtDxe.inf
++INF UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+ !endif
+ 
+ !if $(UNIVERSAL_PAYLOAD) == TRUE
+-- 
+2.43.0
+
