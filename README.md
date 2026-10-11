@@ -174,7 +174,7 @@ sudo flashrom -p internal --ifd -i bios -w w541-coreboot-v1.3.0-mrc.rom
 ```
 
 The UEFI settings and boot entries start from scratch after flashing (from
-v1.2.x to v1.3.0 they can stay: [docs/flashing.md](docs/flashing.md#from-v12x-to-v130)). Before
+v1.0.3-v1.2.x to v1.3.0 they can stay: [docs/flashing.md](docs/flashing.md#from-v12x-to-v130)). Before
 you reboot, read [docs/flashing.md](docs/flashing.md): boot loader fallback
 path, serial number and machine type in the VPD (and how to keep them
 across updates), external flashing and recovery.

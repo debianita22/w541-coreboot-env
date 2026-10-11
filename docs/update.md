@@ -58,7 +58,7 @@ capsule itself, from SMM, and never `WP_RO`.
 ## The first time
 
 The capsules of v1.3.0 and later need a firmware with the same flash map,
-v1.3.0 or later. Install it once with flashrom: from v1.2.x as in
+v1.3.0 or later. Install it once with flashrom: from v1.0.3-v1.2.x as in
 [docs/flashing.md](flashing.md#from-v12x-to-v130) (settings and VPD stay),
 from other firmware as in [docs/flashing.md](flashing.md#internal-update)
 (VPD copied into the image first, *BIOS Lock* off). From there on, every
@@ -81,6 +81,7 @@ partition (ESP) mounted (`/boot/efi`, `/efi`; elsewhere: `--esp DIR`).
 | `stage FILE.cap` | a capsule already downloaded |
 | `cancel` | removes the waiting capsule and the request |
 | `info FILE.cap` | variant, version, regions and signer of a capsule (or of the fwupd package, `FILE.cab`) |
+| `vboot FLASH.bin` | from a copy of the flash (`sudo flashrom -p internal -r FLASH.bin`): the slot of the next boot and its tries, the slot of this boot and of the one before, and whether vboot found one broken ([docs/vboot.md](vboot.md)) |
 
 `stage` checks what the firmware would check, so that a reboot is not
 wasted: the variant (an `nri` capsule is refused on `mrc`), the version (not
@@ -236,8 +237,9 @@ Any tool that delivers capsules on disk works the same way:
   recover it with an external programmer and the `-4mb-chip.rom` of a
   release, as in [docs/flashing.md](flashing.md#recovery).
 - The new version does not show up after the update: vboot went back to the
-  old slot (the new one did not verify, or did not boot twice). The event
-  log and `cbmem -c` (*vboot*, *falling back*) tell why.
+  old slot (the new one did not verify, or did not boot twice).
+  `update.py vboot` on a copy of the flash shows *precedente: slot X,
+  fallito*; `cbmem -c` (*falling back*) tells the case of the two tries.
 
 The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 

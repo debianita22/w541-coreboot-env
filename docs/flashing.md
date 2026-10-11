@@ -189,6 +189,12 @@ settings, boot entries, Secure Boot keys, supervisor password, VPD and event
 log stay, with no `tools/vpd.py copy`. *BIOS Lock* must be off (v1.2.x has
 no *Firmware protection*).
 
+The same command works from every release of this repository from v1.0.3
+on: the regions written at runtime have been at these offsets since then.
+From v1.0.0-v1.0.2, or from other firmware, see
+[Internal update](#internal-update). flashrom must know `--fmap-file`
+(1.2 or later: `flashrom --help | grep fmap-file`).
+
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
 sudo flashrom -p internal -r backup-$(date +%F).rom        # whole 12 MiB, keep it off the laptop
@@ -201,7 +207,9 @@ sudo flashrom -p internal --fmap-file w541-coreboot-v1.3.0-mrc.rom \
 `VERIFIED`, and if it does not, write again straight away. The first boot
 trains the memory (a few seconds of black screen) and boots slot A. Then
 `sudo python3 tools/update.py status` shows *mappa: vboot*, and the next
-releases install with their capsule.
+releases install with their capsule. Before trusting it with an update,
+see [Testing on the laptop](vboot.md#testing-on-the-laptop).
+
 ## First boot and settings
 
 - The first boot trains the memory and saves the result in `RW_MRC_CACHE`:

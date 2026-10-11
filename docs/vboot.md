@@ -16,6 +16,7 @@ again from the old slot.
 - [Limits](#limits)
 - [Moving from v1.2.x](#moving-from-v12x)
 - [How it was tested](#how-it-was-tested)
+- [Testing on the laptop](#testing-on-the-laptop)
 
 ## Flash map
 
@@ -120,8 +121,9 @@ its root key, and vboot keeps the old one).
 
 See [docs/flashing.md](flashing.md#from-v12x-to-v130): flashrom writes
 every region of the new map except `SMMSTORE`, `RO_VPD` and `RW_ELOG`,
-which are at the same offsets, so settings, boot entries, Secure Boot keys,
-VPD and event log stay. From then on, updates are capsules.
+which are at the same offsets since v1.0.3, so settings, boot entries,
+Secure Boot keys, VPD and event log stay. From then on, updates are
+capsules.
 
 ## How it was tested
 
@@ -137,4 +139,89 @@ the same regions and vboot's nvdata in flash:
   *try_count used up; falling back*, from the old slot;
 - `RW_NVRAM` full: the payload erases it and writes the request at the start.
 
-On the laptop: not yet. The first v1.3.0 release is a pre-release.
+## Testing on the laptop
+
+v1.3.0-rc1 is the first release with vboot to run on the W541. QEMU does
+not show what depends on the laptop's SPI controller: vboot writing
+`RW_NVRAM` from the bootblock, the payload writing a slot across the two
+chips, the Protected Range Register; nor how long the hash of a 2.8 MiB slot
+takes. Keep the external programmer ready with the `-4mb-chip.rom` of
+v1.2.2, or the last 4 MiB of your backup: written to the 4 MiB chip, it
+brings back the old firmware whatever goes wrong below. `cbmem` is
+coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
+
+1. **Install** as in [docs/flashing.md](flashing.md#from-v12x-to-v130).
+2. **First boot**: a few seconds of black screen (memory training), then
+   the splash with the logo.
+
+   ```sh
+   sudo cbmem -1 | grep -E 'Slot [AB] is selected|BM-LOCKDOWN|nvdata'
+   #   Slot A is selected
+   #   BM-LOCKDOWN: Enabled bootmedia protection
+   #   and no "failed to save nvdata": vboot wrote RW_NVRAM from the bootblock
+   cat /sys/class/dmi/id/bios_version          # ouroBIOS-v1.3.0-rc1-mrc
+   sudo dmesg | grep 'efi: EFI v'              # ... by ouroBIOS
+   sudo python3 tools/update.py status         # mappa: vboot, versione 1.3.0
+   sudo flashrom -p internal 2>&1 | grep -E 'PR[0-4]|locked down'
+   #   a PRx line: 0x00b60000-0x00bfffff is read-only
+   ```
+
+   In the setup: *Security* → *Flash protection* → *Firmware protection*
+   on; *Firmware Update* shows 1.3.0.
+3. **Suspend**: `systemctl suspend`, then wake with the lid or the power
+   button, twice.
+4. **A/B switch** with the same capsule: slot B already holds the same
+   code, so nothing is written there, but vboot is asked to try B.
+
+   ```sh
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
+   sudo systemctl reboot
+   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot B is selected
+   ```
+
+   Reboot three more times: always slot B. A new slot gets two tries; if
+   the payload could not mark it good, the third boot would go back to A.
+   The state vboot keeps in `RW_NVRAM`, from a copy of the flash:
+
+   ```sh
+   sudo flashrom -p internal -r flash.bin
+   python3 tools/update.py vboot flash.bin
+   #   prossimo:   slot B           (the slot of the next boot, and its tries)
+   #   corrente:   slot B, -        (the slot of this boot: "in prova", "confermato")
+   #   precedente: slot B, -
+   ```
+5. **A whole slot written by the capsule** (programmer at hand): erase
+   slot A, which is not running, and let the capsule rewrite all of it,
+   2.8 MiB across the two chips.
+
+   ```sh
+   cp w541-coreboot-v1.3.0-rc1-mrc.rom bad.rom
+   dd if=/dev/zero of=bad.rom bs=64K seek=$((0x5C0000 / 0x10000)) count=45 conv=notrunc
+   sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
+   sudo systemctl reboot                             # still slot B
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
+   sudo systemctl reboot
+   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot A is selected
+   ```
+6. **Fallback** (programmer at hand): spoil the slot that runs, A, and
+   reboot: vboot must find it broken, write that to `RW_NVRAM` and boot B.
+
+   ```sh
+   cp w541-coreboot-v1.3.0-rc1-mrc.rom bad.rom
+   dd if=/dev/zero of=bad.rom bs=64K seek=$((0x5D0000 / 0x10000)) count=1 conv=notrunc
+   sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
+   sudo systemctl reboot
+   sudo cbmem -1 | grep 'Slot [AB] is selected'      # Slot B is selected
+   sudo flashrom -p internal -r flash.bin && python3 tools/update.py vboot flash.bin
+   #   precedente: slot A, fallito
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
+   sudo systemctl reboot                             # slot A again, repaired
+   ```
+
+   The boot that finds A broken restarts before coreboot keeps its log:
+   what is left of it is *precedente: slot A, fallito*. A laptop that
+   restarts in a loop at power-on here, without the logo, cannot save
+   `RW_NVRAM` from the bootblock: write the 4 MiB chip with the programmer.
+
+Whatever does not match, keep `sudo cbmem -c > cbmem.txt` and the output
+of the commands.

@@ -13,6 +13,7 @@
 #   sudo python3 tools/update.py stage w541-coreboot-v1.2.1-mrc.cap
 #   sudo python3 tools/update.py cancel
 #   python3 tools/update.py info w541-coreboot-v1.2.1-mrc.cap
+#   python3 tools/update.py vboot flash.bin            # da sudo flashrom -p internal -r flash.bin
 #
 # Al posto della .cap va bene anche il pacchetto fwupd della release (.cab,
 # tools/fwupd-cab.py): se ne usa la capsula che contiene.
@@ -61,7 +62,7 @@ LEGACY_VARIANTS = {
 # firmware scrive il training della RAM e lo slot che non gira
 REGIONS = ["RW_MRC_CACHE", "RW_SECTION_A", "RW_SECTION_B"]
 LEGACY_REGIONS = ["RW_MRC_CACHE", "COREBOOT"]
-MIGRATION = "docs/flashing.md, \"Da v1.2.x a v1.3.0\""
+MIGRATION = "docs/flashing.md, \"From v1.2.x to v1.3.0\""
 ROM_SIZE = 12 * 1024 * 1024
 
 FMP_CAPSULE_GUID = uuid.UUID("6dcbd5ed-e82d-4c44-bda1-7194199ad92a")
@@ -828,6 +829,94 @@ def cmd_cancel(args):
     return 0
 
 
+# --- vboot: lo stato in RW_NVRAM ----------------------------------------------
+#
+# Record V1 di vboot da 16 byte, accodati dall'inizio della regione (coreboot,
+# vbnv_flash.c; il payload, FmpDeviceSmmLib); il corrente e' l'ultimo prima del
+# primo cancellato. Campi da vboot_reference, 2nvstorage_fields.h.
+NV_RECORD = 16
+NV_RESULTS = ("-", "in prova", "confermato", "fallito")
+
+
+def nv_crc8(data):
+    """Il CRC-8 di vboot (x^8 + x^2 + x + 1)."""
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc ^= 0x1070 << 3
+            crc = (crc << 1) & 0xffff
+    return crc >> 8
+
+
+def fmap_areas(data):
+    """Le aree della FMAP di un'immagine del flash, {nome: (offset, size)}; None senza FMAP."""
+    pos = data.find(b"__FMAP__")
+    while pos >= 0:
+        if pos + 56 <= len(data):
+            major, _, _, _, _, n = struct.unpack_from("<BBQI32sH", data, pos + 8)
+            if major == 1 and pos + 56 + 42 * n <= len(data):
+                areas = {}
+                for i in range(n):
+                    off, size, name, _ = struct.unpack_from("<II32sH", data, pos + 56 + 42 * i)
+                    areas[name.split(b"\0")[0].decode("ascii", "replace")] = (off, size)
+                return areas
+        pos = data.find(b"__FMAP__", pos + 1)
+    return None
+
+
+def nv_state(region):
+    """Il record corrente di RW_NVRAM: dict con i campi, o None se non ce n'e' uno valido."""
+    used = 0
+    while used + NV_RECORD <= len(region) and region[used:used + NV_RECORD] != b"\xff" * NV_RECORD:
+        used += NV_RECORD
+    st = {"used": used // NV_RECORD, "total": len(region) // NV_RECORD, "offset": used - NV_RECORD}
+    rec = region[used - NV_RECORD:used] if used else b""
+    if not rec or rec[0] & 0xc3 != 0x40 or nv_crc8(rec[:15]) != rec[15]:
+        st["valid"] = False
+        return st
+    boot, boot2 = rec[1], rec[7]
+    st.update(valid=True, try_next=(boot2 >> 3) & 1, try_count=boot & 0x0f,
+              tried=(boot2 >> 2) & 1, result=boot2 & 3,
+              prev_tried=(boot2 >> 6) & 1, prev_result=(boot2 >> 4) & 3,
+              recovery=rec[2])
+    return st
+
+
+def cmd_vboot(args):
+    data = open(args.dump, "rb").read()
+    areas = fmap_areas(data)
+    if areas is not None:
+        if "RW_NVRAM" not in areas:
+            raise Error("%s: la FMAP non ha RW_NVRAM: un firmware senza vboot (prima della v1.3.0)" % args.dump)
+        off, size = areas["RW_NVRAM"]
+        if off + size > len(data):
+            raise Error("%s: RW_NVRAM (0x%x, %d KiB) fuori dal file" % (args.dump, off, size // 1024))
+        region = data[off:off + size]
+    elif 0 < len(data) <= 0x100000 and len(data) % NV_RECORD == 0:
+        region = data       # solo RW_NVRAM (flashrom -i RW_NVRAM:FILE)
+    else:
+        raise Error("%s: ne' un'immagine del flash con la FMAP ne' una copia di RW_NVRAM" % args.dump)
+    slot = "AB"
+    st = nv_state(region)
+    print("RW_NVRAM:   %d record su %d" % (st["used"], st["total"]))
+    if not st["valid"]:
+        print("stato:      nessun record valido: al prossimo avvio vboot riparte dallo slot A")
+        return 0
+    n = st["try_count"]
+    print("prossimo:   slot %s%s" % (slot[st["try_next"]],
+                                     ", %d tentativ%s" % (n, "o" if n == 1 else "i") if n else ""))
+    print("corrente:   slot %s, %s" % (slot[st["tried"]], NV_RESULTS[st["result"]]))
+    print("precedente: slot %s, %s" % (slot[st["prev_tried"]], NV_RESULTS[st["prev_result"]]))
+    if st["recovery"]:
+        print("recovery:   richiesto, motivo 0x%02x (questo firmware non ha recovery)" % st["recovery"])
+    if st["prev_result"] == 3:
+        print("nota:       lo slot %s non si e' verificato o non e' partito, vboot e' passato al %s"
+              % (slot[st["prev_tried"]], slot[st["tried"]]))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Aggiornamento del firmware del W541 con una capsula UEFI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -863,6 +952,10 @@ def main():
     p.add_argument("--fw-version", type=num, help="versione attesa (0x01020000)")
     p.add_argument("--lsv", type=num, help="versione minima attesa")
     p.set_defaults(func=cmd_info)
+
+    p = sub.add_parser("vboot", help="lo stato di vboot (slot, tentativi) in una copia del flash")
+    p.add_argument("dump", help="flashrom -r: tutto il flash, o -i RW_NVRAM:FILE")
+    p.set_defaults(func=cmd_vboot)
 
     args = ap.parse_args()
     try:
