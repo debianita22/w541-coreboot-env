@@ -23,6 +23,8 @@
 #                  di ogni variante (docs/update.md). Gli slot RW di vboot si
 #                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
 #                  senza, con le chiavi di prova di vboot: build di prova
+#   keys           controlla le chiavi di firma dell'ambiente (CAPSULE_SIGNING_KEY,
+#                  VBOOT_SIGNING_KEY) senza build: con --release devono esserci
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
 #
 # Opzioni:
@@ -160,7 +162,7 @@ while [ $# -gt 0 ]; do
 		--dist)      DIST="$(realpath -m "${2:?--dist DIR}")"; shift 2 ;;
 		--jobs)      JOBS="${2:?--jobs N}"; shift 2 ;;
 		-h|--help)   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-		prepare|toolchain|config|roms|toolchain-key) CMDS+=("$1"); shift ;;
+		prepare|toolchain|config|roms|keys|toolchain-key) CMDS+=("$1"); shift ;;
 		*) die "argomento sconosciuto: $1 (tools/build.sh --help)" ;;
 	esac
 done
@@ -644,46 +646,83 @@ make_capsule() {
 }
 
 # La chiave privata degli slot (VBOOT_SIGNING_KEY, base64 di
-# firmware_data_key.vbprivk) nell'albero per la build, e solo per la build:
-# deve essere quella di keys/vboot/firmware_data_key.vbpubk
-install_vboot_key() {
-	local k="${TREE}/${VBOOT_PRIVKEY_TREE}"
-	# spazi, a capo e virgolette attorno, che un copia e incolla puo' aggiungere,
-	# non contano; per il resto solo base64. In caso di errore solo lunghezze e
-	# conteggi, mai il contenuto
-	(umask 077; VBK="${VBOOT_SIGNING_KEY}" python3 - "${k}" <<'EOF'
-import base64, binascii, os, re, sys
-s = re.sub(r"\s+", "", os.environ["VBK"]).strip("\"'")
+# firmware_data_key.vbprivk) nel file $1, se e' quella di
+# keys/vboot/firmware_data_key.vbpubk. Spazi, a capo e virgolette attorno,
+# che un copia e incolla puo' aggiungere, non contano. Un errore dice solo
+# lunghezze, conteggi e i caratteri estranei, mai la chiave
+vboot_key_to() {
+	local why
+	why="$(umask 077; VBK="${VBOOT_SIGNING_KEY}" python3 - "$1" "${O}/keys/vboot/firmware_data_key.vbpubk" <<'EOF'
+import base64, binascii, os, re, struct, subprocess, sys
+
+def fail(msg):
+    print(msg)
+    sys.exit(1)
+
+s = re.sub(r"[\s\u200b-\u200d\u2060\ufeff]+", "", os.environ["VBK"]).strip("\"'")
 try:
     data = base64.b64decode(s, validate=True)
 except (binascii.Error, ValueError):
-    bad = len(re.sub(r"[A-Za-z0-9+/=]", "", s))
-    sys.exit("  VBOOT_SIGNING_KEY: %d caratteri senza spazi (una chiave RSA-4096: 3144), %d fuori "
-             "dall'alfabeto base64%s" % (len(s), bad, ", non multiplo di 4" if len(s) % 4 else ""))
-# vbprivk: l'algoritmo in un u64, 7 = RSA-4096 con SHA-256, poi la chiave in DER
+    odd = sorted({c for c in s if not re.fullmatch(r"[A-Za-z0-9+/=]", c)})
+    fail("%d caratteri senza spazi (attesi 3144), %d fuori dall'alfabeto base64 (%s)%s"
+         % (len(s), sum(c in odd for c in s), " ".join("U+%04X" % ord(c) for c in odd[:8]) or "nessuno",
+            ", non multiplo di 4" if len(s) % 4 else ""))
+# vbprivk: l'algoritmo in un u64 (7: RSA-4096 con SHA-256), poi la chiave in DER
 if len(data) < 16 or int.from_bytes(data[:8], "little") != 7 or data[8] != 0x30:
-    sys.exit("  VBOOT_SIGNING_KEY: base64 di %d byte, ma non una chiave privata vboot RSA-4096 "
-             "(.vbprivk)" % len(data))
+    fail("%d byte in base64, ma non una chiave privata vboot RSA-4096 (.vbprivk)" % len(data))
+out = subprocess.run(["openssl", "rsa", "-inform", "DER", "-noout", "-modulus"],
+                     input=data[8:], capture_output=True).stdout.decode()
+m = re.search(r"Modulus=([0-9A-F]+)", out)
+if not m:
+    fail("%d byte in base64: la chiave RSA non si legge (troncata?)" % len(data))
+# vbpubk: l'offset della chiave, poi parole a 32 bit: n, n0inv, il modulo little endian
+pub = open(sys.argv[2], "rb").read()
+off = struct.unpack_from("<I", pub, 0)[0]
+words = struct.unpack_from("<I", pub, off)[0]
+if int(m.group(1), 16) != int.from_bytes(pub[off + 8:off + 8 + 4 * words], "little"):
+    fail("una chiave RSA-4096, ma non quella di keys/vboot/firmware_data_key.vbpubk")
 open(sys.argv[1], "wb").write(data)
 EOF
-	) || die "VBOOT_SIGNING_KEY non valida: base64 -w0 firmware_data_key.vbprivk, una riga (docs/vboot.md)"
+)" || die "VBOOT_SIGNING_KEY: ${why:-non valida} (base64 -w0 firmware_data_key.vbprivk, una riga; docs/vboot.md)"
+}
+
+# La chiave degli slot nell'albero per la build, e solo per la build
+install_vboot_key() {
+	vboot_key_to "${TREE}/${VBOOT_PRIVKEY_TREE}"
 	trap 'rm -f "${TREE}/${VBOOT_PRIVKEY_TREE}"' EXIT
-	python3 - "${k}" "${O}/keys/vboot/firmware_data_key.vbpubk" <<'EOF' \
-		|| die "VBOOT_SIGNING_KEY non e' la chiave di keys/vboot/firmware_data_key.vbpubk"
-import re, struct, subprocess, sys
-priv = open(sys.argv[1], "rb").read()
-pub = open(sys.argv[2], "rb").read()
-# vbprivk: algoritmo (u64) e la chiave RSA in DER
-out = subprocess.run(["openssl", "rsa", "-inform", "DER", "-noout", "-modulus"],
-                     input=priv[8:], capture_output=True).stdout.decode()
-m = re.search(r"Modulus=([0-9A-F]+)", out)
-# vbpubk: vb2_packed_key, poi parole a 32 bit: n, n0inv, il modulo little endian
-off, _, size = struct.unpack_from("<III", pub, 0)
-words = struct.unpack_from("<I", pub, off)[0]
-mod = int.from_bytes(pub[off + 8:off + 8 + 4 * words], "little")
-sys.exit(0 if m and int(m.group(1), 16) == mod else 1)
-EOF
 	echo "  ok  VBOOT_SIGNING_KEY: la chiave di keys/vboot/firmware_data_key.vbpubk"
+}
+
+# Le chiavi di firma dell'ambiente, senza albero ne' build: un errore si vede
+# nel primo minuto della CI, non dopo la toolchain (build.yml). Con --release
+# devono esserci (CAPSULE_SIGNING_KEY con una versione vX.Y.Z)
+cmd_keys() {
+	local tmp
+	say "chiavi di firma"
+	tmp="$(mktemp -d)"
+	chmod 700 "${tmp}"
+	trap 'rm -rf "${tmp}"' EXIT
+	if [ -n "${CAPSULE_SIGNING_KEY:-}" ]; then
+		(umask 077; printf '%s\n' "${CAPSULE_SIGNING_KEY}" > "${tmp}/key.pem")
+		[ "$(openssl pkey -in "${tmp}/key.pem" -pubout 2>/dev/null)" = \
+			"$(openssl x509 -in "${O}/${CAPSULE_CERT}" -noout -pubkey)" ] \
+			|| die "CAPSULE_SIGNING_KEY non e' la chiave di ${CAPSULE_CERT}"
+		echo "  ok  CAPSULE_SIGNING_KEY: la chiave di ${CAPSULE_CERT}"
+	elif [ "${RELEASE}" = yes ] && [ "$(fw_version)" != 0x00000000 ]; then
+		die "--release ${VERSION}: senza CAPSULE_SIGNING_KEY niente capsula (docs/update.md)"
+	else
+		echo "  --  CAPSULE_SIGNING_KEY assente: niente capsula"
+	fi
+	if [ -n "${VBOOT_SIGNING_KEY:-}" ]; then
+		vboot_key_to "${tmp}/firmware_data_key.vbprivk"
+		echo "  ok  VBOOT_SIGNING_KEY: la chiave di keys/vboot/firmware_data_key.vbpubk"
+	elif [ "${RELEASE}" = yes ]; then
+		die "--release: senza VBOOT_SIGNING_KEY gli slot non si firmano con la chiave del progetto (docs/vboot.md)"
+	else
+		echo "  --  VBOOT_SIGNING_KEY assente: slot firmati con le chiavi di prova di vboot"
+	fi
+	rm -rf "${tmp}"
+	trap - EXIT
 }
 
 # Gli slot RW della ROM della variante $1 si verificano con la chiave root del
@@ -778,6 +817,7 @@ for c in "${CMDS[@]}"; do
 		toolchain)     cmd_toolchain ;;
 		config)        cmd_config ;;
 		roms)          cmd_roms ;;
+		keys)          cmd_keys ;;
 		toolchain-key) cmd_toolchain_key ;;
 	esac
 done

@@ -106,6 +106,16 @@ jobs:
       - name: tools/ci-check.sh
         run: ./tools/ci-check.sh
 
+      # le chiavi dei secret, solo per una release: un secret incollato male
+      # si vede qui, in un minuto, non dopo la toolchain
+      - name: Chiavi di firma
+        if: steps.v.outputs.publish == 'true'
+        env:
+          CAPSULE_SIGNING_KEY: ${{ secrets.CAPSULE_SIGNING_KEY }}
+          VBOOT_SIGNING_KEY: ${{ secrets.VBOOT_SIGNING_KEY }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: ./tools/build.sh --release --version "${VERSION}" keys
+
   build:
     name: ROM mrc e nri
     needs: setup
