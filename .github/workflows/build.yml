@@ -117,12 +117,14 @@ jobs:
       - uses: actions/checkout@v7
 
       # gnat: Ada nel crossgcc (libgfxinit); imagemagick e uuid-dev: EDK2;
-      # jcat: la firma del pacchetto fwupd
+      # jcat: la firma del pacchetto fwupd; libssl-dev e pkg-config: futility
+      # di vboot (libcrypto), che firma gli slot RW
       - name: Pacchetti
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
-            zlib1g-dev m4 curl git python3 uuid-dev imagemagick jcat >/dev/null
+            zlib1g-dev m4 curl git python3 uuid-dev imagemagick jcat \
+            libssl-dev pkg-config >/dev/null
           gcc --version | head -1
           gnatmake --version | head -1
 
