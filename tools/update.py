@@ -954,6 +954,42 @@ def cmd_vboot(args):
     return 0
 
 
+# --- vboot: cosa ha deciso verstage in questo avvio ----------------------------
+#
+# La workbuf di vboot resta in CBMEM ("VBOOT WORK", id 0x78007343): all'inizio
+# vb2_shared_data (vboot_reference, 2struct.h), con dentro vb2_context
+# (2context.h). Si legge con: sudo cbmem -r 0x78007343 > vbwork.bin
+VB2_SD_MAGIC = 0x44533256
+VB2_CONTEXT_FLAGS = ((0, "NVDATA_CHANGED"), (2, "RECOVERY_MODE"), (6, "FW_SLOT_B"),
+                     (14, "S3_RESUME"), (18, "NVDATA_V2"), (29, "SLOT_A_ONLY"))
+VB2_SD_STATUS = ((0, "NV_REINIT"), (1, "NV_INIT"), (3, "CHOSE_SLOT"), (7, "RECOVERY_DECIDED"))
+
+
+def cmd_vboot_work(args):
+    data = open(args.dump, "rb").read()
+    if len(data) < 432 or struct.unpack_from("<I", data, 0)[0] != VB2_SD_MAGIC:
+        raise Error("%s: non e' la workbuf di vboot (cbmem -r 0x78007343)" % args.dump)
+    major, minor = struct.unpack_from("<HH", data, 4)
+    flags = struct.unpack_from("<Q", data, 8)[0]
+    nv = data[16:32]
+    (wsize, wused, sdflags, recovery, last_slot, last_result, fw_slot, _, _, status) = \
+        struct.unpack_from("<10I", data, 392)
+    slot = "AB"
+    print("workbuf:    vb2_shared_data %d.%d, %d byte usati" % (major, minor, wused))
+    print("contesto:   %s" % (" ".join(n for b, n in VB2_CONTEXT_FLAGS if flags >> b & 1) or "-"))
+    print("stato:      %s" % (" ".join(n for b, n in VB2_SD_STATUS if status >> b & 1) or "-"))
+    print("slot:       %s (precedente: slot %s, %s)" % (
+        slot[fw_slot & 1], slot[last_slot & 1], NV_RESULTS[last_result & 3]))
+    if recovery:
+        print("recovery:   motivo 0x%02x" % recovery)
+    ok = nv[0] & 0xc3 == 0x40 and nv_crc8(nv[:15]) == nv[15]
+    b1, b2 = nv[1], nv[7]
+    print("nvdata:     %s  prossimo slot %s, %d tentativi; corrente slot %s %s; precedente slot %s %s%s" % (
+        nv.hex(), slot[(b2 >> 3) & 1], b1 & 0x0f, slot[(b2 >> 2) & 1], NV_RESULTS[b2 & 3],
+        slot[(b2 >> 6) & 1], NV_RESULTS[(b2 >> 4) & 3], "" if ok else " (NON valida)"))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Aggiornamento del firmware del W541 con una capsula UEFI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -994,6 +1030,10 @@ def main():
     p.add_argument("dump", help="flashrom -r: tutto il flash, o -i RW_NVRAM:FILE")
     p.add_argument("--all", action="store_true", help="anche tutti i record, dal primo")
     p.set_defaults(func=cmd_vboot)
+
+    p = sub.add_parser("vboot-work", help="cosa ha deciso vboot in questo avvio (sudo cbmem -r 0x78007343 > FILE)")
+    p.add_argument("dump")
+    p.set_defaults(func=cmd_vboot_work)
 
     args = ap.parse_args()
     try:
