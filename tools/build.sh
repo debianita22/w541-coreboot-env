@@ -648,8 +648,25 @@ make_capsule() {
 # deve essere quella di keys/vboot/firmware_data_key.vbpubk
 install_vboot_key() {
 	local k="${TREE}/${VBOOT_PRIVKEY_TREE}"
-	(umask 077; printf '%s' "${VBOOT_SIGNING_KEY}" | base64 -d > "${k}" 2>/dev/null) \
-		|| die "VBOOT_SIGNING_KEY non e' base64"
+	# spazi, a capo e virgolette attorno, che un copia e incolla puo' aggiungere,
+	# non contano; per il resto solo base64. In caso di errore solo lunghezze e
+	# conteggi, mai il contenuto
+	(umask 077; VBK="${VBOOT_SIGNING_KEY}" python3 - "${k}" <<'EOF'
+import base64, binascii, os, re, sys
+s = re.sub(r"\s+", "", os.environ["VBK"]).strip("\"'")
+try:
+    data = base64.b64decode(s, validate=True)
+except (binascii.Error, ValueError):
+    bad = len(re.sub(r"[A-Za-z0-9+/=]", "", s))
+    sys.exit("  VBOOT_SIGNING_KEY: %d caratteri senza spazi (una chiave RSA-4096: 3144), %d fuori "
+             "dall'alfabeto base64%s" % (len(s), bad, ", non multiplo di 4" if len(s) % 4 else ""))
+# vbprivk: l'algoritmo in un u64, 7 = RSA-4096 con SHA-256, poi la chiave in DER
+if len(data) < 16 or int.from_bytes(data[:8], "little") != 7 or data[8] != 0x30:
+    sys.exit("  VBOOT_SIGNING_KEY: base64 di %d byte, ma non una chiave privata vboot RSA-4096 "
+             "(.vbprivk)" % len(data))
+open(sys.argv[1], "wb").write(data)
+EOF
+	) || die "VBOOT_SIGNING_KEY non valida: base64 -w0 firmware_data_key.vbprivk, una riga (docs/vboot.md)"
 	trap 'rm -f "${TREE}/${VBOOT_PRIVKEY_TREE}"' EXIT
 	python3 - "${k}" "${O}/keys/vboot/firmware_data_key.vbpubk" <<'EOF' \
 		|| die "VBOOT_SIGNING_KEY non e' la chiave di keys/vboot/firmware_data_key.vbpubk"
