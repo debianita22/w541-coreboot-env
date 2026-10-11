@@ -228,11 +228,11 @@ Or with fwupd, once the project certificate is trusted
 ([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#fwupd)):
 \`sudo fwupdmgr install ${cab}\`, then reboot.
 
-**From v1.2.x**: v1.3.0 changed the flash map (vboot, two RW slots), so a
-v1.2.x firmware does not take its capsule. Write it once with flashrom,
-every region except those written at runtime, which are where they were:
-settings, boot entries, Secure Boot keys, VPD and event log stay. *BIOS
-Lock* must be off
+**From v1.0.3 to v1.2.x**: v1.3.0 changed the flash map (vboot, two RW
+slots), so an older firmware does not take its capsule. Write it once with
+flashrom, every region except those written at runtime, which are where they
+were since v1.0.3: settings, boot entries, Secure Boot keys, VPD and event
+log stay. *BIOS Lock* must be off; flashrom 1.2 or later
 ([details](https://github.com/${repo}/blob/main/docs/flashing.md#from-v12x-to-v130)).
 
 \`\`\`sh
