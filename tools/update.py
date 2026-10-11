@@ -901,6 +901,19 @@ def cmd_vboot(args):
     slot = "AB"
     st = nv_state(region)
     print("RW_NVRAM:   %d record su %d" % (st["used"], st["total"]))
+    if args.all:
+        # la storia: ogni record e' lo stato dopo una scrittura (vboot dal
+        # bootblock, il payload con la capsula o la conferma dello slot)
+        print("            #   prossimo  tent.  corrente          precedente")
+        for i in range(st["used"]):
+            rec = region[i * NV_RECORD:(i + 1) * NV_RECORD]
+            if rec[0] & 0xc3 != 0x40 or nv_crc8(rec[:15]) != rec[15]:
+                print("            %-3d record non valido (%s)" % (i, rec.hex()))
+                continue
+            b1, b2 = rec[1], rec[7]
+            print("            %-3d slot %s    %-5d  slot %s %-10s  slot %s %s" % (
+                i, slot[(b2 >> 3) & 1], b1 & 0x0f, slot[(b2 >> 2) & 1], NV_RESULTS[b2 & 3],
+                slot[(b2 >> 6) & 1], NV_RESULTS[(b2 >> 4) & 3]))
     if not st["valid"]:
         print("stato:      nessun record valido: al prossimo avvio vboot riparte dallo slot A")
         return 0
@@ -955,6 +968,7 @@ def main():
 
     p = sub.add_parser("vboot", help="lo stato di vboot (slot, tentativi) in una copia del flash")
     p.add_argument("dump", help="flashrom -r: tutto il flash, o -i RW_NVRAM:FILE")
+    p.add_argument("--all", action="store_true", help="anche tutti i record, dal primo")
     p.set_defaults(func=cmd_vboot)
 
     args = ap.parse_args()
