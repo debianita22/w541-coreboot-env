@@ -161,7 +161,8 @@ payload confirmed it. In that boot an rc3 capsule, applied from slot B,
 wrote slot A (the one not running, across the two chips) and asked to try
 it; the boot after took a resume again and stayed on B. `update.py vboot`
 on a copy of the flash: RO rc1, slot A rc3, slot B rc1, *prossimo: slot
-A*.
+A*; with `--image` and the rc3 capsule, all 720 blocks of slot A equal to
+the release (487 had changed from rc1, 16 of them on the 4 MiB chip).
 
 ## Testing on the laptop
 
