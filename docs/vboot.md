@@ -170,8 +170,10 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    on; *Firmware Update* shows 1.3.0.
 3. **Suspend**: `systemctl suspend`, then wake with the lid or the power
    button, twice.
-4. **A/B switch** with the same capsule: slot B already holds the same
-   code, so nothing is written there, but vboot is asked to try B.
+4. **A/B switch** with the same capsule: slot B already holds what the
+   capsule carries for it (the code of each slot is linked at its own
+   address, so A and B differ by a few hundred bytes), so nothing is
+   written there, but vboot is asked to try B.
 
    ```sh
    sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc1-mrc.cap
