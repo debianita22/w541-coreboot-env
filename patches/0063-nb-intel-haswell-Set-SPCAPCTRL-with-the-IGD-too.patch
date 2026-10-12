@@ -15,8 +15,10 @@ On a ThinkPad W541 with Linux 7.2.9 and intel_iommu=on, 32 GiB of 4 MiB
 O_DIRECT reads into transparent huge pages, together with every file in
 /usr read through the page cache, gave 21 such faults from the SATA
 controller, the first ones already during boot, and btrfs found blocks
-of zeros. With SPCAPCTRL set, the same test gives none. The capability
-register reads the same in both cases.
+of zeros. Without SPCAPCTRL but with intel_iommu=sp_off, which keeps
+Linux from mapping superpages, it gives none, and none with SPCAPCTRL set
+and the superpages in use. The capability register reads the same in
+both cases.
 
 The vendor firmware of Haswell machines does not run into this: in the
 Linux logs of linux-hardware.org, about 1200 logs of Lenovo, Dell, HP
