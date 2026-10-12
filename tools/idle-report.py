@@ -470,18 +470,45 @@ def print_pci():
         print("%-8s %-6s  %-10s  %-14s  %-6s  %-10s  %-4s  %s" % (bdf, cls, ids, drv[:14], dstate, rt, ctl, link))
 
 
-SATA_IPM = {1: "attivo", 2: "partial", 6: "slumber", 8: "devsleep"}
+# Stato del collegamento: PxSSTS.IPM con il dispositivo presente (DET 3);
+# -4 la PHY spenta (DET 4: Linux la spegne sulle porte senza disco con
+# med_power_with_dipm e min_power), 0 niente collegamento
+SATA_IPM = {1: "attivo", 2: "partial", 6: "slumber", 8: "devsleep", -4: "PHY spenta", 0: "giu'"}
+
+
+def ata_name(host):
+    parts = os.path.realpath(host).split("/")
+    ata = [p for p in parts if re.fullmatch(r"ata\d+", p)]
+    return ata[0] if ata else None
 
 
 def ahci_port(host):
     """(BDF del controller, numero della porta) di un scsi_host SATA"""
     parts = os.path.realpath(host).split("/")
-    ata = [p for p in parts if re.fullmatch(r"ata\d+", p)]
+    ata = ata_name(host)
     bdfs = [p for p in parts if re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", p)]
-    port_no = rd("/sys/class/ata_port/%s/port_no" % ata[0]) if ata else None
+    port_no = rd("/sys/class/ata_port/%s/port_no" % ata) if ata else None
     if not bdfs or not port_no or not port_no.isdigit():
         return None
     return bdfs[-1], int(port_no) - 1
+
+
+def ata_lpm_caps(host):
+    """cosa dice il disco di se' (IDENTIFY, parole 76 e 78): HIPM, cioe'
+    accetta le richieste del controller (ALPE), DIPM, cioe' porta lui il
+    collegamento a riposo, DevSleep. Solo questi bit, non il resto"""
+    ata = ata_name(host)
+    if not ata:
+        return None
+    try:
+        words = [int(w, 16) for w in (rd("/sys/class/ata_device/dev%s.0/id" % ata[3:]) or "").split()]
+    except ValueError:
+        return None
+    if len(words) < 80 or words[76] in (0, 0xFFFF):
+        return None
+    yes = lambda v: "si'" if v else "no"
+    return "disco: HIPM %s, DIPM %s, DevSleep %s" % (yes(words[76] & (1 << 9)), yes(words[78] & (1 << 3)),
+                                                     yes(words[78] & (1 << 8)))
 
 
 def sata_link_states(ports, seconds=2.0, interval=0.01):
@@ -506,6 +533,10 @@ def sata_link_states(ports, seconds=2.0, interval=0.01):
                 finally:
                     os.close(fd)
                 maps[bdf + "+"] = start - base
+            # solo le porte che il controller dichiara (PI): le altre sono
+            # spazio riservato
+            if not struct.unpack_from("@I", maps[bdf], maps[bdf + "+"] + 0x0C)[0] & (1 << port):
+                continue
             off = maps[bdf + "+"] + 0x100 + port * 0x80 + 0x28
             struct.unpack_from("@I", maps[bdf], off)
             regs[key] = (maps[bdf], off)
@@ -517,7 +548,8 @@ def sata_link_states(ports, seconds=2.0, interval=0.01):
         while time.monotonic() < end:
             for k, (m, off) in regs.items():
                 v = struct.unpack_from("@I", m, off)[0]
-                ipm = (v >> 8) & 0xF if (v & 0xF) == 3 else 0
+                det = v & 0xF
+                ipm = (v >> 8) & 0xF if det == 3 else (-4 if det == 4 else 0)
                 counts[k][ipm] = counts[k].get(ipm, 0) + 1
             time.sleep(interval)
     return counts, err
@@ -529,10 +561,14 @@ def print_storage_usb_audio():
     for host in sorted(glob.glob("/sys/class/scsi_host/host*"), key=lambda h: int(h.rsplit("host", 1)[1])):
         pol = rd(host + "/link_power_management_policy")
         models = [rd(m) for m in glob.glob(host + "/device/target*/*/model")]
-        if pol is not None and models:
+        if pol is not None:
             hosts.append((host, pol, models, ahci_port(host)))
     links, link_err = sata_link_states([p for _, _, _, p in hosts if p]) if hosts else ({}, None)
     for host, pol, models, port in hosts:
+        # Una porta senza disco conta solo se c'e' qualcosa sul collegamento
+        # (un disco tolto da Linux, o la PHY spenta), non le porte vuote
+        if not models and set(links.get(port) or {0: 1}) == {0}:
+            continue
         notes = []
         # Linux (da 6.13) spegne l'LPM sulle porte "esterne": PxCMD.HPCP, o
         # PxCMD.ESP con CAP.SXS, come le dichiara il firmware
@@ -551,15 +587,19 @@ def print_storage_usb_audio():
             pass
         if rd(host + "/link_power_management_supported") == "0":
             notes.append("LPM non supportato")
+        caps = ata_lpm_caps(host)
+        if caps:
+            notes.append(caps)
         c = links.get(port)
         if c:
             n = sum(c.values())
             notes.append("collegamento: " + ", ".join(
-                "%s %.0f%%" % (SATA_IPM.get(ipm, "giu'" if ipm == 0 else "IPM %d" % ipm), cnt * 100 / n)
+                "%s %.0f%%" % (SATA_IPM.get(ipm, "IPM %d" % ipm), cnt * 100 / n)
                 for ipm, cnt in sorted(c.items(), key=lambda x: -x[1])))
         elif link_err:
             notes.append("stato del collegamento non letto: " + link_err)
-        print("%-6s %-24s %s%s" % (os.path.basename(host), pol, ", ".join(m for m in models if m),
+        print("%-6s %-24s %s%s" % (os.path.basename(host), pol,
+                                   ", ".join(m for m in models if m) or "(nessun disco)",
                                    "  [" + "; ".join(notes) + "]" if notes else ""))
     print("== USB (autosuspend)")
     for dev in sorted(glob.glob("/sys/bus/usb/devices/*")):
