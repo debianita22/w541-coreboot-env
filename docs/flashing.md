@@ -384,8 +384,12 @@ graphics and of I/O. I/O is the DMA of the devices behind the PCH and
 the screen, which reads the whole image at every refresh: on the W541
 about 1 GB/s with the screen on, a few MB/s with it off. For each SATA
 link the report also samples, after the measurement, how long it stays
-active, in partial or in slumber. Like flashrom, reading these counters
-and the SATA registers needs `iomem=relaxed`.
+active, in partial or in slumber, and says what the drive supports:
+HIPM, the requests of the controller, which Linux sends only to drives
+that accept them, and DIPM, which lets the drive put the link to sleep
+by itself. A drive with neither keeps its link active whatever the
+policy. Like flashrom, reading these counters and the SATA registers
+needs `iomem=relaxed`.
 
 `tools/pm-regs.py` prints the power management registers of processor,
 System Agent and PCH as the firmware left them, to compare two firmware
