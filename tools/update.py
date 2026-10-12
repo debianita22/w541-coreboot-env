@@ -777,8 +777,11 @@ def cmd_stage(args):
             raise Error("%s e' piu' vecchia della minima %s: il firmware la rifiuterebbe"
                         % (version_str(cap["version"]), version_str(fw["lsv"])))
         if cap["version"] <= fw["version"] and not args.allow_older:
-            raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
-                        % version_str(fw["version"]))
+            step = rc_step(cap, fw)
+            if not step:
+                raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
+                            % version_str(fw["version"]))
+            print("passo:     %s -> %s, la stessa %s" % (step[0], step[1], version_str(fw["version"])))
         ac, charge = power()
         if ac is False and not args.on_battery:
             raise Error("collega l'alimentatore (o --on-battery: il firmware aspetta comunque "
@@ -903,6 +906,35 @@ def nv_coreboot_current(region):
 # CONFIG_LOCALVERSION, nel banner del bootblock e di ogni stage. Due release
 # nella stessa regione: una scrittura rimasta a meta'.
 RELEASE_RE = re.compile(rb"(?:ouroBIOS|w541)-v\d+\.\d+\.\d+(?:-rc\d+)?-(?:mrc|nri)")
+
+
+# (X, Y, Z, rc) di una release, con la release finale dopo tutte le sue rc
+RELEASE_KEY_RE = re.compile(r"(?:ouroBIOS|w541)-v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?-(?:mrc|nri)")
+
+
+def release_key(name):
+    m = RELEASE_KEY_RE.search(name or "")
+    if not m:
+        return None
+    x, y, z, rc = m.groups()
+    return (int(x), int(y), int(z), int(rc) if rc else 1 << 30)
+
+
+def rc_step(cap, fw):
+    """Le rc e la release finale di una versione hanno la stessa versione
+    X.Y.Z nella capsula: dalla vX.Y.Z-rcN a una rc dopo, o alla release, e'
+    comunque un passo avanti. (release che gira, release della capsula) se lo
+    e', None altrimenti."""
+    if cap["version"] != fw["version"]:
+        return None
+    names = region_releases(cap["image"], (0, len(cap["image"])))
+    running = RELEASE_KEY_RE.search(read_text(BIOS_VERSION) or "")
+    if len(names) != 1 or running is None:
+        return None
+    old, new = release_key(running.group()), release_key(names[0])
+    if new is None or old is None or new[:3] != old[:3] or new <= old:
+        return None
+    return running.group(), names[0]
 
 
 def region_releases(data, area):

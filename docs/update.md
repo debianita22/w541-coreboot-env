@@ -193,7 +193,10 @@ The version in the capsule and in the firmware's ESRT entry is the release
 number: v1.2.3 is `0x01020003`, 16908291 (`fwupdmgr get-devices` shows one or
 the other, depending on the version format it picks).
 A pre-release has the number of its release: v1.3.0-rc1 and v1.3.0 are both
-1.3.0, so going from one to the other needs `--allow-older`.
+1.3.0. `tools/update.py` tells them apart by the release written in the
+image, so from an rc to a later rc or to the release it installs as usual;
+back from the release to an rc, or the same one again, needs
+`--allow-older` (fwupd sees one version: `--allow-reinstall`).
 
 The firmware refuses capsules older than its lowest supported version,
 v1.3.0 (v1.2.0 for v1.2.x): an older release goes back with flashrom. Older
