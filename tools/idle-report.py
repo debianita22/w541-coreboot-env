@@ -572,9 +572,10 @@ def print_storage_usb_audio():
             hosts.append((host, pol, models, ahci_port(host)))
     links, link_err = sata_link_states([p for _, _, _, p in hosts if p]) if hosts else ({}, None)
     for host, pol, models, port in hosts:
-        # Una porta senza disco conta solo se c'e' qualcosa sul collegamento
-        # (un disco tolto da Linux, o la PHY spenta), non le porte vuote
-        if not models and set(links.get(port) or {100: 1}) == {100}:
+        # Una porta senza disco conta solo se il collegamento e' su (un disco
+        # escluso con libata.force=disable e la PHY ancora accesa): giu' o con
+        # la PHY spenta non tiene sveglio niente
+        if not models and set(links.get(port) or {100: 1}) <= {100, -4}:
             continue
         notes = []
         # Linux (da 6.13) spegne l'LPM sulle porte "esterne": PxCMD.HPCP, o
