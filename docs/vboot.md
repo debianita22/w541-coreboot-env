@@ -174,6 +174,11 @@ both slots equal to the release. Three more boots stayed on B, the second
 using the last try (`prossimo: slot B`, `corrente: slot B, -`), and
 `update.py status` showed *ultimo: v1.3.0, riuscito*.
 
+v1.3.0-rc5, from its capsule applied on rc3 (slot A rewritten from B):
+the ME's interface gone from `lspci`, no `mei` lines in the kernel log,
+the dGPU's HD audio probed with its four HDMI/DP outputs, no `SF size`
+message in ramstage.
+
 ## Testing on the laptop
 
 v1.3.0-rc5 is the release to test: rc1 can keep the old slot, rc2 does
