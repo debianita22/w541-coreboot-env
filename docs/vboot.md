@@ -177,14 +177,18 @@ using the last try (`prossimo: slot B`, `corrente: slot B, -`), and
 v1.3.0-rc5, from its capsule applied on rc3 (slot A rewritten from B):
 the ME's interface gone from `lspci`, no `mei` lines in the kernel log,
 the dGPU's HD audio probed with its four HDMI/DP outputs, no `SF size`
-message in ramstage.
+message in ramstage. Fallback (step 6), with the programmer at hand but
+not needed: the first 64 KiB of `FW_MAIN_A` zeroed with flashrom, the
+next power-on reset once in the bootblock (event log: last POST code
+0x21) and booted rc3 from B, with *precedente: slot A, fallito*; the rc5
+capsule applied from B rewrote all of slot A, which booted and was
+confirmed.
 
 ## Testing on the laptop
 
-v1.3.0-rc5 is the release to test: rc1 can keep the old slot, rc2 does
-not report the result of an update (see above), rc3 and rc4 only lack
-later fixes in the slots. On a laptop with rc2 or later, rc5 installs
-with its capsule (step 4); from rc1, with flashrom. QEMU does
+All six steps passed on the W541 with the release candidates (above);
+they are kept for the next releases and other laptops. From rc2 or later
+a release installs with its capsule (step 4); from rc1, with flashrom. QEMU does
 not show what depends on the laptop's SPI controller: vboot writing
 `RW_NVRAM` from the bootblock, the payload writing a slot across the two
 chips, the Protected Range Register; nor how long the hash of a 2.8 MiB slot
@@ -201,7 +205,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    sudo cbmem -1 | grep -E 'area FW_MAIN_[AB] found|BM-LOCKDOWN'
    #   FMAP: area FW_MAIN_A found @ 5d0000 (2883520 bytes)    the slot in use
    #   BM-LOCKDOWN: Enabled bootmedia protection
-   cat /sys/class/dmi/id/bios_version          # CBET4000 ouroBIOS-v1.3.0-rc5-mrc
+   cat /sys/class/dmi/id/bios_version          # CBET4000 ouroBIOS-v1.3.0-mrc
    sudo dmesg | grep 'efi: EFI v'              # ... by ouroBIOS
    sudo python3 tools/update.py status         # mappa: vboot (update.py of main)
    sudo modprobe -r spi_intel_platform spi_intel
@@ -230,7 +234,7 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    written there, but vboot is asked to try B.
 
    ```sh
-   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc5-mrc.cap
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-mrc.cap
    sudo systemctl reboot
    sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_B
    ```
@@ -255,16 +259,16 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    2.8 MiB across the two chips.
 
    ```sh
-   cp w541-coreboot-v1.3.0-rc5-mrc.rom bad.rom
+   cp w541-coreboot-v1.3.0-mrc.rom bad.rom
    dd if=/dev/zero of=bad.rom bs=64K seek=92 count=45 conv=notrunc    # RW_SECTION_A, 0x5C0000
    sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
    sudo systemctl reboot                             # still slot B
-   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc5-mrc.cap
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-mrc.cap
    sudo systemctl reboot
    sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_A
    sudo flashrom -p internal -r flash.bin
-   python3 tools/update.py vboot --image w541-coreboot-v1.3.0-rc5-mrc.cap flash.bin
-   #   slot A  ... = w541-coreboot-v1.3.0-rc5-mrc.cap, tutti i 720 blocchi da 4 KiB
+   python3 tools/update.py vboot --image w541-coreboot-v1.3.0-mrc.cap flash.bin
+   #   slot A  ... = w541-coreboot-v1.3.0-mrc.cap, tutti i 720 blocchi da 4 KiB
    ```
 6. **Fallback** (programmer at hand): spoil the slot that runs, A, and
    reboot: vboot must find it broken, write that to `RW_NVRAM` and boot B.
@@ -272,14 +276,14 @@ coreboot's `util/cbmem` ([docs/flashing.md](flashing.md#diagnosing-a-hang)).
    `-i RW_SECTION_B`: the boot goes back to A.
 
    ```sh
-   cp w541-coreboot-v1.3.0-rc5-mrc.rom bad.rom
+   cp w541-coreboot-v1.3.0-mrc.rom bad.rom
    dd if=/dev/zero of=bad.rom bs=64K seek=93 count=1 conv=notrunc     # FW_MAIN_A, 0x5D0000
    sudo flashrom -p internal --fmap-file bad.rom -i RW_SECTION_A -w bad.rom
    sudo systemctl reboot
    sudo cbmem -1 | grep 'area FW_MAIN_[AB] found'    # FW_MAIN_B
    sudo flashrom -p internal -r flash.bin && python3 tools/update.py vboot flash.bin
    #   precedente: slot A, fallito
-   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-rc5-mrc.cap
+   sudo python3 tools/update.py stage --allow-older w541-coreboot-v1.3.0-mrc.cap
    sudo systemctl reboot                             # slot A again, repaired
    ```
 
