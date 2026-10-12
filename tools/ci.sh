@@ -163,6 +163,9 @@ cmd_notes() {
 	case "${v}" in nri) pre=yes ;; esac
 	case "${version}" in *-*) pre=yes ;; esac
 	if [ "${PRERELEASE:-false}" = true ]; then pre=yes; fi
+	# --latest salta le pre-release: per queste ci vuole anche --pre
+	local latest="--latest"
+	if [ "${pre}" = yes ]; then latest="--latest --pre"; fi
 
 	echo "**ouroBIOS** ${version}, $(title_of "${v}") variant: coreboot and EDK II for the **Lenovo ThinkPad W541**, reborn by design."
 	echo
@@ -223,7 +226,7 @@ protection* can stay on
 
 \`\`\`sh
 curl -LO https://raw.githubusercontent.com/${repo}/main/tools/update.py
-sudo python3 update.py stage --latest       # or: sudo python3 update.py stage ${cap}
+sudo python3 update.py stage ${latest}       # or: sudo python3 update.py stage ${cap}
 sudo systemctl reboot
 \`\`\`
 
