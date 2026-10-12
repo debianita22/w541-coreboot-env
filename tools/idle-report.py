@@ -152,6 +152,27 @@ def battery_power():
     return total if any_discharging else None
 
 
+def proc_times():
+    """tick di CPU (utente + sistema) per nome di processo"""
+    out, me = {}, os.getpid()
+    for stat in glob.glob("/proc/[0-9]*/stat"):
+        try:
+            data = open(stat).read()
+        except OSError:
+            continue
+        pid = int(stat.split("/")[2])
+        if pid == me:
+            continue
+        comm = data[data.find("(") + 1:data.rfind(")")]
+        fields = data[data.rfind(")") + 2:].split()
+        name = comm.split("/")[0] if comm.startswith("kworker") else comm
+        try:
+            out[(pid, name)] = int(fields[11]) + int(fields[12])
+        except (IndexError, ValueError):
+            pass
+    return out
+
+
 def cpuidle_snapshot(cpus):
     snap = {}
     for c in cpus:
@@ -194,7 +215,7 @@ def sample(msr, cpus, seconds):
         s["rc6"] = [int(rd(f, "0")) for f in rc6_files()]
         return s
 
-    idle0, irq0 = cpuidle_snapshot(cpus), irq_counts()
+    idle0, irq0, procs0 = cpuidle_snapshot(cpus), irq_counts(), proc_times()
     a = snap()
     bat, end = [], a["t"] + seconds
     while time.monotonic() < end:
@@ -203,7 +224,7 @@ def sample(msr, cpus, seconds):
         if p is not None:
             bat.append(p)
     b = snap()
-    idle1, irq1 = cpuidle_snapshot(cpus), irq_counts()
+    idle1, irq1, procs1 = cpuidle_snapshot(cpus), irq_counts(), proc_times()
 
     def d(key, wrap=64):
         x, y = a.get(key), b.get(key)
@@ -258,6 +279,14 @@ def sample(msr, cpus, seconds):
         if rate >= 1:
             rates.append((rate, k, label))
     res["irq"] = sorted(rates, reverse=True)[:10]
+    hz = os.sysconf("SC_CLK_TCK")
+    busy = {}
+    for key, t1 in procs1.items():
+        # un processo nato durante la misura vi ha speso tutto il suo tempo
+        dt = t1 - procs0.get(key, 0)
+        if dt > 0:
+            busy[key[1]] = busy.get(key[1], 0) + dt
+    res["procs"] = sorted(((t / hz / res["seconds"] * 100, n) for n, t in busy.items() if t > 0), reverse=True)[:8]
     return res
 
 
@@ -285,8 +314,9 @@ def print_cstates(msr, cpus, res, fam, model):
                                      "" if v & (1 << 15) else " (non valido)"))
     pc = msr.read(cpus[0], MSR_POWER_CTL)
     if irtl or pc is not None:
-        print("latenze di risveglio: %s; C1E %s" % (", ".join(irtl) or "-",
-                                                  "-" if pc is None else ("acceso" if pc & 2 else "spento")))
+        # intel_idle la spegne dove C1E e' uno stato a se' (Haswell compreso)
+        print("latenze di risveglio: %s; promozione C1E %s" % (", ".join(irtl) or "-",
+                                                             "-" if pc is None else ("accesa" if pc & 2 else "spenta")))
     if res["rapl"]:
         print("potenza (RAPL): " + ", ".join("%s %.2f W" % (k, v) for k, v in res["rapl"].items()))
     if res["bat"]:
@@ -304,6 +334,8 @@ def print_cstates(msr, cpus, res, fam, model):
         for _, n, s, u, dis in res["idle"] if n != "POLL" or s >= 0.1)))
     if res["irq"]:
         print("interrupt/s: " + ", ".join("%s %.0f" % ((lab or k)[:28], r) for r, k, lab in res["irq"]))
+    if res.get("procs"):
+        print("processi (%% di un core): " + ", ".join("%s %.1f" % (n[:20], c) for c, n in res["procs"] if c >= 0.1))
 
 
 def pcie_info(cfg):
@@ -330,20 +362,34 @@ def print_pci():
     pol = rd("/sys/module/pcie_aspm/parameters/policy", "?")
     print("== PCI (criterio ASPM del kernel: %s)" % pol)
     print("BDF      classe  id          driver          stato   runtime     ctl   ASPM sup/att  ClkPM  LTR   link")
+    # Prima lo stato di tutti: leggere lo spazio di configurazione di un
+    # dispositivo risveglia il ponte sopra di lui, e un dispositivo in D3cold
+    devs = []
     for dev in sorted(glob.glob("/sys/bus/pci/devices/*")):
-        bdf = os.path.basename(dev)[5:]
-        cls = (rd(dev + "/class", "0x000000")[2:6])
-        ids = "%s:%s" % (rd(dev + "/vendor", "0x????")[2:], rd(dev + "/device", "0x????")[2:])
-        drv = os.path.basename(os.path.realpath(dev + "/driver")) if os.path.exists(dev + "/driver") else "-"
-        dstate = rd(dev + "/power_state", "?")
-        rt = rd(dev + "/power/runtime_status", "?")
-        ctl = rd(dev + "/power/control", "?")
-        try:
-            cfg = open(dev + "/config", "rb").read(256)
-        except OSError:
-            cfg = b""
+        devs.append({
+            "dev": dev, "name": os.path.basename(dev),
+            "parent": os.path.basename(os.path.dirname(os.path.realpath(dev))),
+            "cls": rd(dev + "/class", "0x000000")[2:6],
+            "ids": "%s:%s" % (rd(dev + "/vendor", "0x????")[2:], rd(dev + "/device", "0x????")[2:]),
+            "drv": os.path.basename(os.path.realpath(dev + "/driver")) if os.path.exists(dev + "/driver") else "-",
+            "dstate": rd(dev + "/power_state", "?"),
+            "rt": rd(dev + "/power/runtime_status", "?"),
+            "ctl": rd(dev + "/power/control", "?"),
+        })
+    state = {d["name"]: d for d in devs}
+    for d in devs:
+        dev, bdf, dstate, rt, ctl, drv = d["dev"], d["name"][5:], d["dstate"], d["rt"], d["ctl"], d["drv"]
+        cls, ids = d["cls"], d["ids"]
+        up = state.get(d["parent"])
+        asleep = dstate == "D3cold" or (up is not None and (up["dstate"] != "D0" or up["rt"] != "active"))
+        cfg = b""
+        if not asleep:
+            try:
+                cfg = open(dev + "/config", "rb").read(256)
+            except OSError:
+                pass
         p = pcie_info(cfg)
-        link = ""
+        link = "(spento o sotto un ponte sospeso: non letto)" if asleep else ""
         if p and p["type"] not in (9, 10):
             cap = (p["lnkcap"] >> 10) & 3
             clk = "%s/%s" % ("+" if p["lnkcap"] & (1 << 18) else "-", "+" if p["lnkctl"] & (1 << 8) else "-")
@@ -363,8 +409,22 @@ def print_storage_usb_audio():
     for host in sorted(glob.glob("/sys/class/scsi_host/host*"), key=lambda h: int(h.rsplit("host", 1)[1])):
         pol = rd(host + "/link_power_management_policy")
         models = [rd(m) for m in glob.glob(host + "/device/target*/*/model")]
-        if pol is not None and models:
-            print("%-6s %-24s %s" % (os.path.basename(host), pol, ", ".join(m for m in models if m)))
+        if pol is None or not models:
+            continue
+        notes = []
+        # Linux (da 6.13) spegne l'LPM sulle porte "esterne": PxCMD.HPCP, o
+        # PxCMD.ESP con CAP.SXS, come le dichiara il firmware
+        cmd, caps = rd(host + "/ahci_port_cmd"), rd(host + "/ahci_host_caps")
+        try:
+            cmd, caps = int(cmd, 16), int(caps, 16)
+            if cmd & (1 << 18) or (cmd & (1 << 21) and caps & (1 << 5)):
+                notes.append("porta esterna per il firmware (HPCP/ESP): niente LPM")
+        except (TypeError, ValueError):
+            pass
+        if rd(host + "/link_power_management_supported") == "0":
+            notes.append("LPM non supportato")
+        print("%-6s %-24s %s%s" % (os.path.basename(host), pol, ", ".join(m for m in models if m),
+                                   "  [" + "; ".join(notes) + "]" if notes else ""))
     print("== USB (autosuspend)")
     for dev in sorted(glob.glob("/sys/bus/usb/devices/*")):
         name = os.path.basename(dev)
