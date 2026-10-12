@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Mon, 12 Oct 2026 14:03:47 +0200
+Subject: [PATCH] nb/intel/haswell: Set SPCAPCTRL with the IGD too
+
+Document 492662 sets SPCAPCTRL (bit 25 of ARCHDIS) in the remapping
+engine for the devices other than the IGD only when the IGD is absent.
+With the IGD present it stays clear, and that engine reports 2 MiB and
+1 GiB pages (Linux: "dmar1: ... cap d2008c20660462") but does not take
+them: Linux with DMA translation maps 2 MiB pages and gets faults with
+reason 0x0c, "non-zero reserved fields in PTE", on 2 MiB-aligned
+addresses and the 4 KiB pages after them, and the transfers are lost.
+
+On a ThinkPad W541 with Linux 7.2.9 and intel_iommu=on, 32 GiB of 4 MiB
+O_DIRECT reads into transparent huge pages, together with every file in
+/usr read through the page cache, gave 21 such faults from the SATA
+controller, the first ones already during boot, and btrfs found blocks
+of zeros. With SPCAPCTRL set, the same test gives none. The capability
+register reads the same in both cases.
+
+The vendor firmware of Haswell machines does not run into this: in the
+Linux logs of linux-hardware.org, about 1200 logs of Lenovo, Dell, HP
+and Apple Haswell laptops and desktops report no superpages for this
+engine ("cap d2008020660462"). Where the superpages are reported, the
+same faults show up: a MacBookPro11,5 (from its GPU and its SSD) and Z97
+boards, where intel_iommu=sp_off made them go away.
+
+Set SPCAPCTRL whether the IGD is there or not.
+
+TEST=On a ThinkPad W541, ARCHDIS of the engine reads 0x820a5003 and the
+test above gives no DMAR faults with Linux 7.2.9 and intel_iommu=on.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/northbridge/intel/haswell/early_init.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/src/northbridge/intel/haswell/early_init.c b/src/northbridge/intel/haswell/early_init.c
+index f58a7b04f..779ff23c5 100644
+--- a/src/northbridge/intel/haswell/early_init.c
++++ b/src/northbridge/intel/haswell/early_init.c
+@@ -174,10 +174,15 @@ static void northbridge_setup_iommu(void)
+ 
+ 		clrsetbits32p(VTVC0_BASE_ADDRESS + 0xf04, 0xf << 15, 1 << 15);
+ 
+-		u32 vtvc0_archdis = 0x000a5003 | DMAR_LCKDN;
+-		if (pci_read_config16(PCI_DEV(0, 2, 0), PCI_DEVICE_ID) == 0xffff) {
+-			vtvc0_archdis |= SPCAPCTRL;
+-		}
++		/*
++		 * The document sets SPCAPCTRL only without the IGD. Without it
++		 * this engine reports 2 MiB and 1 GiB pages but rejects them:
++		 * Linux gets DMA faults "non-zero reserved fields in PTE" on
++		 * the 2 MiB pages it maps, and the transfers are lost. With it
++		 * set they work. The capability register is the same either
++		 * way.
++		 */
++		const u32 vtvc0_archdis = 0x000a5003 | SPCAPCTRL | DMAR_LCKDN;
+ 		write32p(VTVC0_BASE_ADDRESS + ARCHDIS, vtvc0_archdis);
+ 	}
+ 	if (cpu_is_broadwell()) {
+-- 
+2.43.0
+

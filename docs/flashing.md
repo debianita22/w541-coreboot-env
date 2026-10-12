@@ -280,17 +280,18 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
   translation (`/sys/class/iommu/` then lists `dmar0` and `dmar1`), and
   `iommu=pt` with it keeps the laptop's own devices out of the
   translation, which is left to the devices given to a virtual machine.
-  Up to v1.3.0 the engine of all devices but the graphics showed 2 MiB
-  and 1 GiB superpages, which the vendor firmware of Haswell machines
-  hides and the engine rejects: with `intel_iommu=on` alone, Linux 7.2 on
-  the W541 mapped SATA transfers with them and they faulted (`DMAR: [DMA
+  Up to v1.3.0 the engine of all devices but the graphics reported 2 MiB
+  and 1 GiB superpages but rejected them, because coreboot left its
+  `SPCAPCTRL` bit clear: with `intel_iommu=on` alone, Linux 7.2 on the
+  W541 mapped SATA transfers with them and they faulted (`DMAR: [DMA
   Write] Request device [0000:00:1f.2] ... fault reason 0x0c] non-zero
   reserved fields in PTE`). The reads came back as zeros, which btrfs
   reports as `csum failed` with the checksum of an empty block
   (`0x8941f998`); `btrfs scrub` then checks that the data on the disk
-  is intact. From v1.3.1 the superpages are hidden (patch 0063: `sudo dmesg
-  | grep dmar1` shows `cap d2008020660462`, as with the Lenovo BIOS);
-  with an older release use `intel_iommu=on,sp_off` or `iommu=pt`.
+  is intact. From v1.3.1 the bit is set (patch 0063) and the superpages
+  work: `dmar1` still shows `cap d2008c20660462`, and the register of
+  the engine reads `0x820a5003` at `0xfed91ff0`. With an older release
+  use `intel_iommu=on,sp_off` or `iommu=pt`.
 - Event log: coreboot records every boot, the wake source of a resume
   (lid, Fn, a GPE), each entry into S3 and S5, power failures, watchdog
   resets, the ME state and the last POST code of a boot that hung, in the
