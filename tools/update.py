@@ -908,11 +908,12 @@ def nv_coreboot_current(region):
 RELEASE_RE = re.compile(rb"(?:ouroBIOS|w541)-v\d+\.\d+\.\d+(?:-rc\d+)?-(?:mrc|nri)")
 
 
-# (X, Y, Z, rc) di una release, con la release finale dopo tutte le sue rc
+# (X, Y, Z, rc) di una release come la scrive la build (ouroBIOS-vX.Y.Z-rcN-mrc),
+# con la release finale dopo tutte le sue rc; release_key e' quella dei tag
 RELEASE_KEY_RE = re.compile(r"(?:ouroBIOS|w541)-v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?-(?:mrc|nri)")
 
 
-def release_key(name):
+def build_release_key(name):
     m = RELEASE_KEY_RE.search(name or "")
     if not m:
         return None
@@ -931,7 +932,7 @@ def rc_step(cap, fw):
     running = RELEASE_KEY_RE.search(read_text(BIOS_VERSION) or "")
     if len(names) != 1 or running is None:
         return None
-    old, new = release_key(running.group()), release_key(names[0])
+    old, new = build_release_key(running.group()), build_release_key(names[0])
     if new is None or old is None or new[:3] != old[:3] or new <= old:
         return None
     return running.group(), names[0]
