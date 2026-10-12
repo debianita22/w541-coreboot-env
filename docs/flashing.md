@@ -276,15 +276,21 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
   was visible though *Intel Management Engine* was *Disabled*.
 - VT-d: the firmware enables it and writes the DMAR table, but Linux
   kernels that leave the IOMMU off by default only use it for interrupt
-  remapping: add `intel_iommu=on iommu=pt` to the kernel command line for
-  device passthrough (`/sys/class/iommu/` then lists `dmar0` and `dmar1`).
-  `iommu=pt` keeps the laptop's own devices out of the translation and
-  leaves it to the devices given to a virtual machine. With
-  `intel_iommu=on` alone, Linux 7.2 on the W541 translated the DMA of the
-  SATA controller too and some of it faulted (`DMAR: [DMA Write]
-  Request device [0000:00:1f.2] ... fault reason 0x0c] non-zero reserved
-  fields in PTE`): the reads came back as zeros, which btrfs reports as
-  `csum failed` with the checksum of an empty block (`0x8941f998`).
+  remapping: `intel_iommu=on` on the kernel command line turns on the DMA
+  translation (`/sys/class/iommu/` then lists `dmar0` and `dmar1`), and
+  `iommu=pt` with it keeps the laptop's own devices out of the
+  translation, which is left to the devices given to a virtual machine.
+  Up to v1.3.0 the engine of all devices but the graphics showed 2 MiB
+  and 1 GiB superpages, which the vendor firmware of Haswell machines
+  hides and the engine rejects: with `intel_iommu=on` alone, Linux 7.2 on
+  the W541 mapped SATA transfers with them and they faulted (`DMAR: [DMA
+  Write] Request device [0000:00:1f.2] ... fault reason 0x0c] non-zero
+  reserved fields in PTE`). The reads came back as zeros, which btrfs
+  reports as `csum failed` with the checksum of an empty block
+  (`0x8941f998`); `btrfs scrub` then checks that the data on the disk
+  is intact. From v1.3.1 the superpages are hidden (patch 0063: `sudo dmesg
+  | grep dmar1` shows `cap d2008020660462`, as with the Lenovo BIOS);
+  with an older release use `intel_iommu=on,sp_off` or `iommu=pt`.
 - Event log: coreboot records every boot, the wake source of a resume
   (lid, Fn, a GPE), each entry into S3 and S5, power failures, watchdog
   resets, the ME state and the last POST code of a boot that hung, in the
