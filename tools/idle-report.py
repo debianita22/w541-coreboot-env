@@ -52,7 +52,9 @@ IRTL_UNIT_NS = (1, 32, 1024, 32768, 1048576, 33554432)
 # di 64 byte: quelli che legge il driver uncore_imc di Linux, che pero' non
 # riconosce l'host bridge degli Haswell mobili (8086:0c04). Letture e
 # scritture in RAM, e le richieste divise per chi le fa: i core, la grafica
-# (con lo schermo) e l'I/O, cioe' il DMA dei dispositivi dietro il PCH.
+# (GT) e l'I/O. Sul W541 l'I/O comprende lo schermo, che a ogni quadro legge
+# l'immagine dalla RAM, oltre al DMA dei dispositivi dietro il PCH: a schermo
+# acceso ~1 GB/s, a schermo spento 5 MB/s.
 IMC_COUNTERS = (("letture", 0x5050), ("scritture", 0x5054),
                 ("core", 0x5044), ("grafica", 0x5040), ("I/O", 0x5048))
 # Sandy Bridge, Ivy Bridge, Haswell e Broadwell client: stessi indirizzi
@@ -378,7 +380,8 @@ def print_cstates(msr, cpus, res, fam, model):
     if "mem" in res:
         m = res["mem"]
         # Senza FBC lo schermo legge tutta l'immagine a ogni quadro (1920x1080
-        # a 60 Hz: ~500 MB/s); a schermo spento, a riposo, pochi MB/s
+        # a 60 Hz: ~500 MB/s), e la conta l'I/O; a schermo spento, a riposo,
+        # l'I/O e' il solo DMA dei dispositivi
         print("traffico RAM (MB/s): letture %.1f, scritture %.1f; richieste dai core %.1f, "
               "dalla grafica %.1f, dall'I/O %.1f" % (m["letture"], m["scritture"], m["core"],
                                                      m["grafica"], m["I/O"]))
@@ -467,13 +470,69 @@ def print_pci():
         print("%-8s %-6s  %-10s  %-14s  %-6s  %-10s  %-4s  %s" % (bdf, cls, ids, drv[:14], dstate, rt, ctl, link))
 
 
+SATA_IPM = {1: "attivo", 2: "partial", 6: "slumber", 8: "devsleep"}
+
+
+def ahci_port(host):
+    """(BDF del controller, numero della porta) di un scsi_host SATA"""
+    parts = os.path.realpath(host).split("/")
+    ata = [p for p in parts if re.fullmatch(r"ata\d+", p)]
+    bdfs = [p for p in parts if re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", p)]
+    port_no = rd("/sys/class/ata_port/%s/port_no" % ata[0]) if ata else None
+    if not bdfs or not port_no or not port_no.isdigit():
+        return None
+    return bdfs[-1], int(port_no) - 1
+
+
+def sata_link_states(ports, seconds=2.0, interval=0.01):
+    """quanto tempo ogni collegamento passa in ciascuno stato (PxSSTS.IPM),
+    campionato dopo la misura degli stati C per non disturbarla. Lettura
+    MMIO dell'ABAR del controller AHCI: serve iomem=relaxed"""
+    maps, regs, err = {}, {}, None
+    for key in ports:
+        bdf, port = key
+        try:
+            if bdf not in maps:
+                start, end = (int(x, 16) for x in open("/sys/bus/pci/devices/%s/resource" % bdf)
+                              .read().splitlines()[5].split()[:2])
+                if not start:
+                    raise OSError("ABAR non assegnato")
+                base = start & ~0xFFF
+                size = min(end - start + 1, 0x1100) + (start - base)
+                fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
+                try:
+                    maps[bdf] = mmap.mmap(fd, (size + 0xFFF) & ~0xFFF, mmap.MAP_SHARED,
+                                          mmap.PROT_READ, offset=base)
+                finally:
+                    os.close(fd)
+                maps[bdf + "+"] = start - base
+            off = maps[bdf + "+"] + 0x100 + port * 0x80 + 0x28
+            struct.unpack_from("@I", maps[bdf], off)
+            regs[key] = (maps[bdf], off)
+        except (OSError, ValueError, IndexError, OverflowError, struct.error) as e:
+            err = "%s (serve iomem=relaxed?)" % e
+    counts = {k: {} for k in regs}
+    if regs:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            for k, (m, off) in regs.items():
+                v = struct.unpack_from("@I", m, off)[0]
+                ipm = (v >> 8) & 0xF if (v & 0xF) == 3 else 0
+                counts[k][ipm] = counts[k].get(ipm, 0) + 1
+            time.sleep(interval)
+    return counts, err
+
+
 def print_storage_usb_audio():
     print("== SATA (link power management)")
+    hosts = []
     for host in sorted(glob.glob("/sys/class/scsi_host/host*"), key=lambda h: int(h.rsplit("host", 1)[1])):
         pol = rd(host + "/link_power_management_policy")
         models = [rd(m) for m in glob.glob(host + "/device/target*/*/model")]
-        if pol is None or not models:
-            continue
+        if pol is not None and models:
+            hosts.append((host, pol, models, ahci_port(host)))
+    links, link_err = sata_link_states([p for _, _, _, p in hosts if p]) if hosts else ({}, None)
+    for host, pol, models, port in hosts:
         notes = []
         # Linux (da 6.13) spegne l'LPM sulle porte "esterne": PxCMD.HPCP, o
         # PxCMD.ESP con CAP.SXS, come le dichiara il firmware
@@ -483,13 +542,23 @@ def print_storage_usb_audio():
             if cmd & (1 << 18) or (cmd & (1 << 21) and caps & (1 << 5)):
                 notes.append("porta esterna per il firmware (HPCP/ESP): niente LPM")
             # PxCMD.ALPE: il controller porta da solo il collegamento in
-            # partial o slumber (ASP); spento, il collegamento resta attivo
+            # partial o slumber (ASP). Spento, puo' farlo ancora il disco
+            # (DIPM, con med_power_with_dipm e min_power): conta lo stato
+            # misurato qui sotto
             notes.append("ALPE %s" % (("acceso, " + ("slumber" if cmd & (1 << 27) else "partial"))
-                                       if cmd & (1 << 26) else "spento: collegamento sempre attivo"))
+                                       if cmd & (1 << 26) else "spento"))
         except (TypeError, ValueError):
             pass
         if rd(host + "/link_power_management_supported") == "0":
             notes.append("LPM non supportato")
+        c = links.get(port)
+        if c:
+            n = sum(c.values())
+            notes.append("collegamento: " + ", ".join(
+                "%s %.0f%%" % (SATA_IPM.get(ipm, "giu'" if ipm == 0 else "IPM %d" % ipm), cnt * 100 / n)
+                for ipm, cnt in sorted(c.items(), key=lambda x: -x[1])))
+        elif link_err:
+            notes.append("stato del collegamento non letto: " + link_err)
         print("%-6s %-24s %s%s" % (os.path.basename(host), pol, ", ".join(m for m in models if m),
                                    "  [" + "; ".join(notes) + "]" if notes else ""))
     print("== USB (autosuspend)")

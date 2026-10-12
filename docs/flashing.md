@@ -380,11 +380,12 @@ graphics. It prints no serial numbers, MAC addresses or UUIDs.
 The memory traffic comes from the counters of the memory controller,
 which Linux's `uncore_imc` does not know on the W541 (host bridge
 `8086:0c04`): reads and writes, and the requests of the cores, of the
-graphics, which include the screen, and of I/O, the DMA of the devices
-behind the PCH. Like flashrom, reading them needs `iomem=relaxed`. With
-the screen off, an idle laptop moves a few MB/s; with the screen on and
-no framebuffer compression, the screen alone reads the whole image at
-every refresh, about 500 MB/s at 1920x1080 and 60 Hz.
+graphics and of I/O. I/O is the DMA of the devices behind the PCH and
+the screen, which reads the whole image at every refresh: on the W541
+about 1 GB/s with the screen on, a few MB/s with it off. For each SATA
+link the report also samples, after the measurement, how long it stays
+active, in partial or in slumber. Like flashrom, reading these counters
+and the SATA registers needs `iomem=relaxed`.
 
 `tools/pm-regs.py` prints the power management registers of processor,
 System Agent and PCH as the firmware left them, to compare two firmware
@@ -402,10 +403,13 @@ Things that keep the power up on the W541:
   does it only for Turing and newer GPUs on Coffee Lake and newer
   chipsets: with the 470 driver this GPU stays on. With the option off,
   the firmware keeps the GPU unpowered.
-- `intel_iommu=on` makes i915 give up the graphics stolen memory on
-  Haswell (`DMAR active, disabling use of stolen memory`), and with it
-  framebuffer compression; `intel_iommu=on,igfx_off` keeps the graphics
-  out of the translation.
+- Framebuffer compression, which cuts what the screen reads, is off on
+  Haswell unless `i915.enable_fbc=1`, and it needs the graphics stolen
+  memory, which i915 gives up with `intel_iommu=on` (`DMAR active,
+  disabling use of stolen memory`); `intel_iommu=on,igfx_off` keeps the
+  graphics out of the translation.
+- Runtime PM settings written to sysfs (`power/control`, the SATA
+  policy) last until the next boot.
 - SATA link power management lets the link sleep; the kernel leaves it
   off for drives known to misbehave with it (`applying quirks: nolpm` in
   `dmesg`).
