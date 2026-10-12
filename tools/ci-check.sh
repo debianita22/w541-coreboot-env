@@ -142,6 +142,45 @@ EOF
 	else
 		bad "tools/update.py: la capsula di prova non si legge come atteso"
 	fi
+	# I tag di GitHub si ordinano (stage --latest), e rollback trova nello
+	# slot che non gira la release a cui tornare, solo se e' piu' vecchia
+	if python3 - <<'EOF'
+import struct
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, "tools")
+import update
+assert update.release_key("v1.3.1-mrc") < update.release_key("v1.3.2-rc1-mrc") < update.release_key("v1.3.2-mrc")
+assert update.build_release_key("ouroBIOS-v1.3.2-rc1-nri") < update.build_release_key("ouroBIOS-v1.3.2-nri")
+areas = [("RW_NVRAM", 0x5A0000, 0x10000), ("RW_SECTION_A", 0x5C0000, 0x2D0000), ("FW_MAIN_A", 0x5D0000, 0x2C0000),
+         ("RW_SECTION_B", 0x890000, 0x2D0000), ("FW_MAIN_B", 0x8A0000, 0x2C0000)]
+def flash(a, b):
+    img = bytearray(b"\xff" * update.ROM_SIZE)
+    fmap = b"__FMAP__" + struct.pack("<BBQI32sH", 1, 1, 0, update.ROM_SIZE, b"FLASH", len(areas))
+    fmap += b"".join(struct.pack("<II32sH", o, n, name.encode(), 0) for name, o, n in areas)
+    img[0xB60000:0xB60000 + len(fmap)] = fmap
+    img[0x5D0100:0x5D0100 + len(a)] = a
+    img[0x8A0100:0x8A0100 + len(b)] = b
+    rec = bytearray(16)                 # vboot: slot B provato e confermato
+    rec[0], rec[7] = 0x40, (1 << 3) | (1 << 2) | 2
+    rec[15] = update.nv_crc8(bytes(rec[:15]))
+    img[0x5A0000:0x5A0010] = rec
+    return bytes(img)
+plan = update.rollback_plan(flash(b"ouroBIOS-v1.3.1-mrc", b"ouroBIOS-v1.3.2-mrc"), "ouroBIOS-v1.3.2-mrc")
+assert (plan["current"], plan["other"], plan["tag"]) == ("B", "A", "v1.3.1-mrc")
+for a, b in ((b"ouroBIOS-v1.3.3-mrc", b"ouroBIOS-v1.3.2-mrc"), (b"ouroBIOS-v1.3.2-mrc", b"ouroBIOS-v1.3.2-mrc"),
+             (b"", b"ouroBIOS-v1.3.2-mrc"), (b"ouroBIOS-v1.3.1-nri", b"ouroBIOS-v1.3.2-mrc")):
+    try:
+        update.rollback_plan(flash(a, b), "ouroBIOS-v1.3.2-mrc")
+    except update.Error:
+        continue
+    raise AssertionError("rollback accettato: %r" % a)
+EOF
+	then
+		ok "tools/update.py: release di GitHub in ordine, rollback verso la release dell'altro slot"
+	else
+		bad "tools/update.py: release_key o rollback_plan non fanno quello che devono"
+	fi
 else
 	bad "python3 non installato"
 fi

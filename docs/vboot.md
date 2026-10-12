@@ -66,7 +66,8 @@ The next boot runs the new slot. Every boot that reaches the payload
 confirms it; if two boots in a row do not get there (a hang, a power-off),
 vboot goes back to the old slot. If the new slot does not verify, it goes
 back at once. The update after that writes the other slot, so the slots
-alternate.
+alternate. Until then the old slot keeps the release before:
+`update.py rollback` goes back to it ([docs/update.md](update.md#going-back)).
 
 The capsule never writes `WP_RO`, `SMMSTORE`, `RO_VPD` or `RW_ELOG`.
 

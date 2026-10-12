@@ -81,6 +81,7 @@ partition (ESP) mounted (`/boot/efi`, `/efi`; elsewhere: `--esp DIR`).
 | `stage FILE.cap` | a capsule already downloaded |
 | `cancel` | removes the waiting capsule and the request |
 | `info FILE.cap` | variant, version, regions and signer of a capsule (or of the fwupd package, `FILE.cab`) |
+| `rollback FLASH.bin` | back to the release in the slot that is not running, the one before the last update: see [Going back](#going-back) |
 | `vboot FLASH.bin` | from a copy of the flash (`sudo flashrom -p internal -r FLASH.bin`): the slot of the next boot and its tries, the slot of this boot and of the one before, and whether vboot found one broken ([docs/vboot.md](vboot.md)) |
 
 `stage` checks what the firmware would check, so that a reboot is not
@@ -207,6 +208,38 @@ a capsule installs only on its own variant. The GUIDs changed with the flash
 map in v1.3.0, so fwupd and other tools do not offer a v1.3.0 package to a
 v1.2.x firmware. To switch variant, flash the
 other image with flashrom ([docs/flashing.md](flashing.md#internal-update)).
+
+## Going back
+
+After an update the slot that is not running still holds the release
+before it, until the next update writes over it. `update.py rollback`
+goes back to that release:
+
+```sh
+sudo modprobe -r spi_intel_platform spi_intel
+sudo flashrom -p internal -r flash.bin
+sudo python3 update.py rollback --dry-run flash.bin
+sudo python3 update.py rollback flash.bin
+sudo systemctl reboot
+```
+
+From the copy of the flash, taken in the boot that runs it, it finds the
+slot this boot came from in `RW_NVRAM` and the release in the other one,
+downloads the capsule of that release from GitHub (`--capsule FILE` for
+one already downloaded), checks that it carries the same release for that
+slot, and stages it with the same checks as `stage`. The firmware applies
+it as any capsule: it finds the slot already written, so it writes
+nothing there, clears `RW_MRC_CACHE` and asks vboot to try that slot,
+with two tries; if it does not boot, vboot comes back to the slot of
+now. `--dry-run` stops before staging and says how many 4 KiB blocks of
+the slot differ from the release (none, normally).
+
+It refuses when the other slot holds the same release, a newer one (vboot
+already came back from it: `stage` tries it again), the other variant
+(flashrom), or no whole release (empty, damaged or half written), and
+when the copy of the flash is not of the running boot. Going back further
+than the other slot works as before: `stage --allow-older FILE.cap`, which
+writes the older release into the slot that is not running.
 
 ## Without tools/update.py
 

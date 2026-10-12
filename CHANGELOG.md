@@ -16,6 +16,10 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   System Agent and PCH, as the firmware left them.
 - `tools/update.py stage` goes from a release candidate to its release,
   or to a later candidate, without `--allow-older`.
+- `tools/update.py rollback FLASH.bin`: back to the release in the slot
+  that is not running, the one before the last update, with its signed
+  capsule; the firmware rewrites nothing and only switches slot
+  ([docs/update.md](docs/update.md#going-back)).
 - Docs: the boot menu timeout is set in the setup menu, *Boot Manager* →
   *Auto Boot Time-out*; NVIDIA's own driver never powers this GPU down;
   where the boot time goes; a SATA link that never sleeps keeps the

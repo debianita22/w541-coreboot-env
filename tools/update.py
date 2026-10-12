@@ -40,6 +40,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
@@ -609,6 +610,32 @@ def release_key(tag):
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) is None, m.group(4) or "")
 
 
+def download_capsule(rel, dest):
+    """La capsula di una release di GitHub (la voce JSON dell'API), controllata
+    con il suo SHA256SUMS."""
+    tag = rel["tag_name"]
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    cap_name = "w541-coreboot-%s.cap" % tag
+    if cap_name not in assets or "SHA256SUMS" not in assets:
+        raise Error("%s: senza %s o SHA256SUMS (le capsule ci sono dalla v1.2.0)" % (tag, cap_name))
+    print("release %s: scarico %s" % (tag, cap_name))
+    sums = http_get(assets["SHA256SUMS"]).decode()
+    want = None
+    for line in sums.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip("*") == cap_name:
+            want = parts[0].lower()
+    if not want:
+        raise Error("SHA256SUMS di %s senza %s" % (tag, cap_name))
+    data = http_get(assets[cap_name])
+    if hashlib.sha256(data).hexdigest() != want:
+        raise Error("%s: SHA-256 diverso da SHA256SUMS, download corrotto" % cap_name)
+    path = os.path.join(dest, cap_name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
 def download_latest(variant, pre, dest):
     rels = json.loads(http_get("https://api.github.com/repos/%s/releases?per_page=50" % REPO,
                                "application/vnd.github+json"))
@@ -624,27 +651,18 @@ def download_latest(variant, pre, dest):
             best = r
     if best is None:
         raise Error("nessuna release %s con capsula su github.com/%s" % (variant, REPO))
-    assets = {a["name"]: a["browser_download_url"] for a in best.get("assets", [])}
-    cap_name = "w541-coreboot-%s.cap" % best["tag_name"]
-    if cap_name not in assets or "SHA256SUMS" not in assets:
-        raise Error("%s: senza %s o SHA256SUMS (le capsule ci sono dalla v1.2.0)"
-                    % (best["tag_name"], cap_name))
-    print("release %s: scarico %s" % (best["tag_name"], cap_name))
-    sums = http_get(assets["SHA256SUMS"]).decode()
-    want = None
-    for line in sums.splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[1].lstrip("*") == cap_name:
-            want = parts[0].lower()
-    if not want:
-        raise Error("SHA256SUMS di %s senza %s" % (best["tag_name"], cap_name))
-    data = http_get(assets[cap_name])
-    if hashlib.sha256(data).hexdigest() != want:
-        raise Error("%s: SHA-256 diverso da SHA256SUMS, download corrotto" % cap_name)
-    path = os.path.join(dest, cap_name)
-    with open(path, "wb") as f:
-        f.write(data)
-    return path
+    return download_capsule(best, dest)
+
+
+def download_tag(tag, dest):
+    try:
+        rel = json.loads(http_get("https://api.github.com/repos/%s/releases/tags/%s" % (REPO, tag),
+                                  "application/vnd.github+json"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise Error("la release %s non c'e' su github.com/%s: --capsule FILE" % (tag, REPO))
+        raise
+    return download_capsule(rel, dest)
 
 
 # --- i comandi ---------------------------------------------------------------
@@ -759,6 +777,58 @@ def cmd_status(args):
     return 0
 
 
+def stage_capsule(path, data, cap, fw, args, allow_older):
+    """I controlli del firmware, poi la capsula nell'ESP e il bit di
+    OsIndications: si applica al prossimo avvio."""
+    print_capsule(path, cap)
+    check_capsule(cap, fw)
+    cert = args.cert or default_cert()
+    if cert and shutil.which("openssl"):
+        verify_signature(cap, cert)
+        print("firma:     valida")
+    if cap["version"] < fw["lsv"]:
+        raise Error("%s e' piu' vecchia della minima %s: il firmware la rifiuterebbe"
+                    % (version_str(cap["version"]), version_str(fw["lsv"])))
+    if cap["version"] <= fw["version"] and not allow_older:
+        step = rc_step(cap, fw)
+        if not step:
+            raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
+                        % version_str(fw["version"]))
+        print("passo:     %s -> %s, la stessa %s" % (step[0], step[1], version_str(fw["version"])))
+    ac, charge = power()
+    if ac is False and not args.on_battery:
+        raise Error("collega l'alimentatore (o --on-battery: il firmware aspetta comunque "
+                    "una carica del 25%% o l'alimentatore). Batteria: %s%%" % charge)
+    esp = find_esp(args.esp)
+    d = os.path.join(esp, CAPSULE_DIR)
+    os.makedirs(d, exist_ok=True)
+    for f in staged_files(esp):
+        if os.path.basename(f) != STAGED_NAME:
+            print("attenzione: c'e' anche %s, il firmware applica anche quello" % f)
+    dst = os.path.join(d, STAGED_NAME)
+    part = dst + ".part"
+    with open(part, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(part, dst)
+    os.sync()
+    with open(dst, "rb") as f:
+        if hashlib.sha256(f.read()).digest() != hashlib.sha256(data).digest():
+            raise Error("%s: la copia nell'ESP non e' uguale" % dst)
+    write_os_indications(os_indications() | FILE_CAPSULE_DELIVERY)
+    if not os_indications() & FILE_CAPSULE_DELIVERY:
+        raise Error("OsIndications non scritta")
+
+
+def finish_stage(args):
+    if args.reboot:
+        subprocess.run(["systemctl", "reboot"], check=False)
+    else:
+        print("  sudo systemctl reboot")
+    return 0
+
+
 def cmd_stage(args):
     need_root()
     fw = need_firmware()
@@ -767,54 +837,12 @@ def cmd_stage(args):
         if args.latest:
             path = download_latest(fw["variant"], args.pre, tmp)
         data, cap = load_capsule(path)
-        print_capsule(path, cap)
-        check_capsule(cap, fw)
-        cert = args.cert or default_cert()
-        if cert and shutil.which("openssl"):
-            verify_signature(cap, cert)
-            print("firma:     valida")
-        if cap["version"] < fw["lsv"]:
-            raise Error("%s e' piu' vecchia della minima %s: il firmware la rifiuterebbe"
-                        % (version_str(cap["version"]), version_str(fw["lsv"])))
-        if cap["version"] <= fw["version"] and not args.allow_older:
-            step = rc_step(cap, fw)
-            if not step:
-                raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
-                            % version_str(fw["version"]))
-            print("passo:     %s -> %s, la stessa %s" % (step[0], step[1], version_str(fw["version"])))
-        ac, charge = power()
-        if ac is False and not args.on_battery:
-            raise Error("collega l'alimentatore (o --on-battery: il firmware aspetta comunque "
-                        "una carica del 25%% o l'alimentatore). Batteria: %s%%" % charge)
-        esp = find_esp(args.esp)
-        d = os.path.join(esp, CAPSULE_DIR)
-        os.makedirs(d, exist_ok=True)
-        for f in staged_files(esp):
-            if os.path.basename(f) != STAGED_NAME:
-                print("attenzione: c'e' anche %s, il firmware applica anche quello" % f)
-        dst = os.path.join(d, STAGED_NAME)
-        part = dst + ".part"
-        with open(part, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(part, dst)
-        os.sync()
-        with open(dst, "rb") as f:
-            if hashlib.sha256(f.read()).digest() != hashlib.sha256(data).digest():
-                raise Error("%s: la copia nell'ESP non e' uguale" % dst)
-    write_os_indications(os_indications() | FILE_CAPSULE_DELIVERY)
-    if not os_indications() & FILE_CAPSULE_DELIVERY:
-        raise Error("OsIndications non scritta")
+        stage_capsule(path, data, cap, fw, args, args.allow_older)
     print("\npronta: %s %s -> %s, si applica al prossimo riavvio." % (
         fw["variant"], version_str(fw["version"]), version_str(cap["version"])))
     print("Il firmware la verifica e la scrive in circa un minuto, con una barra sotto il")
     print("logo: non spegnere. Poi riparte da solo con il firmware nuovo.")
-    if args.reboot:
-        subprocess.run(["systemctl", "reboot"], check=False)
-    else:
-        print("  sudo systemctl reboot")
-    return 0
+    return finish_stage(args)
 
 
 def cmd_cancel(args):
@@ -1061,6 +1089,96 @@ def cmd_vboot(args):
     return 0
 
 
+# --- rollback: la release dell'altro slot ----------------------------------------
+#
+# Dopo un aggiornamento lo slot che non gira tiene la release di prima. La sua
+# capsula non vi riscrive niente (i blocchi sono gia' quelli) e chiede a vboot
+# di provarlo, con due tentativi: il payload fa il resto come per ogni capsula.
+
+TAG_RE = re.compile(r"v\d+\.\d+\.\d+(?:-rc\d+)?-(?:mrc|nri)")
+
+
+def rollback_plan(data, running):
+    """Da una copia di tutto il flash, presa in questo avvio, e dalla release
+    che gira (bios_version): lo slot che gira, l'altro e la release che c'e'
+    dentro, se si puo' tornare a quella."""
+    areas = fmap_areas(data)
+    need = ("RW_NVRAM", "FW_MAIN_A", "FW_MAIN_B", "RW_SECTION_A", "RW_SECTION_B")
+    if areas is None or any(n not in areas or sum(areas[n]) > len(data) for n in need):
+        raise Error("serve tutto il flash di un firmware con vboot (v1.3.0 in su): "
+                    "sudo flashrom -p internal -r FILE")
+    off, size = areas["RW_NVRAM"]
+    st = nv_state(data[off:off + size])
+    if not st["valid"]:
+        raise Error("RW_NVRAM senza un record valido: non si sa quale slot gira")
+    slot = "AB"
+    cur, other = st["tried"], 1 - st["tried"]
+    found = {s: region_releases(data, areas["FW_MAIN_" + slot[s]]) for s in (0, 1)}
+    # confrontate per tag (v1.3.1-mrc): il prefisso, w541- o ouroBIOS-, e' cambiato
+    tag = lambda name: TAG_RE.search(name or "").group() if TAG_RE.search(name or "") else None
+    if running is None or [tag(n) for n in found[cur]] != [tag(running)]:
+        raise Error("nello slot %s, quello di questo avvio secondo RW_NVRAM, c'e' %s e gira %s: "
+                    "una copia del flash di un altro avvio? rileggila"
+                    % (slot[cur], " + ".join(found[cur]) or "altro", running or "?"))
+    if len(found[other]) != 1:
+        raise Error("slot %s: %s, non c'e' una release a cui tornare (vuoto, rovinato o scritto a "
+                    "meta')" % (slot[other], " + ".join(found[other]) or "nessuna release"))
+    back = found[other][0]
+    old, new = build_release_key(back), build_release_key(running)
+    if old is None or new is None or tag(back) is None:
+        raise Error("slot %s: release %s non riconosciuta" % (slot[other], back))
+    if tag(back).rsplit("-", 1)[1] != tag(running).rsplit("-", 1)[1]:
+        raise Error("slot %s: %s, un'altra variante: si cambia variante con flashrom" % (slot[other], back))
+    if old == new:
+        raise Error("lo slot %s ha la stessa release che gira, %s: niente a cui tornare" % (slot[other], back))
+    if old > new:
+        raise Error("lo slot %s ha la %s, piu' recente di quella che gira: non e' un ritorno indietro "
+                    "(vboot vi e' tornato da li'? update.py vboot). Per riprovarla: stage" % (slot[other], back))
+    return {"current": slot[cur], "other": slot[other], "running": running, "back": back,
+            "tag": tag(back), "areas": areas,
+            "pending": st["try_count"] > 0 and st["try_next"] == other}
+
+
+def cmd_rollback(args):
+    need_root()
+    fw = need_firmware()
+    if fw["legacy"]:
+        raise Error("v1.2.x: senza vboot non c'e' un altro slot")
+    with open(args.dump, "rb") as f:
+        flash = f.read()
+    need_whole_flash(args.dump, flash, fmap_areas(flash))
+    running = RELEASE_KEY_RE.search(read_text(BIOS_VERSION) or "")
+    plan = rollback_plan(flash, running.group() if running else None)
+    print("gira:      slot %s, %s" % (plan["current"], plan["running"]))
+    print("indietro:  slot %s, %s" % (plan["other"], plan["back"]))
+    if plan["pending"]:
+        print("nota:      vboot ha gia' in programma di provare lo slot %s al prossimo avvio" % plan["other"])
+    with tempfile.TemporaryDirectory() as tmp:
+        path = args.capsule or download_tag(plan["tag"], tmp)
+        data, cap = load_capsule(path)
+        names = region_releases(cap["image"], plan["areas"]["FW_MAIN_" + plan["other"]])
+        if names != [plan["back"]]:
+            raise Error("%s: nello slot %s porta %s, non %s"
+                        % (path, plan["other"], " + ".join(names) or "altro", plan["back"]))
+        area = plan["areas"]["RW_SECTION_" + plan["other"]]
+        diff = region_diff(flash, cap["image"], area)
+        if diff:
+            print("slot %s:    %d blocchi da 4 KiB su %d diversi dalla release: il firmware li riscrive"
+                  % (plan["other"], len(diff), area[1] // 0x1000))
+        else:
+            print("slot %s:    uguale alla release: il firmware non riscrive niente, cambia solo slot"
+                  % plan["other"])
+        if args.dry_run:
+            print("\n--dry-run: niente di preparato")
+            return 0
+        stage_capsule(path, data, cap, fw, args, True)
+    print("\npronta: al prossimo riavvio %s -> %s (slot %s)." % (plan["running"], plan["back"], plan["other"]))
+    print("Il firmware verifica la capsula e chiede a vboot lo slot %s, con due tentativi;" % plan["other"])
+    print("svuota anche il training della RAM: il primo avvio dura qualche secondo in piu'.")
+    print("Se lo slot %s non partisse, vboot tornerebbe allo slot %s." % (plan["other"], plan["current"]))
+    return finish_stage(args)
+
+
 # --- le variabili UEFI in SMMSTORE ---------------------------------------------
 #
 # Lo store di EDK2 nella regione SMMSTORE: un firmware volume
@@ -1223,6 +1341,16 @@ def main():
     p.add_argument("--all", action="store_true", help="anche tutti i record, dal primo")
     p.add_argument("--image", help="confronta RO e slot con una release (.rom, .cap o .cab)")
     p.set_defaults(func=cmd_vboot)
+
+    p = sub.add_parser("rollback", help="torna alla release nell'altro slot, quella di prima dell'ultimo aggiornamento")
+    p.add_argument("dump", help="sudo flashrom -p internal -r FILE: tutto il flash, preso in questo avvio")
+    p.add_argument("--capsule", help="la capsula di quella release (default: la si scarica da GitHub)")
+    p.add_argument("--dry-run", action="store_true", help="mostra cosa farebbe, senza preparare niente")
+    p.add_argument("--on-battery", action="store_true", help="anche senza alimentatore")
+    p.add_argument("--cert", help="certificato per verificare la firma (default: keys/capsule-signing.pem)")
+    p.add_argument("--esp", help="dove e' montata l'ESP (default: la si cerca)")
+    p.add_argument("--reboot", action="store_true", help="riavvia subito")
+    p.set_defaults(func=cmd_rollback)
 
     p = sub.add_parser("vars", help="le variabili UEFI di SMMSTORE in una copia del flash (nomi, mai i dati)")
     p.add_argument("dump")
