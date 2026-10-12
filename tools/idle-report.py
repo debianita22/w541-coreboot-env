@@ -419,6 +419,10 @@ def print_storage_usb_audio():
             cmd, caps = int(cmd, 16), int(caps, 16)
             if cmd & (1 << 18) or (cmd & (1 << 21) and caps & (1 << 5)):
                 notes.append("porta esterna per il firmware (HPCP/ESP): niente LPM")
+            # PxCMD.ALPE: il controller porta da solo il collegamento in
+            # partial o slumber (ASP); spento, il collegamento resta attivo
+            notes.append("ALPE %s" % (("acceso, " + ("slumber" if cmd & (1 << 27) else "partial"))
+                                       if cmd & (1 << 26) else "spento: collegamento sempre attivo"))
         except (TypeError, ValueError):
             pass
         if rd(host + "/link_power_management_supported") == "0":
