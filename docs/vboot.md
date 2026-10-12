@@ -107,6 +107,21 @@ its root key, and vboot keeps the old one).
   bootblock, in `mrc.bin` or in the early microcode needs flashrom with
   *Firmware protection* off. Everything after verstage, the native RAM
   init included, is in the slots.
+- **The slots must fit the read-only part already on the laptops.** The
+  bootblock and verstage leave their state in cache-as-RAM for romstage:
+  vboot's work buffer, the early console, the timestamps, the FMAP and
+  CBFS caches. Their addresses come from the build, their format from the
+  coreboot commit. A release that moved the coreboot pin or that layout
+  would install slots that look for that state where the old read-only
+  part does not leave it: they would not boot, and after two tries vboot
+  would go back to the old slot. [`configs/ro-interface.txt`](../configs/ro-interface.txt)
+  records the read-only part on the laptops (coreboot and cache-as-RAM of
+  v1.3.0), and `tools/ci-check.sh` and `tools/verify-rom.sh` stop a build
+  that differs. Moving the pin takes either checking that the new slots
+  still read what the old read-only part leaves, or a release that writes
+  the read-only part as well, with flashrom. For the same reason the early
+  console (3 KiB, where vboot's messages no longer fit: `Pre-CBMEM
+  romstage console overflowed`) can only grow with such a release.
 - **No rollback protection for the slots.** vboot keeps its anti-rollback
   data in the TPM on Chromebooks; here it is mocked
   (`VBOOT_MOCK_SECDATA`), so that the firmware does not create spaces in

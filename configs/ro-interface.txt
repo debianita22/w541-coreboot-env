@@ -1,0 +1,51 @@
+# L'interfaccia tra la parte di sola lettura gia' sui portatili e gli slot RW
+# che una capsula ci scrive sopra (docs/vboot.md#limits).
+#
+# Una capsula non scrive mai WP_RO: gli slot di ogni release partono dopo il
+# bootblock e il verstage della prima release con vboot (v1.3.0). Questi
+# lasciano il loro stato nella cache-as-RAM per la romstage: il buffer di
+# lavoro di vboot, la console prima della RAM, i timestamp, le cache di FMAP
+# e CBFS. Gli slot devono trovarli agli stessi indirizzi e nello stesso
+# formato, che arriva con il commit di coreboot.
+#
+# tools/ci-check.sh confronta la riga coreboot con il pin di tools/build.sh,
+# tools/verify-rom.sh le regioni della cache-as-RAM con romstage e bootblock
+# di una build. Si cambia solo con una release che riscrive anche la parte di
+# sola lettura (flashrom), o dopo aver controllato che i nuovi slot leggono
+# ancora quello che lascia la vecchia.
+#
+#   coreboot DESCRIBE           da cosa e' costruita la parte RO sui portatili
+#   VARIANTE SIMBOLO INDIRIZZO  una regione della cache-as-RAM (car.ld), come la scrive nm
+coreboot 26.09-53-g26317964960f
+mrc _car_region_start ff7c0000
+mrc _vboot2_work ff7c0000
+mrc _car_stack ff7c3000
+mrc _evboot2_work ff7c3000
+mrc _ecar_stack ff7c5000
+mrc _preram_cbmem_console ff7c5000
+mrc _epreram_cbmem_console ff7c5c00
+mrc _timestamp ff7c5c00
+mrc _cbfs_mcache ff7c5e00
+mrc _etimestamp ff7c5e00
+mrc _ecbfs_mcache ff7c9e00
+mrc _fmap_cache ff7c9e00
+mrc _efmap_cache ff7ca27c
+mrc _car_ehci_dbg_info ff7ce280
+mrc _ecar_ehci_dbg_info ff7ce2d0
+mrc _car_region_end ff7d0000
+nri _car_region_start ff7c0000
+nri _vboot2_work ff7c0000
+nri _car_stack ff7c3000
+nri _evboot2_work ff7c3000
+nri _ecar_stack ff7e3000
+nri _preram_cbmem_console ff7e3000
+nri _epreram_cbmem_console ff7e3c00
+nri _timestamp ff7e3c00
+nri _cbfs_mcache ff7e3e00
+nri _etimestamp ff7e3e00
+nri _ecbfs_mcache ff7e7e00
+nri _fmap_cache ff7e7e00
+nri _efmap_cache ff7e827c
+nri _car_ehci_dbg_info ff7ec280
+nri _ecar_ehci_dbg_info ff7ec2d0
+nri _car_region_end ff800000

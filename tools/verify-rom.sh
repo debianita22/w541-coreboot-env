@@ -46,6 +46,10 @@
 #      di WP_RO dal controller con l'opzione, aggiornamento con capsula (ESRT
 #      con il GUID del defconfig della variante e la versione X.Y.Z di
 #      CONFIG_LOCALVERSION, capsule su disco, il certificato di keys/)
+#   7. gli slot vanno con la parte RO gia' sui portatili, che una capsula non
+#      riscrive (configs/ro-interface.txt): coreboot dello stesso commit e,
+#      se la build di --cbfstool e' quella della ROM, bootblock e romstage
+#      con le stesse regioni della cache-as-RAM
 set -uo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -406,6 +410,52 @@ fi
 if extract revision "${TMP}/revision"; then
 	ev="$(sed -n 's/^#define COREBOOT_EXTRA_VERSION "\(.*\)"$/\1/p' "${TMP}/revision")"
 	if [ "${ev}" = "-${lv:-}" ]; then ok "revision: COREBOOT_EXTRA_VERSION ${ev}"; else bad "revision: COREBOOT_EXTRA_VERSION '${ev}', atteso '-${lv:-}'"; fi
+fi
+
+# --- 7. interfaccia RO/RW ---------------------------------------------------------
+# Una capsula scrive solo gli slot: girano dopo la parte RO gia' sui portatili,
+# che lascia il suo stato nella cache-as-RAM. Stessa coreboot e stesse regioni
+# di configs/ro-interface.txt.
+IFACE="${O}/configs/ro-interface.txt"
+if [ ! -f "${IFACE}" ]; then
+	bad "manca configs/ro-interface.txt"
+else
+	ro_cb="$(awk '$1 == "coreboot" { print $2 }' "${IFACE}")"
+	for r in FW_MAIN_A FW_MAIN_B; do
+		if extract revision "${TMP}/revision-${r}" "${r}"; then
+			cv="$(sed -n 's/^#define COREBOOT_VERSION "\(.*\)"$/\1/p' "${TMP}/revision-${r}")"
+			if [ "${cv}" = "${ro_cb}" ]; then
+				ok "${r}: coreboot ${cv}, come la parte RO sui portatili"
+			else
+				bad "${r}: coreboot ${cv}, la parte RO sui portatili e' ${ro_cb:-?} (configs/ro-interface.txt)"
+			fi
+		else
+			bad "${r}: revision non estraibile"
+		fi
+	done
+	awk -v v="${VARIANT}" '$1 == v { print $2, $3 }' "${IFACE}" | sort > "${TMP}/car-want"
+	BUILDDIR="$(dirname "${CBFSTOOL}")"
+	if [ ! -s "${TMP}/car-want" ]; then
+		bad "configs/ro-interface.txt: nessuna regione per ${VARIANT}"
+	elif ! cmp -s "${TMP}/revision" "${BUILDDIR}/build.h" 2>/dev/null; then
+		# i simboli vengono dalla build: devono essere di questa ROM
+		echo "  --  cache-as-RAM non controllata: ${BUILDDIR} non e' la build di questa ROM"
+	else
+		for st in bootblock romstage; do
+			elf="${BUILDDIR}/cbfs/fallback/${st}.debug"
+			if [ ! -f "${elf}" ]; then
+				bad "${st}: manca ${elf}"
+				continue
+			fi
+			nm "${elf}" | awk 'NR == FNR { w[$1] = 1; next } ($3 in w) { print $3, $1 }' "${TMP}/car-want" - \
+				| sort > "${TMP}/car-${st}"
+			if cmp -s "${TMP}/car-want" "${TMP}/car-${st}"; then
+				ok "${st}: le regioni della cache-as-RAM di configs/ro-interface.txt"
+			else
+				bad "${st}: cache-as-RAM diversa da configs/ro-interface.txt ($(diff "${TMP}/car-want" "${TMP}/car-${st}" | sed -n 's/^> //p' | head -3 | paste -sd ' '))"
+			fi
+		done
+	fi
 fi
 
 # --- immagini dei due chip -------------------------------------------------------

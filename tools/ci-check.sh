@@ -25,7 +25,9 @@
 #   9. le chiavi: in keys/ solo certificati e chiavi pubbliche di vboot, il
 #      keyblock con la chiave dati di keys/vboot, nessuna chiave privata nei
 #      file del repository
-#   8. il pin di coreboot in tools/build.sh: commit intero e describe coerente
+#   8. il pin di coreboot in tools/build.sh: commit intero e describe coerente,
+#      lo stesso della parte RO gia' sui portatili (configs/ro-interface.txt:
+#      gli slot di una capsula partono dopo quella)
 # L'applicazione delle patch e i .config li prova check.yml (job "patch").
 set -u
 O="$(cd "$(dirname "$0")/.." && pwd)"
@@ -370,6 +372,12 @@ if [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] && [[ "${desc}" =~ -g([0-9a-f]+)$ ]] && [
 	ok "coreboot ${desc}"
 else
 	bad "COREBOOT_COMMIT '${commit}' e COREBOOT_DESCRIBE '${desc}' non coerenti"
+fi
+ro_cb="$(awk '$1 == "coreboot" { print $2 }' configs/ro-interface.txt 2>/dev/null)"
+if [ "${ro_cb}" = "${desc}" ]; then
+	ok "la parte RO sui portatili e' della stessa coreboot (configs/ro-interface.txt)"
+else
+	bad "il pin e' ${desc}, la parte RO sui portatili ${ro_cb:-?}: gli slot devono ancora leggere quello che lascia (configs/ro-interface.txt, docs/vboot.md#limits)"
 fi
 
 echo
