@@ -335,7 +335,7 @@ def print_cstates(msr, cpus, res, fam, model):
     if res["irq"]:
         print("interrupt/s: " + ", ".join("%s %.0f" % ((lab or k)[:28], r) for r, k, lab in res["irq"]))
     if res.get("procs"):
-        print("processi (%% di un core): " + ", ".join("%s %.1f" % (n[:20], c) for c, n in res["procs"] if c >= 0.1))
+        print("processi (% di un core): " + ", ".join("%s %.1f" % (n[:20], c) for c, n in res["procs"] if c >= 0.1))
 
 
 def pcie_info(cfg):
@@ -437,9 +437,13 @@ def print_storage_usb_audio():
     if ps is not None:
         print("== Audio HDA: power_save %s s, controller %s" % (
             ps, rd("/sys/module/snd_hda_intel/parameters/power_save_controller", "?")))
-    for f, title in (("i915_fbc_status", "FBC"), ("i915_edp_psr_status", "PSR")):
+    # Con lo schermo acceso la RAM va in self-refresh, e il package sotto PC2,
+    # solo se i915 abilita i watermark LP; le loro latenze vengono da MCHBAR
+    # SSKPD, che scrive il firmware (mrc.bin o la RAM init nativa)
+    for f, title, n in (("i915_sr_status", "self-refresh", 2), ("i915_pri_wm_latency", "latenze WM", 5),
+                        ("i915_fbc_status", "FBC", 3), ("i915_edp_psr_status", "PSR", 3)):
         for path in glob.glob("/sys/kernel/debug/dri/*/" + f)[:1]:
-            lines = [l.strip() for l in (rd(path, "") or "").splitlines() if l.strip()][:3]
+            lines = [" ".join(l.split()) for l in (rd(path, "") or "").splitlines() if l.strip()][:n]
             print("== Grafica Intel %s: %s" % (title, " | ".join(lines) or "?"))
 
 
