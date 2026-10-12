@@ -405,8 +405,12 @@ Things that keep the power up on the W541:
   uses it, or with nouveau, as long as `power/control` is `auto` for the
   GPU, its audio function and the root port `00:01.0`. NVIDIA's driver
   does it only for Turing and newer GPUs on Coffee Lake and newer
-  chipsets: with the 470 driver this GPU stays on. With the option off,
-  the firmware keeps the GPU unpowered.
+  chipsets: with the 470 driver this GPU stays on, although the package
+  still reaches PC6. With the option off, the firmware keeps the GPU
+  unpowered. A driverless GPU stays in D0 until the root port above it
+  suspends, so its own `power/control` has to be `auto` too: a udev rule
+  in `/etc/udev/rules.d` keeps it, for example
+  `ACTION=="add", SUBSYSTEM=="pci", ATTR{power/control}="auto"`.
 - Framebuffer compression, which cuts what the screen reads, is off on
   Haswell unless `i915.enable_fbc=1`, and it needs the graphics stolen
   memory, which i915 gives up with `intel_iommu=on` (`DMAR active,
@@ -431,7 +435,8 @@ Things that keep the power up on the W541:
     policy; `libata.force=N.00:disable` takes it out of Linux, which then
     turns the port off.
 - `snd_hda_intel` with `power_save` 0 never powers the codecs down, so
-  the HD audio controller `00:1b.0` stays in D0.
+  the HD audio controller `00:1b.0` stays in D0; the package still
+  reaches PC6.
 
 ## Diagnosing a hang
 
