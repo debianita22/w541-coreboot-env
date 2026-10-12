@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Mon, 12 Oct 2026 11:23:19 +0200
+Subject: [PATCH] util/ifdtool: Decode 4-bit component densities for the 8 and
+ 9 series
+
+ifdtool takes the descriptors of the 8 and 9 series PCHs (Lynx Point,
+Wildcat Point) for version 1, with 3-bit density fields in FLCOMP, but
+these PCHs, like Wellsburg, use 4-bit fields: a W541 with an 8 MiB and
+a 4 MiB chip (FLCOMP 0x34) was printed as 8 MB and 32 MB, and -D would
+have set the density in the wrong bits.
+
+Treat them as version 1.5: the regions of version 1, the densities of
+version 2.
+
+TEST=ifdtool -d on the W541 image prints 8MB and 4MB; nothing else in
+the output changes.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ util/ifdtool/ifdtool.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/util/ifdtool/ifdtool.c b/util/ifdtool/ifdtool.c
+index a3b66fd46..07bc4d8ff 100644
+--- a/util/ifdtool/ifdtool.c
++++ b/util/ifdtool/ifdtool.c
+@@ -337,6 +337,16 @@ static void check_ifd_version(char *image, int size)
+ 	} else {
+ 		ifd_version = IFD_VERSION_1;
+ 		chipset = ifd1_guess_chipset(image, size);
++		/*
++		 * The 8 and 9 series PCHs keep the regions of version 1 but,
++		 * like Wellsburg, encode the component densities in 4-bit
++		 * fields: a 0x34 of FLCOMP is 8 MiB and 4 MiB, not 8 and 32.
++		 */
++		if (chipset == CHIPSET_8_SERIES_LYNX_POINT ||
++		    chipset == CHIPSET_8_SERIES_LYNX_POINT_LP ||
++		    chipset == CHIPSET_9_SERIES_WILDCAT_POINT ||
++		    chipset == CHIPSET_9_SERIES_WILDCAT_POINT_LP)
++			ifd_version = IFD_VERSION_1_5;
+ 		max_regions = MIN(max_regions_from_fdbar(fdb), MAX_REGIONS_OLD);
+ 	}
+ }

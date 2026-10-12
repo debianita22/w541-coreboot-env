@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Mon, 12 Oct 2026 11:23:18 +0200
+Subject: [PATCH] sb/intel/common/spi: Decode 4-bit FLCOMP densities from the 8
+ series on
+
+The size of the boot flash is read from the descriptor's FLCOMP, with
+3-bit density fields for each component. From the 8 series (Lynx Point)
+on, the fields are 4 bits wide, bits 3:0 and 7:4, which is also how a
+descriptor says 32 or 64 MiB. A ThinkPad W541 with FLCOMP 0x34, an
+8 MiB and a 4 MiB chip, came out as 8 + 32 MiB: "SF size 0x2800000
+does not correspond to CONFIG_ROM_SIZE 0xc00000!!" at every boot, and
+a bounds check on writes 28 MiB too loose.
+
+Use 4-bit fields on Lynx Point and Wildcat Point.
+
+TEST=Built for lenovo/w541: the message is gone, flash size 0xc00000.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/common/spi.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/southbridge/intel/common/spi.c b/src/southbridge/intel/common/spi.c
+index b340dcbeb..59bc4ec56 100644
+--- a/src/southbridge/intel/common/spi.c
++++ b/src/southbridge/intel/common/spi.c
+@@ -956,12 +956,23 @@ static int spi_flash_programmer_probe(const struct spi_slave *spi,
+ 		break;
+ 	}
+ 
+-	flash->size = 1 << (19 + (cntlr.flcomp & 7));
++	/*
++	 * FLCOMP: the density of each component, 3-bit fields (bits 2:0 and
++	 * 5:3) up to the 7 series, 4-bit fields (bits 3:0 and 7:4) from the
++	 * 8 series (Lynx Point) on, which also lets a descriptor encode 32
++	 * and 64 MiB components.
++	 */
++	const bool flcomp_wide = CONFIG(SOUTHBRIDGE_INTEL_LYNXPOINT) ||
++				 CONFIG(SOUTHBRIDGE_INTEL_WILDCATPOINT);
++	const unsigned int density_bits = flcomp_wide ? 4 : 3;
++	const unsigned int density_mask = (1 << density_bits) - 1;
++
++	flash->size = 1 << (19 + (cntlr.flcomp & density_mask));
+ 
+ 	flash->ops = &spi_flash_ops;
+ 
+ 	if ((cntlr.hsfs & HSFS_FDV) && ((cntlr.flmap0 >> 8) & 3))
+-		flash->size += 1 << (19 + ((cntlr.flcomp >> 3) & 7));
++		flash->size += 1 << (19 + ((cntlr.flcomp >> density_bits) & density_mask));
+ 	printk(BIOS_DEBUG, "flash size 0x%x bytes\n", flash->size);
+ 
+ 	return 0;
