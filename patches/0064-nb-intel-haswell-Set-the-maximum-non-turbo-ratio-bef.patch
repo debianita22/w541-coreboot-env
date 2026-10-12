@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Mon, 12 Oct 2026 18:16:43 +0200
+Subject: [PATCH] nb/intel/haswell: Set the maximum non-turbo ratio before
+ raminit
+
+Ramstage sets the CPU ratio after raminit, so until then the CPU runs at
+the ratio it comes out of reset with. Broadwell sets the maximum
+non-turbo ratio in romstage with set_max_freq(), which Haswell has but
+never calls. Call it before raminit.
+
+set_max_freq() now enables Enhanced SpeedStep first, which P-state
+requests need (ramstage applies the eist option later, as before), and
+reports the ratio it found and whether the new one took effect within
+1 ms.
+
+TEST=Built for the ThinkPad W541 with mrc.bin and with the native RAM
+init.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/cpu/intel/haswell/romstage.c         | 23 +++++++++++++++++++++--
+ src/northbridge/intel/haswell/romstage.c |  7 +++++++
+ 2 files changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/src/cpu/intel/haswell/romstage.c b/src/cpu/intel/haswell/romstage.c
+index b54cb6204..14be3e59a 100644
+--- a/src/cpu/intel/haswell/romstage.c
++++ b/src/cpu/intel/haswell/romstage.c
+@@ -5,6 +5,7 @@
+ #include <console/console.h>
+ #include <cpu/intel/haswell/haswell.h>
+ #include <cpu/x86/msr.h>
++#include <delay.h>
+ #include <option.h>
+ #include <types.h>
+ 
+@@ -25,11 +26,29 @@ void set_max_freq(void)
+ 		perf_ctl.lo = msr.lo & 0xff00;
+ 	}
+ 
++	const unsigned int before = (rdmsr(IA32_PERF_STATUS).lo >> 8) & 0xff;
++
++	/* P-state requests need Enhanced SpeedStep; ramstage applies the eist option */
++	msr = rdmsr(IA32_MISC_ENABLE);
++	msr.lo |= (1 << 16);
++	wrmsr(IA32_MISC_ENABLE, msr);
++
+ 	perf_ctl.hi = 0;
+ 	wrmsr(IA32_PERF_CTL, perf_ctl);
+ 
+-	printk(BIOS_DEBUG, "CPU: frequency set to %d MHz\n",
+-	       ((perf_ctl.lo >> 8) & 0xff) * CPU_BCLK);
++	const unsigned int ratio = (perf_ctl.lo >> 8) & 0xff;
++
++	/* The transition takes some microseconds: wait for it, at most 1 ms */
++	unsigned int current = before;
++	for (unsigned int i = 0; i < 100 && current != ratio; i++) {
++		udelay(10);
++		current = (rdmsr(IA32_PERF_STATUS).lo >> 8) & 0xff;
++	}
++
++	printk(BIOS_DEBUG, "CPU: frequency set to %u MHz, was %u MHz\n",
++	       ratio * CPU_BCLK, before * CPU_BCLK);
++	if (current != ratio)
++		printk(BIOS_DEBUG, "CPU: still at %u MHz after 1 ms\n", current * CPU_BCLK);
+ }
+ 
+ /*
+diff --git a/src/northbridge/intel/haswell/romstage.c b/src/northbridge/intel/haswell/romstage.c
+index 1691d7989..898ede1f9 100644
+--- a/src/northbridge/intel/haswell/romstage.c
++++ b/src/northbridge/intel/haswell/romstage.c
+@@ -58,6 +58,13 @@ void mainboard_romstage_entry(void)
+ 
+ 	report_platform_info();
+ 
++	/*
++	 * Ramstage sets the CPU ratio, so raminit runs at the one the CPU
++	 * comes out of reset with. Set the maximum non-turbo ratio now, as
++	 * Broadwell does.
++	 */
++	set_max_freq();
++
+ 	if (CONFIG(INTEL_TXT))
+ 		intel_txt_romstage_init();
+ 
+-- 
+2.43.0
+
