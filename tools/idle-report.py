@@ -433,6 +433,21 @@ def print_storage_usb_audio():
         print("%-8s %s:%s  %-32s %-5s %s" % (name, rd(dev + "/idVendor"), rd(dev + "/idProduct"),
                                             (rd(dev + "/product") or "?")[:32],
                                             rd(dev + "/power/control", "?"), rd(dev + "/power/runtime_status", "?")))
+    # Wi-Fi: senza power save la scheda resta sveglia e riporta latenze (LTR)
+    # brevi, che tengono sveglio anche il resto
+    for net in sorted(glob.glob("/sys/class/net/*/wireless")):
+        ifname = os.path.basename(os.path.dirname(net))
+        drv = os.path.basename(os.path.realpath(os.path.dirname(net) + "/device/driver"))
+        ps = "?"
+        try:
+            out = subprocess.run(["iw", "dev", ifname, "get", "power_save"], capture_output=True, text=True).stdout
+            ps = out.split(":")[-1].strip() or "?"
+        except OSError:
+            pass
+        params = ", ".join("%s=%s" % (os.path.basename(f), rd(f)) for f in
+                           ("/sys/module/iwlmvm/parameters/power_scheme", "/sys/module/iwlwifi/parameters/power_save")
+                           if os.path.exists(f))
+        print("== Wi-Fi %s (%s): power save %s%s" % (ifname, drv, ps, "; " + params if params else ""))
     ps = rd("/sys/module/snd_hda_intel/parameters/power_save")
     if ps is not None:
         print("== Audio HDA: power_save %s s, controller %s" % (
