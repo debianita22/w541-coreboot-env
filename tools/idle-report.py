@@ -358,8 +358,15 @@ def print_cstates(msr, cpus, res, fam, model):
     if cfg is not None:
         lim = cfg & 0xF
         name = HSW_PKG_LIMITS[lim] if (fam == 6 and model in HSW_MODELS and lim < len(HSW_PKG_LIMITS)) else "%#x" % lim
-        print("limite del package: %s (MSR 0xe2 = %#010x%s)" % (name, cfg & 0xFFFFFFFF,
-                                                             ", bloccato" if cfg & (1 << 15) else ""))
+        # Bit 25-30 come li scrive coreboot (cpu/intel/haswell): la CPU puo'
+        # trasformare la richiesta di uno stato profondo in una meno profonda
+        # (demozione) se prevede un riposo breve; il blocco copre solo 15:0
+        demote = ""
+        if fam == 6 and model in HSW_MODELS:
+            yes = lambda b: "si'" if cfg & (1 << b) else "no"
+            demote = "; demozione: package %s, core C3 %s, core C1 %s" % (yes(29), yes(25), yes(26))
+        print("limite del package: %s (MSR 0xe2 = %#010x%s)%s" % (name, cfg & 0xFFFFFFFF,
+                                                               ", bloccato" if cfg & (1 << 15) else "", demote))
     irtl = []
     for name, r in MSR_PKGC_IRTL:
         v = msr.read(cpus[0], r)
