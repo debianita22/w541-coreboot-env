@@ -307,8 +307,12 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
 - Settings: Esc at power-on opens the setup menu, a grid of icons. Arrow
   keys, Enter and Esc, or the TrackPoint and touchpad, move around; F10
   saves, F9 loads the defaults of every category, not only the open one.
-  - *Hardware* → *NVIDIA discrete GPU*: **off by default**; when on, the
-    driver can power the GPU down when idle. *Hardware* also has the
+  - *Hardware* → *NVIDIA discrete GPU*: **off by default**. When on,
+    Linux can power the GPU down while it is unused, through the ACPI
+    power resource of the firmware, with nouveau or with no driver
+    bound to it; NVIDIA's own driver does that only for Turing and newer
+    GPUs, so with the 470 driver of this Kepler GPU it stays powered
+    ([Power at idle](#power-at-idle)). *Hardware* also has the
     graphics aperture and, with the native RAM init (`nri`), the graphics
     stolen memory (DVMT), the ExpressCard and Thunderbolt ports and the
     radios;
@@ -334,10 +338,51 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
     touchpad;
   - *General*: what the laptop is (model, machine type, serial number and
     UUID from the VPD, processor, memory, firmware and EC versions), beeps,
-    *Non-maskable Interrupts*.
+    *Non-maskable Interrupts*;
+  - *Boot Manager* (second row): boot order, boot entries, *Boot Device
+    Priority* and *Auto Boot Time-out*, the seconds the firmware waits
+    for Esc before it boots: 2 by default, 0 boots at once and leaves
+    little or no time for Esc, 65535 waits for a key. It is the UEFI
+    `Timeout` variable, which `efibootmgr -t` sets too.
 
   Changes apply at the next boot. Graphics stolen memory and aperture
   change the memory map: do not change them between suspend and resume.
+
+## Power at idle
+
+`tools/idle-report.py` measures for 30 seconds how deeply the processor
+sleeps and how much it draws, then lists the power state of the devices
+that can keep it awake:
+
+```sh
+sudo python3 tools/idle-report.py
+sudo python3 tools/idle-report.py --seconds 60
+```
+
+Run it with the laptop idle, on battery to get the battery discharge
+rate too. It prints the residency of the package C-states (PC2 to PC7)
+and of the core ones, the RAPL power of package, cores, graphics and
+memory, the cpuidle states in use, the busiest interrupts, and for each
+PCI device its D-state, runtime PM, ASPM, clock PM and LTR, then SATA
+link power management, USB autosuspend, HD audio power saving, and RC6,
+FBC and PSR of the Intel graphics. It prints no serial numbers, MAC
+addresses or UUIDs.
+
+Things that keep the power up on the W541:
+- The NVIDIA GPU, with *NVIDIA discrete GPU* on, draws power whenever it
+  is powered. Linux turns it off (`D3cold` in the report) when no driver
+  uses it, or with nouveau, as long as `power/control` is `auto` for the
+  GPU, its audio function and the root port `00:01.0`. NVIDIA's driver
+  does it only for Turing and newer GPUs on Coffee Lake and newer
+  chipsets: with the 470 driver this GPU stays on. With the option off,
+  the firmware keeps the GPU unpowered.
+- `intel_iommu=on` makes i915 give up the graphics stolen memory on
+  Haswell (`DMAR active, disabling use of stolen memory`), and with it
+  framebuffer compression; `intel_iommu=on,igfx_off` keeps the graphics
+  out of the translation.
+- SATA link power management lets the link sleep; the kernel leaves it
+  off for drives known to misbehave with it (`applying quirks: nolpm` in
+  `dmesg`).
 
 ## Diagnosing a hang
 
