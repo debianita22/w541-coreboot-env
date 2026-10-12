@@ -7,11 +7,6 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
 
 ## v1.3.2
 
-- Memory initialization at the maximum non-turbo ratio of the processor
-  (patch 0064): ramstage sets the ratio only after it, so `mrc.bin` ran
-  at the ratio the processor comes out of reset with. The coreboot log
-  has the ratio before and after (`CPU: frequency set to ... MHz, was
-  ... MHz`).
 - `tools/idle-report.py`: package and core C-states, RAPL and battery
   power at idle, and the power state of the devices that can keep the
   processor awake: ASPM, LTR and runtime PM of each PCI device, SATA link
@@ -20,7 +15,10 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
 - `tools/update.py stage` goes from a release candidate to its release,
   or to a later candidate, without `--allow-older`.
 - Docs: the boot menu timeout is set in the setup menu, *Boot Manager* →
-  *Auto Boot Time-out*; NVIDIA's own driver never powers this GPU down.
+  *Auto Boot Time-out*; NVIDIA's own driver never powers this GPU down;
+  where the boot time goes. v1.3.2-rc1 also asked for the maximum ratio
+  of the processor before `mrc.bin` (patch 0064): the processor stayed at
+  800 MHz, and the patch is gone.
 
 ## v1.3.1
 

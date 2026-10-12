@@ -255,6 +255,15 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
   suspend-to-idle, where the firmware takes no part, works meanwhile:
   `echo s2idle | sudo tee /sys/power/mem_sleep` for the running system,
   `mem_sleep_default=s2idle` on the kernel command line to keep it.
+- Boot time: on a W541 with 32 GB, about 3.4 s from power-on to EDK2,
+  then the wait for Esc (*Auto Boot Time-out*, 2 s) and the boot loader.
+  `sudo cbmem -t` lists the steps; the largest are *Clear memory at
+  power-on* (1.7 s), `mrc.bin` with its saved training (0.85 s), the
+  graphics (0.26 s, mostly the power-up delays of the panel), vboot's
+  check of the slot (0.23 s, in the read-only part) and the loading of
+  EDK2 (0.15 s). Until ramstage the processor runs at 800 MHz: a request
+  for its maximum ratio before `mrc.bin`, as on Broadwell, is not applied
+  (tried in v1.3.2-rc1: still 800 MHz after 1 ms, the same raminit time).
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
   fatal error (`H8_FLASH_LEDS_ON_DEATH`), for example a failed memory
   initialization: see [Recovery](#recovery).

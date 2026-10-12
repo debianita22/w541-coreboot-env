@@ -61,4 +61,3 @@
 0061-sb-intel-common-spi-Decode-4-bit-FLCOMP-densities-fr.patch
 0062-util-ifdtool-Decode-4-bit-component-densities-for-th.patch
 0063-nb-intel-haswell-Set-SPCAPCTRL-with-the-IGD-too.patch
-0064-nb-intel-haswell-Set-the-maximum-non-turbo-ratio-bef.patch
