@@ -18,9 +18,11 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   or to a later candidate, without `--allow-older`.
 - Docs: the boot menu timeout is set in the setup menu, *Boot Manager* →
   *Auto Boot Time-out*; NVIDIA's own driver never powers this GPU down;
-  where the boot time goes. v1.3.2-rc1 also asked for the maximum ratio
-  of the processor before `mrc.bin` (patch 0064): the processor stayed at
-  800 MHz, and the patch is gone.
+  where the boot time goes; a SATA link that never sleeps keeps the
+  processor out of the package C-states below PC2, about 7 W at idle
+  ([docs/flashing.md](docs/flashing.md#power-at-idle)). v1.3.2-rc1 also
+  asked for the maximum ratio of the processor before `mrc.bin` (patch
+  0064): the processor stayed at 800 MHz, and the patch is gone.
 
 ## v1.3.1
 

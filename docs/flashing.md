@@ -414,9 +414,22 @@ Things that keep the power up on the W541:
   graphics out of the translation.
 - Runtime PM settings written to sysfs (`power/control`, the SATA
   policy) last until the next boot.
-- SATA link power management lets the link sleep; the kernel leaves it
-  off for drives known to misbehave with it (`applying quirks: nolpm` in
-  `dmesg`).
+- A SATA link that never leaves the active state keeps the package in
+  PC2: on the W541, with the screen off, 8.8 W of package power against
+  1.4 W and 90% of PC6 once the links sleep. Wi-Fi and the SD reader,
+  with their drivers, made no difference. A link sleeps only with a
+  policy from `med_power_with_dipm` up and a drive that supports HIPM or
+  DIPM, which the report shows:
+  - the kernel leaves LPM off for drives known to misbehave with it
+    (`applying quirks: nolpm` in `dmesg`), all Crucial BX SSD1 models
+    among them; `libata.force=N.00:lpm` (N from `ataN` in `dmesg`) turns
+    it back on, at your own risk;
+  - some distributions set `max_performance` with a udev rule (CachyOS:
+    `/usr/lib/udev/rules.d/50-sata.rules`); a rule of the same name in
+    `/etc/udev/rules.d` replaces it;
+  - a drive with neither HIPM nor DIPM keeps its link active whatever the
+    policy; `libata.force=N.00:disable` takes it out of Linux, which then
+    turns the port off.
 - `snd_hda_intel` with `power_save` 0 never powers the codecs down, so
   the HD audio controller `00:1b.0` stays in D0.
 

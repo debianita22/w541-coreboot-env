@@ -603,6 +603,10 @@ def print_storage_usb_audio():
             notes.append("collegamento: " + ", ".join(
                 "%s %.0f%%" % (sata_state_name(ipm), cnt * 100 / n)
                 for ipm, cnt in sorted(c.items(), key=lambda x: -x[1])))
+            # Sul W541 un solo collegamento sempre attivo tiene il package
+            # in PC2: 8.8 W contro 1.4 W a schermo spento
+            if c.get(1, 0) >= 0.95 * n:
+                notes.append("sempre attivo: il package non scende sotto PC2")
         elif link_err:
             notes.append("stato del collegamento non letto: " + link_err)
         print("%-6s %-24s %s%s" % (os.path.basename(host), pol,
