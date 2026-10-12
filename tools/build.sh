@@ -23,6 +23,11 @@
 #                  di ogni variante (docs/update.md). Gli slot RW di vboot si
 #                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
 #                  senza, con le chiavi di prova di vboot: build di prova
+#   smoke          dopo roms, la prova di fumo del payload: per ogni variante
+#                  una ROM coreboot per QEMU q35 con lo stesso UEFIPAYLOAD.fd
+#                  (EDK2 non si ricompila), avviata in QEMU da
+#                  tools/qemu-smoke.py: il payload parte, il setup si apre e
+#                  risponde ai tasti. Schermate e seriale in WORK/smoke-<variante>
 #   keys           controlla le chiavi di firma dell'ambiente (CAPSULE_SIGNING_KEY,
 #                  VBOOT_SIGNING_KEY) senza build: con --release devono esserci
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
@@ -162,7 +167,7 @@ while [ $# -gt 0 ]; do
 		--dist)      DIST="$(realpath -m "${2:?--dist DIR}")"; shift 2 ;;
 		--jobs)      JOBS="${2:?--jobs N}"; shift 2 ;;
 		-h|--help)   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-		prepare|toolchain|config|roms|keys|toolchain-key) CMDS+=("$1"); shift ;;
+		prepare|toolchain|config|roms|smoke|keys|toolchain-key) CMDS+=("$1"); shift ;;
 		*) die "argomento sconosciuto: $1 (tools/build.sh --help)" ;;
 	esac
 done
@@ -811,12 +816,72 @@ cmd_roms() {
 	ls -l "${DIST}"
 }
 
+# La prova di fumo: il payload della variante, gia' costruito da roms, in una
+# ROM per QEMU q35. Del W541 non si emula niente: girano il payload (le patch
+# di EDK2 e LvglPkg) e il codice comune di coreboot. DRIVERS_EFI_FW_INFO con
+# il GUID e la versione della variante, come sul W541: senza, FmpDxe del
+# payload non sa che firmware e' e si ferma (misconfiguration). Niente
+# USE_UEFI_VARIABLE_STORE: il romstage di q35 non ha il flash scrivibile.
+cmd_smoke() {
+	need_prepared
+	command -v qemu-system-x86_64 > /dev/null \
+		|| die "serve qemu-system-x86_64 (Debian/Ubuntu: apt install qemu-system-x86)"
+	if [ "${TOOLCHAIN}" = crossgcc ]; then
+		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
+		export PATH="${XGCC}/bin:${PATH}"
+	fi
+	local v q fd guid lsv line miss
+	for v in "${VARIANTS[@]}"; do
+		q="q35-${v}"
+		fd="${TREE}/build-${v}/UEFIPAYLOAD.fd"
+		[ -f "${fd}" ] || die "smoke ${v}: manca ${fd}, prima tools/build.sh roms"
+		guid="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_GUID="\(.*\)"$/\1/p' "${O}/configs/w541-${v}.defconfig")"
+		lsv="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_LSV=\(.*\)$/\1/p' "${O}/configs/w541-${v}.defconfig")"
+		[ -n "${guid}" ] && [ -n "${lsv}" ] || die "smoke ${v}: GUID o LSV dell'ESRT non nel defconfig"
+		say "smoke ${v}: coreboot per QEMU q35 con il payload di ${v}"
+		rm -rf "${TREE:?}/build-${q}"
+		mkdir -p "${TREE}/build-${q}"
+		{
+			echo "CONFIG_VENDOR_EMULATION=y"
+			echo "CONFIG_BOARD_EMULATION_QEMU_X86_Q35=y"
+			echo "CONFIG_CPU_QEMU_X86_TSEG_SMM=y"
+			echo "CONFIG_SMMSTORE=y"
+			echo "CONFIG_PAYLOAD_ELF=y"
+			echo "CONFIG_PAYLOAD_FILE=\"${fd}\""
+			echo "CONFIG_GENERIC_LINEAR_FRAMEBUFFER=y"
+			echo "CONFIG_DRIVERS_EMULATION_QEMU_XRES=1920"
+			echo "CONFIG_DRIVERS_EMULATION_QEMU_YRES=1080"
+			echo "CONFIG_DRIVERS_EFI_FW_INFO=y"
+			echo "CONFIG_DRIVERS_EFI_MAIN_FW_GUID=\"${guid}\""
+			echo "CONFIG_DRIVERS_EFI_MAIN_FW_LSV=${lsv}"
+			echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=$(fw_version)"
+			echo "CONFIG_LOCALVERSION=\"$(localversion "${v}")-q35\""
+			if [ "${TOOLCHAIN}" = host ]; then echo "CONFIG_ANY_TOOLCHAIN=y"; fi
+		} > "${TREE}/build-${q}/defconfig"
+		mk "${q}" defconfig KBUILD_DEFCONFIG="build-${q}/defconfig" > "${TREE}/build-${q}/defconfig.log" 2>&1 \
+			|| { cat "${TREE}/build-${q}/defconfig.log"; die "smoke ${v}: make defconfig fallito"; }
+		miss=0
+		while IFS= read -r line; do
+			grep -qxF -- "${line}" "${TREE}/build-${q}/.config" || { echo "  NO  ${line}"; miss=1; }
+		done < "${TREE}/build-${q}/defconfig"
+		[ "${miss}" = 0 ] || die "smoke ${v}: il .config di q35 non ha tutto il defconfig"
+		if ! mk "${q}" -j"${JOBS}" > "${TREE}/build-${q}/make.log" 2>&1; then
+			grep -n -i -B2 -A6 'error' "${TREE}/build-${q}/make.log" | tail -n 40
+			die "smoke ${v}: build per q35 fallita (build-${q}/make.log nell'albero)"
+		fi
+		say "smoke ${v}: QEMU"
+		python3 "${O}/tools/qemu-smoke.py" --out "${WORK}/smoke-${v}" "${TREE}/build-${q}/coreboot.rom" \
+			|| die "smoke ${v}: il payload non passa la prova in QEMU (${WORK}/smoke-${v})"
+	done
+}
+
 for c in "${CMDS[@]}"; do
 	case "${c}" in
 		prepare)       cmd_prepare ;;
 		toolchain)     cmd_toolchain ;;
 		config)        cmd_config ;;
 		roms)          cmd_roms ;;
+		smoke)         cmd_smoke ;;
 		keys)          cmd_keys ;;
 		toolchain-key) cmd_toolchain_key ;;
 	esac

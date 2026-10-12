@@ -12,7 +12,10 @@
 # l'aggiornamento da Linux (docs/update.md) e il suo pacchetto fwupd (.cab), il
 # .config, il layout e SHA256SUMS. tools/verify-rom.sh blocca la release se i primi 5 MiB non sono
 # identici a legacy/coreboot-4.22/coreboot.rom o la mappa non e' quella di
-# configs/w541.fmd.
+# configs/w541.fmd. La blocca anche la prova di fumo (tools/build.sh smoke):
+# il payload EDK2 di ogni variante, in una ROM per QEMU q35, deve partire e
+# aprire il setup, che deve rispondere ai tasti; le schermate sono
+# nell'artifact smoke-<versione>.
 #
 # La capsula si firma con il secret CAPSULE_SIGNING_KEY (Settings -> Secrets
 # and variables -> Actions): la chiave privata di keys/capsule-signing.pem,
@@ -128,13 +131,14 @@ jobs:
 
       # gnat: Ada nel crossgcc (libgfxinit); imagemagick e uuid-dev: EDK2;
       # jcat: la firma del pacchetto fwupd; libssl-dev e pkg-config: futility
-      # di vboot (libcrypto), che firma gli slot RW
+      # di vboot (libcrypto), che firma gli slot RW; qemu-system-x86: la prova
+      # di fumo del payload
       - name: Pacchetti
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
             zlib1g-dev m4 curl git python3 uuid-dev imagemagick jcat \
-            libssl-dev pkg-config >/dev/null
+            libssl-dev pkg-config qemu-system-x86 >/dev/null
           gcc --version | head -1
           gnatmake --version | head -1
 
@@ -169,6 +173,18 @@ jobs:
           CAPSULE_SIGNING_KEY: ${{ secrets.CAPSULE_SIGNING_KEY }}
           VBOOT_SIGNING_KEY: ${{ secrets.VBOOT_SIGNING_KEY }}
         run: ./tools/build.sh --release --version "${VERSION}" roms
+
+      - name: Prova di fumo in QEMU
+        run: ./tools/build.sh --release --version "${VERSION}" smoke
+
+      - name: Schermate della prova di fumo
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-${{ needs.setup.outputs.version }}
+          path: work/smoke-*/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Riepilogo
         run: |

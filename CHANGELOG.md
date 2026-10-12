@@ -20,6 +20,9 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   that is not running, the one before the last update, with its signed
   capsule; the firmware rewrites nothing and only switches slot
   ([docs/update.md](docs/update.md#going-back)).
+- The build boots the EDK2 payload of each variant in QEMU before a
+  release (`tools/build.sh smoke`, `tools/qemu-smoke.py`): it must open
+  the setup and answer the keys.
 - Docs: the boot menu timeout is set in the setup menu, *Boot Manager* →
   *Auto Boot Time-out*; NVIDIA's own driver never powers this GPU down;
   where the boot time goes; a SATA link that never sleeps keeps the
