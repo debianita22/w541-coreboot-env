@@ -21,7 +21,10 @@ and add no second table.
 TEST=QEMU q35 with coreboot (its own ACPI tables) and swtpm as a TPM 1.2:
 before, the root table lists coreboot's TCPA with no events, then this
 driver's with the six PCR 7 events of the Secure Boot variables; now
-coreboot's only, with those six events in its log area.
+coreboot's only, with those six events in its log area. On a ThinkPad
+W541 with coreboot, Linux finds one TCPA table, and its
+binary_bios_measurements holds this driver's events: the boot variables
+and the boot action in PCR 5, the separators.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv

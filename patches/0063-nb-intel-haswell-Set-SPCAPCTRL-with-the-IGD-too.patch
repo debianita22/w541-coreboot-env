@@ -29,8 +29,9 @@ boards, where intel_iommu=sp_off made them go away.
 
 Set SPCAPCTRL whether the IGD is there or not.
 
-TEST=On a ThinkPad W541, ARCHDIS of the engine reads 0x820a5003 and the
-test above gives no DMAR faults with Linux 7.2.9 and intel_iommu=on.
+TEST=On a ThinkPad W541 with Linux 7.2.9 and intel_iommu=on, ARCHDIS of
+the engine reads 0x820a5003 and the test above gives no DMAR faults, both
+after a boot and after a resume from S3.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
