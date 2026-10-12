@@ -470,10 +470,17 @@ def print_pci():
         print("%-8s %-6s  %-10s  %-14s  %-6s  %-10s  %-4s  %s" % (bdf, cls, ids, drv[:14], dstate, rt, ctl, link))
 
 
-# Stato del collegamento: PxSSTS.IPM con il dispositivo presente (DET 3);
-# -4 la PHY spenta (DET 4: Linux la spegne sulle porte senza disco con
-# med_power_with_dipm e min_power), 0 niente collegamento
-SATA_IPM = {1: "attivo", 2: "partial", 6: "slumber", 8: "devsleep", -4: "PHY spenta", 0: "giu'"}
+# Stato del collegamento: PxSSTS.IPM quando dice qualcosa (anche con DET
+# diverso da 3: a riposo alcuni controller non riportano DET 3); -4 la PHY
+# spenta (DET 4: Linux la spegne sulle porte senza disco con
+# med_power_with_dipm e min_power); 100 + DET il resto
+SATA_IPM = {1: "attivo", 2: "partial", 6: "slumber", 8: "devsleep", -4: "PHY spenta", 100: "giu'"}
+
+
+def sata_state_name(k):
+    if k in SATA_IPM:
+        return SATA_IPM[k]
+    return "giu' (DET %d)" % (k - 100) if k > 100 else "IPM %d" % k
 
 
 def ata_name(host):
@@ -548,9 +555,9 @@ def sata_link_states(ports, seconds=2.0, interval=0.01):
         while time.monotonic() < end:
             for k, (m, off) in regs.items():
                 v = struct.unpack_from("@I", m, off)[0]
-                det = v & 0xF
-                ipm = (v >> 8) & 0xF if det == 3 else (-4 if det == 4 else 0)
-                counts[k][ipm] = counts[k].get(ipm, 0) + 1
+                det, ipm = v & 0xF, (v >> 8) & 0xF
+                state = ipm if ipm in (1, 2, 6, 8) else (-4 if det == 4 else 100 + det)
+                counts[k][state] = counts[k].get(state, 0) + 1
             time.sleep(interval)
     return counts, err
 
@@ -567,7 +574,7 @@ def print_storage_usb_audio():
     for host, pol, models, port in hosts:
         # Una porta senza disco conta solo se c'e' qualcosa sul collegamento
         # (un disco tolto da Linux, o la PHY spenta), non le porte vuote
-        if not models and set(links.get(port) or {0: 1}) == {0}:
+        if not models and set(links.get(port) or {100: 1}) == {100}:
             continue
         notes = []
         # Linux (da 6.13) spegne l'LPM sulle porte "esterne": PxCMD.HPCP, o
@@ -594,7 +601,7 @@ def print_storage_usb_audio():
         if c:
             n = sum(c.values())
             notes.append("collegamento: " + ", ".join(
-                "%s %.0f%%" % (SATA_IPM.get(ipm, "IPM %d" % ipm), cnt * 100 / n)
+                "%s %.0f%%" % (sata_state_name(ipm), cnt * 100 / n)
                 for ipm, cnt in sorted(c.items(), key=lambda x: -x[1])))
         elif link_err:
             notes.append("stato del collegamento non letto: " + link_err)
