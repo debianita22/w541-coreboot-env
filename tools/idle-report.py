@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # idle-report.py - cosa tiene sveglio il portatile a riposo. Misura per N
-# secondi gli stati C dei core e del package e il consumo (RAPL e batteria),
-# poi riporta lo stato di risparmio energetico dei dispositivi che li
-# condizionano: ASPM, LTR e runtime PM sul PCIe, LPM del SATA, autosuspend
-# dell'USB, RC6, FBC e PSR della grafica Intel, interrupt al secondo.
+# secondi gli stati C dei core e del package, il consumo (RAPL e batteria) e
+# il traffico verso la RAM, poi riporta lo stato di risparmio energetico dei
+# dispositivi che li condizionano: ASPM, LTR e runtime PM sul PCIe, LPM del
+# SATA, autosuspend dell'USB, RC6, FBC e PSR della grafica Intel, interrupt
+# al secondo.
 #
 #   sudo python3 tools/idle-report.py                # 30 s
 #   sudo python3 tools/idle-report.py --seconds 60
@@ -16,6 +17,7 @@
 # Solo la libreria standard di Python.
 import argparse
 import glob
+import mmap
 import os
 import platform
 import re
@@ -45,6 +47,16 @@ HSW_PKG_LIMITS = ("PC0", "PC2", "PC3", "PC6", "PC7", "PC7s", "PC8", "PC9", "ness
 NO_PC8_MODELS = (0x3C, 0x46, 0x47)
 
 IRTL_UNIT_NS = (1, 32, 1024, 32768, 1048576, 33554432)
+
+# Contatori liberi del controller di memoria in MCHBAR, a 32 bit, in passi
+# di 64 byte: quelli che legge il driver uncore_imc di Linux, che pero' non
+# riconosce l'host bridge degli Haswell mobili (8086:0c04). Letture e
+# scritture in RAM, e le richieste divise per chi le fa: i core, la grafica
+# (con lo schermo) e l'I/O, cioe' il DMA dei dispositivi dietro il PCH.
+IMC_COUNTERS = (("letture", 0x5050), ("scritture", 0x5054),
+                ("core", 0x5044), ("grafica", 0x5040), ("I/O", 0x5048))
+# Sandy Bridge, Ivy Bridge, Haswell e Broadwell client: stessi indirizzi
+IMC_MODELS = (0x2A, 0x3A, 0x3C, 0x45, 0x46, 0x3D, 0x47)
 
 PCIE_TYPES = {0: "ep", 1: "ep", 4: "rp", 5: "up", 6: "dp", 9: "rciep", 10: "rcec"}
 ASPM_BITS = {0: "-", 1: "L0s", 2: "L1", 3: "L0sL1"}
@@ -88,6 +100,37 @@ class Msr:
             return struct.unpack("<Q", os.pread(fd, 8, reg))[0]
         except OSError:
             return None
+
+
+class Imc:
+    """contatori di traffico del controller di memoria, da /dev/mem"""
+
+    def __init__(self):
+        self.m, self.error = None, None
+        try:
+            with open("/sys/bus/pci/devices/0000:00:00.0/config", "rb") as f:
+                cfg = f.read(0x50)
+            if len(cfg) < 0x50 or struct.unpack_from("<H", cfg, 0)[0] != 0x8086:
+                self.error = "host bridge non Intel"
+                return
+            bar = struct.unpack_from("<Q", cfg, 0x48)[0]
+            if not bar & 1:
+                self.error = "MCHBAR non abilitato"
+                return
+            fd = os.open("/dev/mem", os.O_RDONLY | os.O_SYNC)
+            try:
+                self.m = mmap.mmap(fd, 0x1000, mmap.MAP_SHARED, mmap.PROT_READ,
+                                   offset=(bar & ~0x7FFF) + 0x5000)
+            finally:
+                os.close(fd)
+        except (OSError, ValueError, OverflowError) as e:
+            self.m, self.error = None, "%s (serve iomem=relaxed?)" % e
+
+    def read(self):
+        if self.m is None:
+            return None
+        # "@": una lettura intera della dword (memcpy), non byte per byte
+        return {name: struct.unpack_from("@I", self.m, off - 0x5000)[0] for name, off in IMC_COUNTERS}
 
 
 def cpu_model():
@@ -197,7 +240,7 @@ def rc6_files():
     return out
 
 
-def sample(msr, cpus, seconds):
+def sample(msr, cpus, seconds, imc=None):
     cores, pkgs = topology(cpus)
     pkg_cpu = sorted(pkgs.values())[0]
     unit = msr.read(pkg_cpu, MSR_RAPL_POWER_UNIT)
@@ -217,12 +260,21 @@ def sample(msr, cpus, seconds):
 
     idle0, irq0, procs0 = cpuidle_snapshot(cpus), irq_counts(), proc_times()
     a = snap()
+    # i contatori della memoria girano a 32 bit: letti ogni 5 s al massimo,
+    # non fanno il giro (256 GiB) tra una lettura e l'altra
+    mem_last = imc.read() if imc else None
+    mem = dict.fromkeys(mem_last, 0) if mem_last else None
     bat, end = [], a["t"] + seconds
     while time.monotonic() < end:
         time.sleep(min(5.0, max(0.0, end - time.monotonic())))
         p = battery_power()
         if p is not None:
             bat.append(p)
+        if mem is not None:
+            now = imc.read()
+            for k in mem:
+                mem[k] += (now[k] - mem_last[k]) % (1 << 32)
+            mem_last = now
     b = snap()
     idle1, irq1, procs1 = cpuidle_snapshot(cpus), irq_counts(), proc_times()
 
@@ -233,6 +285,8 @@ def sample(msr, cpus, seconds):
         return (y - x) % (1 << wrap)
 
     res = {"seconds": b["t"] - a["t"], "cores": [], "pkg": {}, "rapl": {}, "bat": bat}
+    if mem is not None:
+        res["mem"] = {k: v * 64 / res["seconds"] / 1e6 for k, v in mem.items()}
     tsc = d((pkg_cpu, MSR_TSC))
     for key in sorted(cores):
         threads = cores[key]
@@ -321,6 +375,15 @@ def print_cstates(msr, cpus, res, fam, model):
         print("potenza (RAPL): " + ", ".join("%s %.2f W" % (k, v) for k, v in res["rapl"].items()))
     if res["bat"]:
         print("batteria: %.1f W in media (%d letture)" % (sum(res["bat"]) / len(res["bat"]), len(res["bat"])))
+    if "mem" in res:
+        m = res["mem"]
+        # Senza FBC lo schermo legge tutta l'immagine a ogni quadro (1920x1080
+        # a 60 Hz: ~500 MB/s); a schermo spento, a riposo, pochi MB/s
+        print("traffico RAM (MB/s): letture %.1f, scritture %.1f; richieste dai core %.1f, "
+              "dalla grafica %.1f, dall'I/O %.1f" % (m["letture"], m["scritture"], m["core"],
+                                                     m["grafica"], m["I/O"]))
+    elif res.get("mem_error"):
+        print("traffico RAM: non letto, %s" % res["mem_error"])
     print("core   occupato    MHz     C3     C6     C7   (C1 e' il resto)")
     for r in res["cores"]:
         print("%4s     %s   %5s  %s  %s  %s" % (r["core"], pct(r["busy"]),
@@ -454,8 +517,10 @@ def print_storage_usb_audio():
         print("== Wi-Fi %s (%s): power save %s%s" % (ifname, drv, ps, "; " + params if params else ""))
     ps = rd("/sys/module/snd_hda_intel/parameters/power_save")
     if ps is not None:
-        print("== Audio HDA: power_save %s s, controller %s" % (
-            ps, rd("/sys/module/snd_hda_intel/parameters/power_save_controller", "?")))
+        # 0: i codec non si spengono mai, e il controller resta in D0
+        print("== Audio HDA: power_save %s s%s, controller %s" % (
+            ps, " (codec sempre accesi)" if ps == "0" else "",
+            rd("/sys/module/snd_hda_intel/parameters/power_save_controller", "?")))
     # Con lo schermo acceso la RAM va in self-refresh, e il package sotto PC2,
     # solo se i915 abilita i watermark LP; le loro latenze vengono da MCHBAR
     # SSKPD, che scrive il firmware (mrc.bin o la RAM init nativa)
@@ -495,8 +560,12 @@ def main():
     if msr.read(cpus[0], MSR_TSC) is None:
         print("== Stati C: MSR non leggibili (modulo msr?)")
     else:
+        imc = Imc() if fam == 6 and model in IMC_MODELS else None
         print("misura per %.0f s, non toccare il portatile..." % args.seconds, file=sys.stderr, flush=True)
-        print_cstates(msr, cpus, sample(msr, cpus, args.seconds), fam, model)
+        res = sample(msr, cpus, args.seconds, imc)
+        if imc is not None and imc.error:
+            res["mem_error"] = imc.error
+        print_cstates(msr, cpus, res, fam, model)
     print_pci()
     print_storage_usb_audio()
 

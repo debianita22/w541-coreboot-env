@@ -8,10 +8,12 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
 ## v1.3.2
 
 - `tools/idle-report.py`: package and core C-states, RAPL and battery
-  power at idle, and the power state of the devices that can keep the
-  processor awake: ASPM, LTR and runtime PM of each PCI device, SATA link
-  power management, USB autosuspend, graphics
+  power and memory traffic at idle, and the power state of the devices
+  that can keep the processor awake: ASPM, LTR and runtime PM of each PCI
+  device, SATA link power management, USB autosuspend, graphics
   ([docs/flashing.md](docs/flashing.md#power-at-idle)).
+- `tools/pm-regs.py`: the power management registers of processor,
+  System Agent and PCH, as the firmware left them.
 - `tools/update.py stage` goes from a release candidate to its release,
   or to a later candidate, without `--allow-older`.
 - Docs: the boot menu timeout is set in the setup menu, *Boot Manager* →

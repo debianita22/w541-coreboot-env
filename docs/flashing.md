@@ -371,11 +371,28 @@ sudo python3 tools/idle-report.py --seconds 60
 Run it with the laptop idle, on battery to get the battery discharge
 rate too. It prints the residency of the package C-states (PC2 to PC7)
 and of the core ones, the RAPL power of package, cores, graphics and
-memory, the cpuidle states in use, the busiest interrupts, and for each
-PCI device its D-state, runtime PM, ASPM, clock PM and LTR, then SATA
-link power management, USB autosuspend, HD audio power saving, and RC6,
-FBC and PSR of the Intel graphics. It prints no serial numbers, MAC
-addresses or UUIDs.
+memory, the traffic to the memory, the cpuidle states in use, the
+busiest interrupts, and for each PCI device its D-state, runtime PM,
+ASPM, clock PM and LTR, then SATA link power management, USB
+autosuspend, HD audio power saving, and RC6, FBC and PSR of the Intel
+graphics. It prints no serial numbers, MAC addresses or UUIDs.
+
+The memory traffic comes from the counters of the memory controller,
+which Linux's `uncore_imc` does not know on the W541 (host bridge
+`8086:0c04`): reads and writes, and the requests of the cores, of the
+graphics, which include the screen, and of I/O, the DMA of the devices
+behind the PCH. Like flashrom, reading them needs `iomem=relaxed`. With
+the screen off, an idle laptop moves a few MB/s; with the screen on and
+no framebuffer compression, the screen alone reads the whole image at
+every refresh, about 500 MB/s at 1920x1080 and 60 Hz.
+
+`tools/pm-regs.py` prints the power management registers of processor,
+System Agent and PCH as the firmware left them, to compare two firmware
+builds; it also needs `iomem=relaxed`:
+
+```sh
+sudo python3 tools/pm-regs.py > pm-regs.txt
+```
 
 Things that keep the power up on the W541:
 - The NVIDIA GPU, with *NVIDIA discrete GPU* on, draws power whenever it
@@ -392,6 +409,8 @@ Things that keep the power up on the W541:
 - SATA link power management lets the link sleep; the kernel leaves it
   off for drives known to misbehave with it (`applying quirks: nolpm` in
   `dmesg`).
+- `snd_hda_intel` with `power_save` 0 never powers the codecs down, so
+  the HD audio controller `00:1b.0` stays in D0.
 
 ## Diagnosing a hang
 
