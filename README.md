@@ -229,8 +229,11 @@ v1.0.0`) or with *Run workflow* and a version. It needs the repository secret
 `VBOOT_SIGNING_KEY`, the one that signs the RW slots
 ([keys/README.md](keys/README.md)); test builds go without them (vboot's
 test keys). Versions with a hyphen
-(`v1.1.0-rc1`) or the *prerelease* box give two pre-releases. A pre-release
-that works on the laptop becomes a release without rebuilding it:
+(`v1.1.0-rc1`) or the *prerelease* box give two pre-releases. The notes of
+both include the section of [`CHANGELOG.md`](CHANGELOG.md) for the version
+(`## v1.1.0` for `v1.1.0-rc1` too), and a release build stops at once without it.
+A pre-release that works on the laptop becomes a release without
+rebuilding it:
 
 ```sh
 gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --latest
@@ -240,11 +243,12 @@ gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --late
 
 | Path | Contents |
 |---|---|
+| `CHANGELOG.md` | what changes in each release |
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
 | `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `logo.py`, the logo as an LVGL image or a PNG |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power and device power states at idle; `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |

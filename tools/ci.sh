@@ -81,6 +81,15 @@ latest_tag() {
 	fi
 }
 
+# La sezione "## vX.Y.Z" di CHANGELOG.md, senza le righe vuote ai bordi; una
+# release candidate prende quella della versione a cui porta
+changes_of() {
+	local v="${1%%-*}"
+	[ -f "${O}/CHANGELOG.md" ] || return 0
+	awk -v h="## ${v}" '$0 == h { on = 1; next } /^## / { on = 0 } on' "${O}/CHANGELOG.md" \
+		| sed -e '/./,$!d' | sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}'
+}
+
 # $1 e' una versione piu' alta di $2? sort -V, col trattino come ~ perche'
 # v1.1.0-rc1 venga prima di v1.1.0. Il -mrc dei tag si toglie prima.
 newer() {
@@ -115,6 +124,8 @@ cmd_version() {
 			on_default_branch "${GITHUB_SHA:-HEAD}" \
 				|| fail "Versione" "${version}: il commit non e' su ${DEFAULT_BRANCH}; da altri rami solo pre-release"
 		fi
+		[ -n "$(changes_of "${version}")" ] \
+			|| fail "Versione" "CHANGELOG.md non ha la sezione ## ${version%%-*}: le note della release la riportano"
 		for v in "${VARIANTS[@]}"; do
 			t="${version}-${v}"
 			if [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]; then
@@ -183,6 +194,19 @@ so this variant is always published as a pre-release. If the laptop does not
 come up after flashing it (black screen, no boot), recovery needs an external
 programmer: see [Recovery](https://github.com/${repo}/blob/main/docs/flashing.md#recovery).
 EOF
+	fi
+	local changes
+	changes="$(changes_of "${version}")"
+	if [ -n "${changes}" ]; then
+		echo
+		if [ "${version%%-*}" = "${version}" ]; then
+			echo "**What's new in ${version}** ([CHANGELOG.md](https://github.com/${repo}/blob/main/CHANGELOG.md)):"
+		else
+			echo "**What's new in ${version%%-*}**, so far ([CHANGELOG.md](https://github.com/${repo}/blob/main/CHANGELOG.md)):"
+		fi
+		echo
+		# i link relativi del file, assoluti nella pagina della release
+		printf '%s\n' "${changes}" | sed -E "s#\]\(((docs|patches|tools|keys|configs|blobs|assets)/[^)]*|[A-Za-z0-9_.-]+\.md(\#[^)]*)?)\)#](https://github.com/${repo}/blob/main/\1)#g"
 	fi
 	if [ "${pre}" = yes ] && [ "${v}" = mrc ]; then
 		echo
