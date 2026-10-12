@@ -16,3 +16,4 @@
 0016-UefiPayloadPkg-FmpDeviceSmmLib-Print-the-manifest-en.patch
 0017-UefiPayloadPkg-Name-the-firmware-ouroBIOS.patch
 0018-UefiPayloadPkg-Build-the-ESRT-from-FmpDxe-at-every-b.patch
+0019-SecurityPkg-TcgDxe-Log-into-the-bootloader-s-TCPA-ta.patch

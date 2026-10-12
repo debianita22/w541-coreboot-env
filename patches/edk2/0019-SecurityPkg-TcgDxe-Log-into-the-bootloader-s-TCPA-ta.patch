@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Mon, 12 Oct 2026 16:09:31 +0200
+Subject: [PATCH] SecurityPkg/TcgDxe: Log into the bootloader's TCPA table as a
+ payload
+
+As a payload (UefiPayloadPkg on coreboot), DXE gets the ACPI tables of
+the bootloader through the gUniversalPayloadAcpiTableGuid HOB and installs
+them as they are; with a TPM 1.2, coreboot's include a TCPA table, which
+is also how the payload learns that the TPM is there. TcgDxe then adds a
+second TCPA table with a log area of its own. An OS reads the event log
+of the first TCPA table it finds (Linux takes the first instance), so it
+reads the bootloader's log, empty unless the bootloader measured
+something, and never the events measured here.
+
+When the bootloader published a client TCPA table, log after the events
+already in its log area, found up to an entry all zero (an area the
+bootloader cleared) or with PCR index 0xFFFFFFFF (one filled with 0xFF),
+and add no second table.
+
+TEST=QEMU q35 with coreboot (its own ACPI tables) and swtpm as a TPM 1.2:
+before, the root table lists coreboot's TCPA with no events, then this
+driver's with the six PCR 7 events of the Secure Boot variables; now
+coreboot's only, with those six events in its log area.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ SecurityPkg/Tcg/TcgDxe/TcgDxe.c   | 147 +++++++++++++++++++++++++++++-
+ SecurityPkg/Tcg/TcgDxe/TcgDxe.inf |   1 +
+ 2 files changed, 147 insertions(+), 1 deletion(-)
+
+diff --git a/SecurityPkg/Tcg/TcgDxe/TcgDxe.c b/SecurityPkg/Tcg/TcgDxe/TcgDxe.c
+index ee6c627303..7657f59991 100644
+--- a/SecurityPkg/Tcg/TcgDxe/TcgDxe.c
++++ b/SecurityPkg/Tcg/TcgDxe/TcgDxe.c
+@@ -26,6 +26,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Guid/EventGroup.h>
+ #include <Guid/EventExitBootServiceFailed.h>
+ #include <Guid/TpmInstance.h>
++#include <UniversalPayload/AcpiTable.h>
+ 
+ #include <Protocol/DevicePath.h>
+ #include <Protocol/TcgService.h>
+@@ -119,6 +120,12 @@ EFI_TCG_SERVER_ACPI_TABLE  mTcgServerAcpiTemplate = {
+ UINTN   mBootAttempts  = 0;
+ CHAR16  mBootVarName[] = L"BootOrder";
+ 
++//
++// The TCPA table of the bootloader, when this runs as its payload
++// (FindBootloaderTcpa)
++//
++EFI_TCG_CLIENT_ACPI_TABLE  *mBootloaderTcpa = NULL;
++
+ /**
+   Get All processors EFI_CPU_LOCATION in system. LocationBuf is allocated inside the function
+   Caller is responsible to free LocationBuf.
+@@ -695,6 +702,110 @@ TCG_DXE_DATA  mTcgDxeData = {
+   NULL
+ };
+ 
++/**
++  Find the TCPA table of the bootloader, when DXE runs as a payload (of
++  coreboot, for example) that installs the ACPI tables of the bootloader as
++  they are.
++
++  An OS reads the event log of the first TCPA table it finds: a second table
++  with a log of its own is ignored, and the log of the first misses the events
++  measured here.
++
++  @return The client TCPA table of the bootloader, or NULL if there is none.
++**/
++STATIC
++EFI_TCG_CLIENT_ACPI_TABLE *
++FindBootloaderTcpa (
++  VOID
++  )
++{
++  EFI_HOB_GUID_TYPE                             *GuidHob;
++  UNIVERSAL_PAYLOAD_ACPI_TABLE                  *AcpiTableHob;
++  EFI_ACPI_3_0_ROOT_SYSTEM_DESCRIPTION_POINTER  *Rsdp;
++  EFI_ACPI_DESCRIPTION_HEADER                   *Sdt;
++  EFI_ACPI_DESCRIPTION_HEADER                   *Table;
++  UINTN                                         EntrySize;
++  UINTN                                         Count;
++  UINTN                                         Index;
++  UINT64                                        Address;
++
++  GuidHob = GetFirstGuidHob (&gUniversalPayloadAcpiTableGuid);
++  if ((GuidHob == NULL) || (GET_GUID_HOB_DATA_SIZE (GuidHob) < sizeof (UNIVERSAL_PAYLOAD_ACPI_TABLE))) {
++    return NULL;
++  }
++
++  AcpiTableHob = (UNIVERSAL_PAYLOAD_ACPI_TABLE *)GET_GUID_HOB_DATA (GuidHob);
++  Rsdp         = (EFI_ACPI_3_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)(UINTN)AcpiTableHob->Rsdp;
++  if (Rsdp == NULL) {
++    return NULL;
++  }
++
++  if ((Rsdp->Revision >= EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER_REVISION) && (Rsdp->XsdtAddress != 0)) {
++    Sdt       = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Rsdp->XsdtAddress;
++    EntrySize = sizeof (UINT64);
++  } else {
++    Sdt       = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Rsdp->RsdtAddress;
++    EntrySize = sizeof (UINT32);
++  }
++
++  if ((Sdt == NULL) || (Sdt->Length < sizeof (EFI_ACPI_DESCRIPTION_HEADER))) {
++    return NULL;
++  }
++
++  Count = (Sdt->Length - sizeof (EFI_ACPI_DESCRIPTION_HEADER)) / EntrySize;
++  for (Index = 0; Index < Count; Index++) {
++    Address = 0;
++    CopyMem (&Address, (UINT8 *)(Sdt + 1) + Index * EntrySize, EntrySize);
++    Table = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Address;
++    if ((Table != NULL) &&
++        (Table->Signature == EFI_ACPI_3_0_TRUSTED_COMPUTING_PLATFORM_ALLIANCE_CAPABILITIES_TABLE_SIGNATURE) &&
++        (Table->Length >= sizeof (EFI_TCG_CLIENT_ACPI_TABLE)) &&
++        (((EFI_TCG_CLIENT_ACPI_TABLE *)Table)->PlatformClass == TCG_PLATFORM_TYPE_CLIENT))
++    {
++      return (EFI_TCG_CLIENT_ACPI_TABLE *)Table;
++    }
++  }
++
++  return NULL;
++}
++
++/**
++  The size of the events already in a TCG 1.2 event log: up to an entry all
++  zero (a log area that the bootloader cleared) or with PCR index 0xFFFFFFFF
++  (one filled with 0xFF), or to the first entry that does not fit.
++
++  @param[in]  Log   The log area.
++  @param[in]  Max   Its size.
++
++  @return The size in bytes of the events in the log.
++**/
++STATIC
++UINTN
++GetEventLogUsedSize (
++  IN UINT8  *Log,
++  IN UINTN  Max
++  )
++{
++  TCG_PCR_EVENT_HDR  *Hdr;
++  UINTN              Used;
++
++  Used = 0;
++  while (Max - Used >= sizeof (TCG_PCR_EVENT_HDR)) {
++    Hdr = (TCG_PCR_EVENT_HDR *)(Log + Used);
++    if ((Hdr->PCRIndex == MAX_UINT32) || ((Hdr->EventType == 0) && (Hdr->EventSize == 0))) {
++      break;
++    }
++
++    if (Hdr->EventSize > Max - Used - sizeof (TCG_PCR_EVENT_HDR)) {
++      break;
++    }
++
++    Used += sizeof (TCG_PCR_EVENT_HDR) + Hdr->EventSize;
++  }
++
++  return Used;
++}
++
+ /**
+   Initialize the Event Log and log events passed from the PEI phase.
+ 
+@@ -713,7 +824,29 @@ SetupEventLog (
+   EFI_PEI_HOB_POINTERS  GuidHob;
+   EFI_PHYSICAL_ADDRESS  Lasa;
+ 
+-  if (PcdGet8 (PcdTpmPlatformClass) == TCG_PLATFORM_TYPE_CLIENT) {
++  Status = EFI_SUCCESS;
++  if ((PcdGet8 (PcdTpmPlatformClass) == TCG_PLATFORM_TYPE_CLIENT) &&
++      (mBootloaderTcpa != NULL) && (mBootloaderTcpa->Lasa != 0) &&
++      (mBootloaderTcpa->Laml >= sizeof (TCG_PCR_EVENT_HDR)))
++  {
++    //
++    // Log after the events in the log of the bootloader's TCPA table, the
++    // one the OS reads (InstallAcpiTable() adds no second table).
++    //
++    mTcgClientAcpiTemplate.Lasa = mBootloaderTcpa->Lasa;
++    mTcgClientAcpiTemplate.Laml = mBootloaderTcpa->Laml;
++    mTcgDxeData.EventLogSize    = GetEventLogUsedSize (
++                                    (UINT8 *)(UINTN)mBootloaderTcpa->Lasa,
++                                    mBootloaderTcpa->Laml
++                                    );
++    DEBUG ((
++      DEBUG_INFO,
++      "TcgDxe: event log of the bootloader's TCPA table at 0x%lx, %u of %u bytes used\n",
++      mBootloaderTcpa->Lasa,
++      (UINT32)mTcgDxeData.EventLogSize,
++      mBootloaderTcpa->Laml
++      ));
++  } else if (PcdGet8 (PcdTpmPlatformClass) == TCG_PLATFORM_TYPE_CLIENT) {
+     Lasa = mTcgClientAcpiTemplate.Lasa;
+ 
+     Status = gBS->AllocatePages (
+@@ -1220,6 +1353,14 @@ InstallAcpiTable (
+   }
+ 
+   if (PcdGet8 (PcdTpmPlatformClass) == TCG_PLATFORM_TYPE_CLIENT) {
++    if (mBootloaderTcpa != NULL) {
++      //
++      // The OS reads the bootloader's table, whose log has the events
++      // measured here (SetupEventLog()): a second table would be ignored.
++      //
++      return;
++    }
++
+     CopyMem (mTcgClientAcpiTemplate.Header.OemId, PcdGetPtr (PcdAcpiDefaultOemId), sizeof (mTcgClientAcpiTemplate.Header.OemId));
+     OemTableId = PcdGet64 (PcdAcpiDefaultOemTableId);
+     CopyMem (&mTcgClientAcpiTemplate.Header.OemTableId, &OemTableId, sizeof (UINT64));
+@@ -1393,6 +1534,10 @@ DriverEntry (
+     return EFI_DEVICE_ERROR;
+   }
+ 
++  if (PcdGet8 (PcdTpmPlatformClass) == TCG_PLATFORM_TYPE_CLIENT) {
++    mBootloaderTcpa = FindBootloaderTcpa ();
++  }
++
+   Status = Tpm12RequestUseTpm ();
+   if (EFI_ERROR (Status)) {
+     DEBUG ((DEBUG_ERROR, "TPM not detected!\n"));
+diff --git a/SecurityPkg/Tcg/TcgDxe/TcgDxe.inf b/SecurityPkg/Tcg/TcgDxe/TcgDxe.inf
+index c93b377b34..2eb1b01b9e 100644
+--- a/SecurityPkg/Tcg/TcgDxe/TcgDxe.inf
++++ b/SecurityPkg/Tcg/TcgDxe/TcgDxe.inf
+@@ -55,6 +55,7 @@
+   gEfiEventExitBootServicesGuid                      ## CONSUMES            ## Event
+   gEventExitBootServicesFailedGuid                   ## SOMETIMES_CONSUMES  ## Event
+   gEfiTpmDeviceInstanceTpm12Guid                     ## PRODUCES            ## GUID       # TPM device identifier
++  gUniversalPayloadAcpiTableGuid                     ## SOMETIMES_CONSUMES  ## HOB
+ 
+ [Protocols]
+   gEfiTcgProtocolGuid                                ## PRODUCES
+-- 
+2.43.0
+
