@@ -44,7 +44,8 @@
 #      rifiuta le due volte, l'altro slot resta quello di prima
 #  10. RW_NVRAM pieno prima di una capsula: cancellato e riscritto
 #      dall'inizio, la richiesta di provare il nuovo slot c'e'
-#  11. corrente tolta a meta' della scrittura di uno slot: vboot resta sullo
+#  11. corrente tolta a meta' della scrittura di uno slot (riempito prima
+#      di 0x5A, cosi' la capsula ne riscrive ogni blocco): vboot resta sullo
 #      slot di prima; la stessa capsula, preparata di nuovo, lo finisce
 #  12. la capsula su una chiavetta USB invece che nell'ESP
 # A ogni avvio fino al payload, l'ESRT che il payload stampa (build DEBUG):
@@ -243,6 +244,16 @@ class Flash:
 ESRT_ROW = re.compile(r"\| ([0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}) \| (\S[^|]*?)\s*\|"
                       r" 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+)"
                       r" \| 0x\s*([0-9A-F]+) \|")
+# L'avanzamento che il payload scrive sulla seriale mentre applica una
+# capsula, in percento dell'immagine (FmpDeviceSmmLib)
+PROGRESS_RE = re.compile(r"Update Progress - +(\d+)%")
+
+
+def progress(text):
+    """L'avanzamento piu' alto nella seriale, -1 se non c'e'."""
+    return max((int(p) for p in PROGRESS_RE.findall(text)), default=-1)
+
+
 TRACE_RE = re.compile(r"^(pflash_data_write(?:_block)?|pflash_write_block_erase) \S+ .*?offset:0x([0-9a-f]+)"
                       r"(?: size:(\d+)| bytes:0x([0-9a-f]+))", re.M)
 
@@ -331,8 +342,9 @@ class UpdateTest:
     def boot(self, tag, trace=None, cut_at=None):
         """Un avvio fino al payload che, pubblicato l'ESRT e fallito l'avvio
         dal disco, aspetta un tasto ("booted"), fino a un reset (QEMU esce:
-        "reset") o, con cut_at, fino alla riga della seriale dopo cui si
-        toglie la corrente ("cut"). Torna (come e' finito, seriale)."""
+        "reset") o, con cut_at (una funzione della seriale), finche' e' vera:
+        allora si toglie la corrente ("cut"). Torna (come e' finito,
+        seriale)."""
         extra = self.esp.qemu_args() + (self.usb.qemu_args() if self.usb else [])
         if trace:
             # i byte scritti uno a uno e quelli del buffer di scrittura (0xE8),
@@ -346,7 +358,7 @@ class UpdateTest:
             if self.m.proc.poll() is not None:
                 self.m.halt()
                 return "reset", self.m.serial_text()
-            if cut_at and cut_at in text:
+            if cut_at and cut_at(text):
                 self.m.cut()
                 return "cut", self.m.serial_text()
             if self.IDLE in text:
@@ -668,7 +680,7 @@ class UpdateTest:
         self.capsule_boot("7-capsula-A", "A", "B")
         for i, left in ((1, 1), (2, 0)):
             tag = "7-interrotto-%d" % i
-            how, text = self.boot(tag, cut_at="Slot A is selected")
+            how, text = self.boot(tag, cut_at=lambda t: "Slot A is selected" in t)
             self.expect(tag, how, text, "cut")
             st = f.nv()
             if SLOTS[st["tried"]] != "A" or st["result"] != NV_TRYING or st["try_count"] != left:
@@ -725,12 +737,17 @@ class UpdateTest:
         # c'e', vboot resta sullo slot di prima (A, finiti i suoi tentativi:
         # se lo stesse ancora provando, al riavvio passerebbe all'altro, a
         # meta', e ne tornerebbe con un reset in piu'). Preparata di nuovo,
-        # la capsula finisce lo slot. La capsula C, che nello slot B (con B)
-        # cambia quasi tutti i blocchi: c'e' tempo per interromperla
+        # la capsula finisce lo slot. Gli slot delle ROM differiscono in pochi
+        # blocchi (il payload e' lo stesso), che una macchina veloce scrive in
+        # meno del giro di controllo: lo slot B prima riempito di 0x5A, cosi'
+        # la capsula C ne riscrive ogni blocco. B e' tra il 50% e il 92%
+        # dell'immagine: la corrente si toglie dal 70%, a meta' di B
+        f.fill("RW_SECTION_B", 0x5A)
         self.stage("C")
         before = f.data()
-        how, text = self.boot("11-capsula-C-interrotta", cut_at="Update Progress - 50%")
+        how, text = self.boot("11-capsula-C-interrotta", cut_at=lambda t: progress(t) >= 70)
         self.expect("11-capsula-C-interrotta", how, text, "cut")
+        cut = progress(text)
         after = f.data()
         image = self.caps["C"]["image"]
         if f.region("WP_RO", after) != self.ro or f.region("RW_SECTION_A", after) != f.region("RW_SECTION_A", before):
@@ -749,8 +766,9 @@ class UpdateTest:
         how, text = self.boot("11-B")
         self.expect("11-B", how, text, "booted")
         self.confirmed("11-B", text, "B", "C", trying=True, last=(v["C"], 0))
-        self.ok("corrente tolta a meta' dello slot B: vboot resta su A (slot B a meta', nessuna richiesta); "
-                "la stessa capsula, preparata di nuovo, finisce B, che vboot prova e il payload conferma")
+        self.ok("corrente tolta a meta' dello slot B (al %d%%): vboot resta su A (slot B a meta', nessuna "
+                "richiesta); la stessa capsula, preparata di nuovo, finisce B, che vboot prova e il payload "
+                "conferma" % cut)
 
         # 12. la capsula su una chiavetta USB, come la prepara chi aggiorna
         # dal setup (Firmware Update, Update from a USB drive)

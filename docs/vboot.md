@@ -240,11 +240,12 @@ at every reset:
 - `RW_NVRAM` full (4096 records) before capsule C: it is erased and written
   again from the start, the request is the second record; vboot tries C in
   slot A for two boots and the payload confirms it;
-- power cut halfway through a slot (capsule C into slot B, QEMU killed at
-  *Update Progress - 50%*): the read-only part and slot A unchanged, slot B
-  half written, no request in `RW_NVRAM`, so vboot boots A again; the
-  capsule, already gone from the ESP, staged again finishes slot B, which
-  vboot tries and the payload confirms;
+- power cut halfway through a slot: slot B first filled with a pattern, so
+  that capsule C rewrites every block of it, then QEMU killed once the
+  progress reaches 70% of the image, halfway through slot B: the read-only
+  part and slot A unchanged, slot B half written, no request in `RW_NVRAM`,
+  so vboot boots A again; the capsule, already gone from the ESP, staged
+  again finishes slot B, which vboot tries and the payload confirms;
 - capsule A on a USB drive instead of the ESP (`edk2/0012`, what *Update
   from a USB drive* of the setup prepares): slot A written, the capsule
   removed from the drive;
