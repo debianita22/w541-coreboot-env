@@ -1229,8 +1229,10 @@ def var_store(region):
         out.append({"off": off, "state": st, "name": name, "guid": guid, "attrs": attrs, "size": dsize,
                     "data": off + hsize + nsize})
         off = (off + hsize + nsize + dsize + 3) & ~3
+    # next: dove va la prossima variabile (tools/qemu-update.py ve la scrive,
+    # nel flash di QEMU)
     info = {"fv_len": fv_len, "store_size": size, "format": fmt, "health": state, "auth": auth,
-            "used": off - start, "free": end - off}
+            "used": off - start, "free": end - off, "next": off}
     return out, info
 
 

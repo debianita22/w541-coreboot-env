@@ -28,6 +28,14 @@
 #                  (EDK2 non si ricompila), avviata in QEMU da
 #                  tools/qemu-smoke.py: il payload parte, il setup si apre e
 #                  risponde ai tasti. Schermate e seriale in WORK/smoke-<variante>
+#   update-test    la prova dell'aggiornamento con le capsule (vboot A/B) in
+#                  QEMU q35, tools/qemu-update.py: un payload EDK2 DEBUG con
+#                  le patch del progetto, che si fida di una chiave creata per
+#                  la prova; tre ROM per q35 con vboot a due slot (A, B, C),
+#                  costruite in un worktree dell'albero con
+#                  patches/test/q35-update-test.patch; le loro capsule, fatte
+#                  come quelle delle release. Le ROM del W541 non c'entrano.
+#                  Seriale in WORK/update-test/out
 #   keys           controlla le chiavi di firma dell'ambiente (CAPSULE_SIGNING_KEY,
 #                  VBOOT_SIGNING_KEY) senza build: con --release devono esserci
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
@@ -107,6 +115,13 @@ TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
 # dati di vboot (li aggiorna il payload), IFD, GbE, ME.
 CAPSULE_REGIONS=(RW_MRC_CACHE RW_SECTION_A RW_SECTION_B)
 CAPSULE_CERT=keys/capsule-signing.pem
+# La prova dell'aggiornamento (update-test): il GUID dell'FMP delle ROM di
+# prova, che non e' quello di una variante; le ROM A, B e C con le loro
+# versioni e la minima; la patch per q35, che va solo nel worktree della prova
+UPDATE_TEST_GUID="b195f75a-8f95-4282-950c-ee9dd1099ec9"
+UPDATE_TEST_ROMS=("A 0x01000000" "B 0x01010000" "C 0x01020000")
+UPDATE_TEST_LSV=0x01000000
+UPDATE_TEST_PATCH=patches/test/q35-update-test.patch
 # Le chiavi pubbliche di vboot (tools/vboot-keys.sh), in w541/vboot/
 # dell'albero. La chiave privata della chiave dati (firmware_data_key.vbprivk)
 # arriva solo da VBOOT_SIGNING_KEY (base64) e sta nell'albero solo durante le
@@ -167,7 +182,7 @@ while [ $# -gt 0 ]; do
 		--dist)      DIST="$(realpath -m "${2:?--dist DIR}")"; shift 2 ;;
 		--jobs)      JOBS="${2:?--jobs N}"; shift 2 ;;
 		-h|--help)   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-		prepare|toolchain|config|roms|smoke|keys|toolchain-key) CMDS+=("$1"); shift ;;
+		prepare|toolchain|config|roms|smoke|update-test|keys|toolchain-key) CMDS+=("$1"); shift ;;
 		*) die "argomento sconosciuto: $1 (tools/build.sh --help)" ;;
 	esac
 done
@@ -230,9 +245,22 @@ need_prepared() {
 
 # make nell'albero, con la cartella di build della variante $1
 mk() {
-	local v="$1"; shift
-	make -C "${TREE}" obj="build-${v}" DOTCONFIG="build-${v}/.config" \
+	mk_in "${TREE}" "$@"
+}
+# make nell'albero $1 (o nel worktree di update-test), cartella di build $2
+mk_in() {
+	local t="$1" v="$2"; shift 2
+	make -C "${t}" obj="build-${v}" DOTCONFIG="build-${v}/.config" \
 		UPDATED_SUBMODULES=1 KERNELVERSION="${COREBOOT_DESCRIBE}" "$@"
+}
+# Ogni riga del defconfig della cartella di build $1 nel suo .config: un
+# simbolo con le dipendenze non soddisfatte sparisce senza errori
+defconfig_kept() {
+	local line miss=0
+	while IFS= read -r line; do
+		grep -qxF -- "${line}" "$1/.config" || { echo "  NO  ${line}"; miss=1; }
+	done < "$1/defconfig"
+	return "${miss}"
 }
 
 # Il nome della variante $1 con le patch opzionali: mrc, mrc+test-peg-afe
@@ -592,11 +620,31 @@ sys.exit(0 if der and pcd[:4] == len(der).to_bytes(4, "big") and pcd[4:4 + len(d
 	echo "  ok  ${v}: FmpDxe si fida solo di ${CAPSULE_CERT}"
 }
 
+# La capsula della ROM $1 in $2, come quelle delle release: il manifest RMAP
+# delle CAPSULE_REGIONS (le regioni che il payload puo' riscrivere) e la
+# firma PKCS#7 di GenerateCapsule di EDK2. $3 GUID, $4 versione, $5 minima,
+# $6 la chiave privata con il suo certificato in un file, $7 il certificato.
+# Il file intermedio sta accanto alla chiave. La usa anche update-test
+generate_capsule() {
+	local rom="$1" out="$2" guid="$3" fwv="$4" lsv="$5" signer="$6" cert="$7" r image rc=0 regions=()
+	for r in "${CAPSULE_REGIONS[@]}"; do regions+=(-r "${r}"); done
+	image="$(dirname "${signer}")/image.bin"
+	python3 "${EDK2_DIR}/UefiPayloadPkg/Tools/AppendRmapManifest.py" -o "${image}" \
+		"${regions[@]}" "${rom}" > /dev/null || return 1
+	PYTHONPATH="${EDK2_DIR}/BaseTools/Source/Python" python3 \
+		"${EDK2_DIR}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e -o "${out}" \
+		--guid "${guid}" --fw-version "${fwv}" --lsv "${lsv}" --capflag PersistAcrossReset \
+		--signer-private-cert "${signer}" --other-public-cert "${cert}" --trusted-public-cert "${cert}" \
+		"${image}" || rc=1
+	rm -f "${image}"
+	return "${rc}"
+}
+
 # La capsula della variante $1 in dist/, firmata con CAPSULE_SIGNING_KEY e
 # ricontrollata con tools/update.py info (GUID, versioni, regioni, immagine
 # uguale alla ROM, firma valida per keys/capsule-signing.pem)
 make_capsule() {
-	local v="$1" n guid lsv fwv tmp r f date repo regions=()
+	local v="$1" n guid lsv fwv tmp f date repo
 	n="${DIST}/$(romname "${v}")"
 	guid="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_GUID="\(.*\)"$/\1/p' "${TREE}/build-${v}/.config")"
 	lsv="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_LSV=\(0x[0-9a-fA-F]*\)$/\1/p' "${TREE}/build-${v}/.config")"
@@ -616,15 +664,8 @@ make_capsule() {
 			"$(openssl x509 -in "${O}/${CAPSULE_CERT}" -noout -pubkey)" ] \
 			|| die "CAPSULE_SIGNING_KEY non e' la chiave di ${CAPSULE_CERT}"
 		cat "${tmp}/key.pem" "${O}/${CAPSULE_CERT}" > "${tmp}/signer.pem"
-		for r in "${CAPSULE_REGIONS[@]}"; do regions+=(-r "${r}"); done
-		python3 "${EDK2_DIR}/UefiPayloadPkg/Tools/AppendRmapManifest.py" -o "${tmp}/image.bin" \
-			"${regions[@]}" "${n}.rom" > /dev/null || die "${v}: AppendRmapManifest.py fallito"
-		PYTHONPATH="${EDK2_DIR}/BaseTools/Source/Python" python3 \
-			"${EDK2_DIR}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e -o "${n}.cap" \
-			--guid "${guid}" --fw-version "${fwv}" --lsv "${lsv}" --capflag PersistAcrossReset \
-			--signer-private-cert "${tmp}/signer.pem" \
-			--other-public-cert "${O}/${CAPSULE_CERT}" --trusted-public-cert "${O}/${CAPSULE_CERT}" \
-			"${tmp}/image.bin" || die "${v}: GenerateCapsule fallito"
+		generate_capsule "${n}.rom" "${n}.cap" "${guid}" "${fwv}" "${lsv}" "${tmp}/signer.pem" \
+			"${O}/${CAPSULE_CERT}" || die "${v}: capsula non fatta (AppendRmapManifest.py o GenerateCapsule)"
 		# il pacchetto fwupd: la capsula, il metainfo e la loro firma
 		mkdir "${tmp}/cab"
 		cp "${n}.cap" "${tmp}/cab/firmware.bin"
@@ -830,7 +871,7 @@ cmd_smoke() {
 		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
 		export PATH="${XGCC}/bin:${PATH}"
 	fi
-	local v q fd guid lsv line miss
+	local v q fd guid lsv
 	for v in "${VARIANTS[@]}"; do
 		q="q35-${v}"
 		fd="${TREE}/build-${v}/UEFIPAYLOAD.fd"
@@ -860,11 +901,7 @@ cmd_smoke() {
 		} > "${TREE}/build-${q}/defconfig"
 		mk "${q}" defconfig KBUILD_DEFCONFIG="build-${q}/defconfig" > "${TREE}/build-${q}/defconfig.log" 2>&1 \
 			|| { cat "${TREE}/build-${q}/defconfig.log"; die "smoke ${v}: make defconfig fallito"; }
-		miss=0
-		while IFS= read -r line; do
-			grep -qxF -- "${line}" "${TREE}/build-${q}/.config" || { echo "  NO  ${line}"; miss=1; }
-		done < "${TREE}/build-${q}/defconfig"
-		[ "${miss}" = 0 ] || die "smoke ${v}: il .config di q35 non ha tutto il defconfig"
+		defconfig_kept "${TREE}/build-${q}" || die "smoke ${v}: il .config di q35 non ha tutto il defconfig"
 		if ! mk "${q}" -j"${JOBS}" > "${TREE}/build-${q}/make.log" 2>&1; then
 			grep -n -i -B2 -A6 'error' "${TREE}/build-${q}/make.log" | tail -n 40
 			die "smoke ${v}: build per q35 fallita (build-${q}/make.log nell'albero)"
@@ -875,6 +912,130 @@ cmd_smoke() {
 	done
 }
 
+# Le righe di defconfig comuni al payload e alle ROM della prova
+# dell'aggiornamento: q35, SMMSTORE come sul W541, l'ESRT e le capsule su
+# disco con il GUID di prova
+update_test_q35() {
+	printf '%s\n' "CONFIG_VENDOR_EMULATION=y" "CONFIG_BOARD_EMULATION_QEMU_X86_Q35=y" \
+		"CONFIG_CPU_QEMU_X86_TSEG_SMM=y" "CONFIG_SMMSTORE=y" "CONFIG_SMMSTORE_SIZE=0x80000" \
+		"CONFIG_DRIVERS_EFI_VARIABLE_STORE=y" "CONFIG_DRIVERS_EFI_FW_INFO=y" \
+		"CONFIG_DRIVERS_EFI_MAIN_FW_GUID=\"${UPDATE_TEST_GUID}\"" \
+		"CONFIG_DRIVERS_EFI_MAIN_FW_LSV=${UPDATE_TEST_LSV}" \
+		"CONFIG_DRIVERS_EFI_UPDATE_CAPSULES=y" "CONFIG_DRIVERS_EFI_CAPSULE_ON_DISK_SUPPORT=y"
+	if [ "${TOOLCHAIN}" = host ]; then echo "CONFIG_ANY_TOOLCHAIN=y"; fi
+}
+
+# La prova dell'aggiornamento. Le ROM del W541 e le chiavi delle release non
+# c'entrano: la chiave RSA delle capsule di prova nasce qui e si cancella
+# appena le ha firmate. Il payload (EDK2 con le patch del progetto e le
+# opzioni EDK2 del defconfig mrc, ma DEBUG e per q35) si costruisce in
+# build-update-test dell'albero; le ROM di q35 con vboot in un worktree
+# dell'albero con la patch di prova, che l'albero delle ROM non vede mai
+cmd_update_test() {
+	need_prepared
+	local t ut ab b d fd rom n ver
+	for t in qemu-system-x86_64 mformat mcopy mdir mmd openssl; do
+		command -v "${t}" > /dev/null \
+			|| die "update-test: serve ${t} (Debian/Ubuntu: apt install qemu-system-x86 mtools openssl)"
+	done
+	if [ "${TOOLCHAIN}" = crossgcc ]; then
+		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
+		export PATH="${XGCC}/bin:${PATH}"
+	fi
+	ut="${WORK}/update-test"
+	ab="${WORK}/coreboot-update-test"
+	rm -rf "${ut:?}"
+	mkdir -p "${ut}"
+
+	say "update-test: la chiave delle capsule di prova"
+	(
+		umask 077
+		printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = ext' 'prompt = no' \
+			'[dn]' 'O = ouroBIOS' 'CN = ouroBIOS update test in QEMU (not a release key)' '[ext]' \
+			'basicConstraints = critical,CA:FALSE' 'keyUsage = critical,digitalSignature' \
+			'subjectKeyIdentifier = hash' > "${ut}/cert.cnf"
+		openssl req -x509 -new -newkey rsa:2048 -sha256 -days 1 -nodes -config "${ut}/cert.cnf" \
+			-keyout "${ut}/key.pem" -out "${ut}/cert.pem" 2> /dev/null
+	) || die "update-test: openssl req fallito"
+
+	say "update-test: payload EDK2 DEBUG per q35, che si fida della chiave di prova"
+	b="${TREE}/build-update-test"
+	rm -rf "${b:?}"
+	mkdir -p "${b}"
+	{
+		update_test_q35
+		echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=${UPDATE_TEST_LSV}"
+		echo "CONFIG_OPTION_BACKEND_NONE=y"
+		echo "CONFIG_PAYLOAD_EDK2=y"
+		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig"
+		echo "CONFIG_EDK2_DEBUG=y"
+		echo "CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT=\"${ut}/cert.pem\""
+		echo "CONFIG_LOCALVERSION=\"ouroBIOS-update-test-payload\""
+	} > "${b}/defconfig"
+	mk update-test defconfig KBUILD_DEFCONFIG="build-update-test/defconfig" > "${b}/defconfig.log" 2>&1 \
+		|| { cat "${b}/defconfig.log"; die "update-test: make defconfig del payload fallito"; }
+	defconfig_kept "${b}" || die "update-test: il .config del payload non ha tutto il defconfig"
+	if ! mk update-test -j"${JOBS}" > "${b}/make.log" 2>&1; then
+		failure_report "update-test: payload" "${b}/make.log"
+		grep -n -i -B2 -A6 'error' "${b}/make.log" | tail -n 40
+		die "update-test: build del payload fallita (build-update-test/make.log nell'albero)"
+	fi
+	fd="${b}/UEFIPAYLOAD.fd"
+	[ -f "${fd}" ] || die "update-test: la build non ha fatto ${fd}"
+
+	say "update-test: worktree dell'albero con ${UPDATE_TEST_PATCH}"
+	git -C "${TREE}" worktree remove --force "${ab}" > /dev/null 2>&1 || true
+	rm -rf "${ab:?}"
+	git -C "${TREE}" worktree prune
+	git -C "${TREE}" worktree add -q --detach "${ab}" HEAD || die "update-test: git worktree add fallito"
+	git -C "${ab}" apply "${O}/${UPDATE_TEST_PATCH}" || die "update-test: ${UPDATE_TEST_PATCH} non applica"
+	# vboot, l'unico submodule che serve a q35, e il crossgcc: quelli dell'albero
+	{ rmdir "${ab}/3rdparty/vboot" && ln -s "${TREE}/3rdparty/vboot" "${ab}/3rdparty/vboot"; } \
+		|| die "update-test: 3rdparty/vboot nel worktree"
+	if [ "${TOOLCHAIN}" = crossgcc ]; then ln -s "${XGCC}" "${ab}/util/crossgcc/xgcc"; fi
+
+	for rom in "${UPDATE_TEST_ROMS[@]}"; do
+		read -r n ver <<< "${rom}"
+		say "update-test: ROM ${n} per q35 con vboot A/B, versione ${ver}"
+		d="${ab}/build-${n}"
+		mkdir -p "${d}"
+		{
+			update_test_q35
+			echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=${ver}"
+			echo "CONFIG_VBOOT=y"
+			echo "CONFIG_VBOOT_SLOTS_RW_AB=y"
+			echo "CONFIG_VBOOT_MOCK_SECDATA=y"
+			echo "CONFIG_FMDFILE=\"src/mainboard/emulation/qemu-q35/update-test.fmd\""
+			echo "CONFIG_PAYLOAD_ELF=y"
+			echo "CONFIG_PAYLOAD_FILE=\"${fd}\""
+			echo "CONFIG_DEBUG_SMI=y"
+			echo "CONFIG_LOCALVERSION=\"ouroBIOS-update-test-${n}\""
+		} > "${d}/defconfig"
+		mk_in "${ab}" "${n}" defconfig KBUILD_DEFCONFIG="build-${n}/defconfig" > "${d}/defconfig.log" 2>&1 \
+			|| { cat "${d}/defconfig.log"; die "update-test: make defconfig della ROM ${n} fallito"; }
+		defconfig_kept "${d}" || die "update-test: il .config della ROM ${n} non ha tutto il defconfig"
+		if ! mk_in "${ab}" "${n}" -j"${JOBS}" > "${d}/make.log" 2>&1; then
+			failure_report "update-test: ROM ${n}" "${d}/make.log"
+			grep -n -i -B2 -A6 'error' "${d}/make.log" | tail -n 40
+			die "update-test: build della ROM ${n} fallita (${d}/make.log)"
+		fi
+	done
+
+	say "update-test: capsule A, B e C, firmate con la chiave di prova"
+	(umask 077; cat "${ut}/key.pem" "${ut}/cert.pem" > "${ut}/signer.pem") || die "update-test: signer.pem"
+	for rom in "${UPDATE_TEST_ROMS[@]}"; do
+		read -r n ver <<< "${rom}"
+		generate_capsule "${ab}/build-${n}/coreboot.rom" "${ut}/${n}.cap" "${UPDATE_TEST_GUID}" "${ver}" \
+			"${UPDATE_TEST_LSV}" "${ut}/signer.pem" "${ut}/cert.pem" || die "update-test: capsula ${n} non fatta"
+	done
+	# la chiave serviva solo a queste capsule
+	rm -f "${ut}/key.pem" "${ut}/signer.pem" "${ut}/cert.cnf"
+
+	say "update-test: QEMU"
+	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" "${ut}/A.cap" "${ut}/B.cap" "${ut}/C.cap" \
+		|| die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
+}
+
 for c in "${CMDS[@]}"; do
 	case "${c}" in
 		prepare)       cmd_prepare ;;
@@ -882,6 +1043,7 @@ for c in "${CMDS[@]}"; do
 		config)        cmd_config ;;
 		roms)          cmd_roms ;;
 		smoke)         cmd_smoke ;;
+		update-test)   cmd_update_test ;;
 		keys)          cmd_keys ;;
 		toolchain-key) cmd_toolchain_key ;;
 	esac

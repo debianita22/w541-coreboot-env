@@ -181,6 +181,63 @@ EOF
 	else
 		bad "tools/update.py: release_key o rollback_plan non fanno quello che devono"
 	fi
+	# tools/qemu-update.py senza QEMU: le variabili che scrive nello store del
+	# flash (OsIndications) come le legge tools/update.py, FmpState, l'ESRT
+	# della seriale e la traccia del pflash
+	if python3 - <<'EOF'
+import importlib.util
+import os
+import struct
+import sys
+import tempfile
+import uuid
+sys.dont_write_bytecode = True
+sys.path.insert(0, "tools")
+import update
+spec = importlib.util.spec_from_file_location("qemu_update", "tools/qemu-update.py")
+qu = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qu)
+areas = [("RW_MRC_CACHE", 0x0, 0x10000), ("SMMSTORE", 0x10000, 0x80000), ("RW_NVRAM", 0x90000, 0x10000),
+         ("RW_SECTION_A", 0xA0000, 0x360000), ("FW_MAIN_A", 0xB0000, 0x34FFC0),
+         ("RW_SECTION_B", 0x400000, 0x360000), ("FW_MAIN_B", 0x410000, 0x34FFC0), ("WP_RO", 0x760000, 0xA0000)]
+img = bytearray(b"\xff" * 0x800000)
+fmap = b"__FMAP__" + struct.pack("<BBQI32sH", 1, 1, 0, len(img), b"FLASH", len(areas))
+fmap += b"".join(struct.pack("<II32sH", o, n, name.encode(), 0) for name, o, n in areas)
+img[0x760000:0x760000 + len(fmap)] = fmap
+st = 0x10000                       # lo store come lo formatta il payload
+img[st + 0x20:st + 0x28] = struct.pack("<Q", 0x80000)
+img[st + 0x28:st + 0x2C] = b"_FVH"
+img[st + 0x30:st + 0x32] = struct.pack("<H", 0x48)
+img[st + 0x48:st + 0x64] = update.AUTH_VAR_GUID + struct.pack("<IBBHI", 0x80000 - 0x48, 0x5A, 0xFE, 0, 0)
+path = os.path.join(tempfile.mkdtemp(), "flash.rom")
+open(path, "wb").write(img)
+f = qu.Flash(path)
+f.set_var("OsIndications", qu.EFI_GLOBAL, 7, struct.pack("<Q", 4))
+f.set_var("OsIndications", qu.EFI_GLOBAL, 7, struct.pack("<Q", 0))
+f.set_var("OsIndications", qu.EFI_GLOBAL, 7, struct.pack("<Q", 4 | 1))
+assert f.os_indications() == 5
+found, info = update.var_store(f.region("SMMSTORE"))
+states = [v["state"] for v in found if v["name"] == "OsIndications"]
+assert states == [0x3D, 0x3D, 0x3F], states
+guid = uuid.UUID("b195f75a-8f95-4282-950c-ee9dd1099ec9").bytes_le
+f.set_var("FmpState", guid, 7, struct.pack("<4B4I", 1, 1, 1, 1, 0x01010000, 0x01000000, 0, 0x01020000))
+assert f.fmp_state(guid) == {"version": 0x01010000, "lsv": 0x01000000, "status": 0, "attempt": 0x01020000}
+row = ("| B195F75A-8F95-4282-950C-EE9DD1099EC9 | System FW    | 0x 1010000 | 0x 1000000 | 0x   14000 "
+       "| 0x 1020000 | 0x       0 |")
+assert qu.ESRT_ROW.findall(row) == [("B195F75A-8F95-4282-950C-EE9DD1099EC9", "System FW", "1010000", "1000000",
+                                      "14000", "1020000", "0")]
+trace = os.path.join(os.path.dirname(path), "pflash.trace")
+open(trace, "w").write("pflash_data_write system.flash0: data offset:0x10010 size:1 value:0x0000 counter:0x0\n"
+                       "pflash_write_block_erase system.flash0: block erase offset:0x400000 bytes:0x1000\n"
+                       "pflash_data_write system.flash0: data offset:0x90000 size:1 value:0x0040 counter:0x0\n")
+hits, total = qu.traced_writes(trace, f.areas, ("WP_RO", "RW_SECTION_A", "RW_SECTION_B"))
+assert total == 3 and hits == {"WP_RO": 0, "RW_SECTION_A": 0, "RW_SECTION_B": 0x1000}, (hits, total)
+EOF
+	then
+		ok "tools/qemu-update.py: variabili scritte nello store, FmpState, ESRT e traccia del pflash letti"
+	else
+		bad "tools/qemu-update.py: le funzioni della prova dell'aggiornamento non fanno quello che devono"
+	fi
 else
 	bad "python3 non installato"
 fi
@@ -237,6 +294,17 @@ for p in patches/optional/*.patch; do
 	head -1 "${p}" | grep -q '^From [0-9a-f]\{40\} ' || bad "${p}: non e' una mail di git format-patch"
 done
 ok "$(find patches/optional -name '*.patch' | wc -l) patch opzionali"
+# la patch per q35 della prova dell'aggiornamento (build.sh update-test):
+# solo nel worktree di quella prova, quindi in nessuna serie
+t="$(sed -n 's/^UPDATE_TEST_PATCH=\(.*\)$/\1/p' tools/build.sh)"
+if [ -n "${t}" ] && [ -f "${t}" ] && grep -q '^diff --git ' "${t}"; then
+	ok "${t}: la patch della prova dell'aggiornamento"
+else
+	bad "tools/build.sh: UPDATE_TEST_PATCH '${t}' non c'e' o non e' una patch"
+fi
+for p in patches/test/*.patch; do
+	[ "${p}" = "${t}" ] || bad "${p}: in patches/test ma non usata da tools/build.sh"
+done
 
 step "chiave Optimus NVIDIA"
 # blobs/opvk.inc ha la chiave che il driver NVIDIA di Windows chiede alla dGPU
@@ -252,7 +320,8 @@ else
 fi
 k="$(files | grep -i 'opvk' | grep -vx 'blobs/opvk.inc' || true)"
 if [ -n "${k}" ]; then bad "altri file della chiave nel repository: ${k}"; else ok "nessun altro opvk.inc"; fi
-if grep -q '^+++ b/.*opvk\.inc' patches/optional/*.patch patches/*.patch patches/edk2/*.patch patches/lvglpkg/*.patch 2>/dev/null; then
+if grep -q '^+++ b/.*opvk\.inc' patches/optional/*.patch patches/*.patch patches/edk2/*.patch patches/lvglpkg/*.patch \
+	patches/test/*.patch 2>/dev/null; then
 	bad "una patch crea opvk.inc"
 else
 	ok "nessuna patch crea opvk.inc"

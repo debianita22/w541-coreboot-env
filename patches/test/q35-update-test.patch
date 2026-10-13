@@ -1,0 +1,199 @@
+q35 for the update test in QEMU (tools/build.sh update-test), never in a
+W541 ROM: build.sh applies it to a git worktree of the coreboot tree of its
+own, which only builds the ROMs for QEMU.
+
+- vboot's nvdata in the flash (RW_NVRAM), as on the W541. verstage runs in
+  the bootblock, which executes from the pflash; while the pflash takes
+  commands, QEMU reads back its status there, not code, so the loops that
+  write and erase it run from .data, in RAM. romstage and postcar only
+  read it; ramstage and SMM write with ../qemu-i440fx/rom_media.c.
+- only the bootblock with verstage in the read-only CBFS, the rest in the
+  RW slots (RW_REGION_ONLY), like LENOVO_HASWELL_VBOOT_MINIMAL_RO.
+- update-test.fmd: the W541's flash map cut down to the regions a capsule
+  update reads or writes, in an 8 MiB pflash.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+diff --git a/src/mainboard/emulation/qemu-q35/Kconfig b/src/mainboard/emulation/qemu-q35/Kconfig
+index 854c0533..bc8f8af7 100644
+--- a/src/mainboard/emulation/qemu-q35/Kconfig
++++ b/src/mainboard/emulation/qemu-q35/Kconfig
+@@ -23,7 +23,7 @@ config BOARD_SPECIFIC_OPTIONS
+ config VBOOT
+ 	select VBOOT_MUST_REQUEST_DISPLAY
+ 	select VBOOT_STARTS_IN_BOOTBLOCK
+-	select VBOOT_VBNV_CMOS
++	select VBOOT_VBNV_FLASH	# ouroBIOS update test: nvdata in RW_NVRAM
+ 	select GBB_FLAG_DISABLE_LID_SHUTDOWN
+ 	select GBB_FLAG_DISABLE_PD_SOFTWARE_SYNC
+ 	select GBB_FLAG_DISABLE_EC_SOFTWARE_SYNC
+@@ -54,6 +54,11 @@ config VBOOT_SLOTS_RW_A
+ 
+ endif
+ 
++# ouroBIOS update test: only the bootblock, with verstage, in the read-only
++# CBFS, the rest in the RW slots, as on the W541
++config RW_REGION_ONLY
++	default "fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml fallback/payload" if VBOOT
++
+ config VBOOT_VBNV_OFFSET
+ 	hex
+ 	default 0x2c
+diff --git a/src/mainboard/emulation/qemu-q35/Makefile.mk b/src/mainboard/emulation/qemu-q35/Makefile.mk
+index cba6b4eb..a31ae67d 100644
+--- a/src/mainboard/emulation/qemu-q35/Makefile.mk
++++ b/src/mainboard/emulation/qemu-q35/Makefile.mk
+@@ -1,6 +1,10 @@
+ ## SPDX-License-Identifier: GPL-2.0-only
+ 
+ bootblock-y += bootblock.c
++# ouroBIOS update test: verstage writes vboot's nvdata to the pflash
++bootblock-$(CONFIG_VBOOT) += update_test_flash.c
++romstage-$(CONFIG_VBOOT) += update_test_flash_ro.c
++postcar-$(CONFIG_VBOOT) += update_test_flash_ro.c
+ 
+ romstage-y += ../qemu-i440fx/memmap.c
+ 
+diff --git a/src/mainboard/emulation/qemu-q35/update-test.fmd b/src/mainboard/emulation/qemu-q35/update-test.fmd
+new file mode 100644
+index 00000000..dfb1ca52
+--- /dev/null
++++ b/src/mainboard/emulation/qemu-q35/update-test.fmd
+@@ -0,0 +1,28 @@
++# ouroBIOS update test (tools/build.sh update-test): the regions of the
++# W541's map (configs/w541.fmd) that a capsule update reads or writes, in
++# an 8 MiB pflash. RW_MRC_CACHE is only there for the capsules, which carry
++# it like those of the releases: q35 trains no memory.
++FLASH 0x800000 {
++	SI_BIOS@0x0 0x800000 {
++		RW_MRC_CACHE@0x0 0x10000
++		SMMSTORE@0x10000 0x80000
++		RW_NVRAM@0x90000 0x10000
++		RW_SECTION_A@0xa0000 0x360000 {
++			VBLOCK_A@0x0 0x10000
++			FW_MAIN_A(CBFS)@0x10000 0x34ffc0
++			RW_FWID_A@0x35ffc0 0x40
++		}
++		RW_SECTION_B@0x400000 0x360000 {
++			VBLOCK_B@0x0 0x10000
++			FW_MAIN_B(CBFS)@0x10000 0x34ffc0
++			RW_FWID_B@0x35ffc0 0x40
++		}
++		WP_RO@0x760000 0xa0000 {
++			FMAP@0x0 0x800
++			RO_FRID@0x800 0x40
++			RO_PADDING@0x840 0x7c0
++			GBB@0x1000 0x1f000
++			COREBOOT(CBFS)@0x20000 0x80000
++		}
++	}
++}
+diff --git a/src/mainboard/emulation/qemu-q35/update_test_flash.c b/src/mainboard/emulation/qemu-q35/update_test_flash.c
+new file mode 100644
+index 00000000..bbab9e53
+--- /dev/null
++++ b/src/mainboard/emulation/qemu-q35/update_test_flash.c
+@@ -0,0 +1,82 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++/*
++ * ouroBIOS update test (tools/build.sh update-test), not for upstream:
++ * vboot's nvdata in the pflash, as on the W541, written by verstage in the
++ * bootblock. While QEMU's pflash takes commands it reads back status, not
++ * code, and the bootblock runs from it: the loops that send the commands
++ * run from .data, which is in RAM (CAR on QEMU), and so must the data they
++ * write. The commands are those of ../qemu-i440fx/rom_media.c, which
++ * ramstage and SMM use.
++ */
++
++#include <boot_device.h>
++#include <commonlib/helpers.h>
++#include <commonlib/region.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#define WRITE_BYTE_CMD		0x10
++#define BLOCK_ERASE_CMD		0x20
++#define BLOCK_ERASE_CONFIRM_CMD	0xD0
++#define READ_ARRAY_CMD		0xFF
++
++#define QEMU_FLASH_BLOCK_SIZE	0x1000
++
++#define RAM_CODE __attribute__((section(".data.update_test_flash"), noinline))
++
++RAM_CODE static void ram_write(volatile uint8_t *ptr, const uint8_t *buf, size_t size)
++{
++	size_t i;
++
++	for (i = 0; i < size; i++) {
++		ptr[i] = WRITE_BYTE_CMD;
++		ptr[i] = buf[i];
++	}
++	ptr[size - 1] = READ_ARRAY_CMD;
++}
++
++RAM_CODE static void ram_erase(volatile uint8_t *ptr, size_t size)
++{
++	size_t i;
++
++	for (i = 0; i < size; i += QEMU_FLASH_BLOCK_SIZE) {
++		ptr[i] = BLOCK_ERASE_CMD;
++		ptr[i] = BLOCK_ERASE_CONFIRM_CMD;
++	}
++	ptr[size - QEMU_FLASH_BLOCK_SIZE] = READ_ARRAY_CMD;
++}
++
++static ssize_t update_test_writeat(const struct region_device *rd, const void *b,
++				   size_t offset, size_t size)
++{
++	const struct mem_region_device *mdev = container_of(rd, typeof(*mdev), rdev);
++
++	if (size)
++		ram_write((volatile uint8_t *)&mdev->base[offset], b, size);
++	return size;
++}
++
++static ssize_t update_test_eraseat(const struct region_device *rd, size_t offset,
++				   size_t size)
++{
++	const struct mem_region_device *mdev = container_of(rd, typeof(*mdev), rdev);
++
++	if (!IS_ALIGNED(offset, QEMU_FLASH_BLOCK_SIZE) || !IS_ALIGNED(size, QEMU_FLASH_BLOCK_SIZE))
++		return -1;
++	if (size)
++		ram_erase((volatile uint8_t *)&mdev->base[offset], size);
++	return size;
++}
++
++static struct region_device_ops update_test_ops;
++static const struct mem_region_device update_test_dev =
++	MEM_REGION_DEV_INIT(0x100000000ULL - CONFIG_ROM_SIZE, CONFIG_ROM_SIZE, &update_test_ops);
++
++const struct region_device *boot_device_rw(void)
++{
++	update_test_ops = mem_rdev_rw_ops;
++	update_test_ops.writeat = update_test_writeat;
++	update_test_ops.eraseat = update_test_eraseat;
++	return &update_test_dev.rdev;
++}
+diff --git a/src/mainboard/emulation/qemu-q35/update_test_flash_ro.c b/src/mainboard/emulation/qemu-q35/update_test_flash_ro.c
+new file mode 100644
+index 00000000..860a960d
+--- /dev/null
++++ b/src/mainboard/emulation/qemu-q35/update_test_flash_ro.c
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++/*
++ * ouroBIOS update test (tools/build.sh update-test): romstage and postcar
++ * run from the pflash too, and only read vboot's nvdata. A write would
++ * fail cleanly: the read-only boot device has no writeat.
++ */
++
++#include <boot_device.h>
++
++const struct region_device *boot_device_rw(void)
++{
++	return boot_device_ro();
++}

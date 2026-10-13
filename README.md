@@ -213,6 +213,7 @@ tools/build.sh --variant mrc                  # one variant
 tools/build.sh --version v1.0.0-local         # version string and file names
 tools/build.sh --with test-peg-afe roms       # plus a patch from patches/optional/
 tools/build.sh smoke                          # after roms: the payload in QEMU
+tools/build.sh update-test                    # capsule updates with vboot A/B in QEMU
 tools/build.sh --help
 ```
 
@@ -227,12 +228,28 @@ write must find and delete the first copy, leaving one. It needs
 `work/smoke-<variant>`. Nothing of the W541 itself runs there: it checks the
 payload and coreboot's common code, not the board.
 
+`update-test` checks the update path the same way, with
+`tools/qemu-update.py`: three coreboot images for q35 with vboot's two RW
+slots and its nvdata in flash, built from a git worktree of the tree with
+`patches/test/q35-update-test.patch` (never in a W541 ROM), an EDK2 payload
+of the project's patches built for debugging and trusting a key made for the
+test only, and their capsules, made as those of the releases. The capsules
+go on an EFI system partition, as `update.py stage` puts them, and QEMU
+boots from off at every reset: each capsule must write only the slot that
+is not running, vboot must try it and the payload confirm it, a capsule of
+the release already in the other slot must write nothing to the slots, and
+vboot must go back to the old slot when the new one does not verify or does
+not reach the payload; the ESRT is checked at every boot
+([docs/vboot.md](docs/vboot.md#how-it-is-tested)). It needs
+`qemu-system-x86` and `mtools`; the serial console goes to
+`work/update-test/out`.
+
 ## Continuous integration and releases
 
 | Workflow | When | What |
 |---|---|---|
 | [`check.yml`](.github/workflows/check.yml) | every push and pull request | `tools/ci-check.sh` (shellcheck, actionlint, blob checksums, patch series, defconfigs); the series applied to the pinned coreboot and EDK2, and both configurations checked |
-| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, their payloads booted in QEMU (`smoke`), their capsules signed, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
+| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, their payloads booted in QEMU (`smoke`), the capsule update with vboot A/B in QEMU (`update-test`, in parallel), their capsules signed, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
 | [`upstream.yml`](.github/workflows/upstream.yml) | every Monday | opens an issue when the series no longer applies on coreboot `main`, a patch was merged upstream, a coreboot release is out, or MrChromebox's EDK2 branch moved |
 
 A release is made by pushing a version tag (`git tag v1.0.0 && git push origin
@@ -259,8 +276,8 @@ gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --late
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
 | `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
-| `patches/` | the series applied to coreboot, optional patches, and the patches to EDK2 and its LvglPkg ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `logo.py`, the logo as an LVGL image or a PNG |
+| `patches/` | the series applied to coreboot, optional patches, the patches to EDK2 and its LvglPkg, and the q35 patch of the update test ([patches/README.md](patches/README.md)) |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU; `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |

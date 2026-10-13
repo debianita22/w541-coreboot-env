@@ -77,6 +77,18 @@ file names; `tools/verify-rom.sh --release` rejects such an image.
 | `test-peg-afe` | programs the PEG PHY (AFE) recipe when neither MRC nor the native RAM init does, to compare dGPU link speed and AER errors | test: runs on every boot, whatever the NVIDIA GPU setting |
 | `test-charge-behaviour` | ACPI charge behaviour (inhibit charge, force discharge) on the W541, as on the T440p | test: the EC registers were only verified on the T440p |
 
+## The update test
+
+`test/q35-update-test.patch` is not a coreboot change for the W541:
+`tools/build.sh update-test` applies it to a git worktree of the coreboot
+tree of its own, which only builds the q35 images of the update test in QEMU
+(`tools/qemu-update.py`, [docs/vboot.md](../docs/vboot.md#how-it-is-tested));
+the tree of the ROMs never sees it. It gives q35 what an update touches on the
+W541: vboot's nvdata in the flash, written by verstage from the bootblock
+(on QEMU's pflash the write loops run from RAM), only the bootblock in the
+read-only CBFS, and the W541's map cut down to `RW_MRC_CACHE`, `SMMSTORE`,
+`RW_NVRAM`, the two RW slots and `WP_RO`.
+
 ## Updating the series
 
 After a change in a coreboot tree based on `COREBOOT_COMMIT`:

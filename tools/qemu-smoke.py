@@ -131,16 +131,29 @@ class Smoke:
         self.n = 0
         self.proc = self.qmp = self.log = None
 
-    def boot(self, tag):
+    def boot(self, tag, extra=()):
+        """Accende la macchina: extra sono altre opzioni di QEMU (dischi,
+        traccia: tools/qemu-update.py)."""
         self.halt()
         self.serial = os.path.join(self.out, "serial-%s.log" % tag)
         cmd = ["qemu-system-x86_64", "-M", "q35,acpi=off", "-cpu", "Haswell-noTSX,stepping=3",
                "-smp", "1", "-m", "2048", "-drive", "if=pflash,format=raw,file=" + self.flash,
                "-serial", "file:" + self.serial, "-qmp", "unix:%s,server=on,wait=off" % self.sock,
-               "-display", "none", "-vga", "std", "-no-reboot"]
+               "-display", "none", "-vga", "std", "-no-reboot"] + list(extra)
         self.log = open(os.path.join(self.out, "qemu-%s.log" % tag), "w")
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT)
         self.qmp = Qmp(self.sock)
+
+    def cut(self):
+        """Toglie la corrente: QEMU ucciso senza chiudere niente. Il flash
+        emulato e' quello che il firmware ha scritto fin li' (QEMU scrive
+        ogni byte nel file appena il firmware lo programma)."""
+        if self.proc is None:
+            return
+        self.proc.kill()
+        self.proc.wait()
+        self.log.close()
+        self.proc = None
 
     def halt(self):
         if self.proc is None:

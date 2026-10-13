@@ -17,6 +17,16 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
 - The smoke test of the build also checks the UEFI variables: in two
   boots of the emulated laptop the UEFI Shell writes a test variable, and
   it must be in SMMSTORE, then rewritten with the first copy deleted.
+- The build tests the capsule update in QEMU before a release
+  (`tools/build.sh update-test`, `tools/qemu-update.py`, a job beside the
+  ROMs): three q35 images with vboot's two RW slots and its nvdata in flash,
+  the EDK2 payload of these patches and capsules made as those of the
+  releases. Each capsule must write only the slot that is not running;
+  vboot tries it and the payload confirms it; the capsule of the release
+  already in the other slot (`update.py rollback`) writes nothing to the
+  slots; vboot goes back to the old slot when the new one does not verify
+  or does not reach the payload; the ESRT is checked at every boot
+  ([docs/vboot.md](docs/vboot.md#how-it-is-tested)).
 
 ## v1.3.2
 

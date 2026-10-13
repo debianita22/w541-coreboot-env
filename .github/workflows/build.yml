@@ -15,7 +15,12 @@
 # configs/w541.fmd. La blocca anche la prova di fumo (tools/build.sh smoke):
 # il payload EDK2 di ogni variante, in una ROM per QEMU q35, deve partire e
 # aprire il setup, che deve rispondere ai tasti; le schermate sono
-# nell'artifact smoke-<versione>.
+# nell'artifact smoke-<versione>. E la prova dell'aggiornamento (job
+# update-test, accanto alle ROM: tools/build.sh update-test): in QEMU q35,
+# con vboot a due slot e il payload EDK2 di queste patch, le capsule devono
+# scrivere solo lo slot che non gira, vboot deve provarlo e tornare indietro
+# se non si verifica o non parte; la seriale e' nell'artifact
+# update-test-<versione>.
 #
 # La capsula si firma con il secret CAPSULE_SIGNING_KEY (Settings -> Secrets
 # and variables -> Actions): la chiave privata di keys/capsule-signing.pem,
@@ -204,9 +209,55 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # In parallelo alle ROM: lo stesso albero, il crossgcc dalla cache (lo
+  # salva il job build), un payload EDK2 DEBUG e tre ROM per q35
+  update-test:
+    name: Aggiornamento A/B in QEMU
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      # come il job build, senza jcat; mtools: l'ESP delle capsule su disco
+      - name: Pacchetti
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
+            zlib1g-dev m4 curl git python3 uuid-dev imagemagick \
+            libssl-dev pkg-config qemu-system-x86 mtools >/dev/null
+
+      - name: coreboot ed EDK2 pinnati, submodule, patch e blob
+        run: ./tools/build.sh prepare
+
+      - name: Chiave del crossgcc
+        id: tc
+        run: echo "key=$(./tools/build.sh toolchain-key)" >> "${GITHUB_OUTPUT}"
+
+      - name: crossgcc dalla cache
+        uses: actions/cache/restore@v6
+        with:
+          path: work/coreboot/util/crossgcc/xgcc
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: crossgcc
+        run: ./tools/build.sh toolchain
+
+      - name: Prova dell'aggiornamento in QEMU
+        run: ./tools/build.sh update-test
+
+      - name: Seriale della prova
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: update-test-${{ needs.setup.outputs.version }}
+          path: work/update-test/out/
+          retention-days: 14
+          if-no-files-found: ignore
+
   release:
     name: Release
-    needs: [setup, build]
+    needs: [setup, build, update-test]
     if: needs.setup.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15

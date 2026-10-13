@@ -15,7 +15,7 @@ again from the old slot.
 - [Keys](#keys)
 - [Limits](#limits)
 - [Moving from v1.2.x](#moving-from-v12x)
-- [How it was tested](#how-it-was-tested)
+- [How it is tested](#how-it-is-tested)
 - [Testing on the laptop](#testing-on-the-laptop)
 
 ## Flash map
@@ -141,21 +141,38 @@ which are at the same offsets since v1.0.3, so settings, boot entries,
 Secure Boot keys, VPD and event log stay. From then on, updates are
 capsules.
 
-## How it was tested
+## How it is tested
 
-In QEMU (q35), with the same EDK2 payload and coreboot patches, a map with
-the same regions and vboot's nvdata in flash:
+At every build, before a release (`tools/build.sh update-test`, the
+*update-test* job of `build.yml`, `tools/qemu-update.py`): in QEMU (q35),
+with the EDK2 payload of the project's patches (a DEBUG build that trusts a
+key made for the test), coreboot's common code with the project's patches,
+vboot with two RW slots and its nvdata in flash, and the W541's map cut down
+to the regions an update touches. Three ROMs, A, B and C, and their capsules,
+made as those of the releases; each capsule goes into `\EFI\UpdateCapsule`
+of an EFI system partition with the capsule-on-disk bit of `OsIndications`,
+as `update.py stage` puts it; QEMU starts from off at every reset:
 
-- a capsule written to the slot that is not running, the other slot and
-  the read-only part unchanged, *try next* the new slot with two tries; the
-  new slot boots and is confirmed; the next capsule goes to the other slot;
-- a new slot cut short (half of it erased): the signature check fails and
-  the laptop restarts from the old slot;
-- a new slot that never reaches the payload: two tries, then
-  *try_count used up; falling back*, from the old slot;
-- `RW_NVRAM` full: the payload erases it and writes the request at the start;
-- the ESRT after each update: the version of the slot that runs, and as last
-  attempt the version of the capsule, status 0 (patch `edk2/0018`).
+- capsule B while A runs: the payload writes slot B and `RW_MRC_CACHE`, asks
+  vboot to try B for two boots and restarts; slot A, the read-only part and
+  the UEFI variables are unchanged, the capsule is gone from the ESP and the
+  bit from `OsIndications`. vboot boots B and the payload confirms it;
+- capsule C: it goes to slot A, which is no longer running, and boots;
+- capsule B again, the release already in the other slot (`update.py
+  rollback`): with QEMU's trace of the flash, not one byte written to the
+  slots or the read-only part; vboot switches to B;
+- capsule A, then one byte of the new slot changed in the flash: the
+  signature check fails, the laptop restarts from B and records A as failed;
+- capsule A again, then two boots cut right after verstage chose A:
+  *try_count used up; falling back to slot B*;
+- the ESRT at every boot: the version of the slot that runs, and as last
+  attempt the version of the capsule, status 0 (patch `edk2/0018`). After a
+  fallback the last attempt is still the capsule that was written, with
+  status 0: the ESRT does not say that vboot went back, `update.py vboot`
+  does.
+
+By hand, in QEMU with v1.3.0: `RW_NVRAM` full, the payload erases it and
+writes the request at the start.
 
 On the W541, v1.3.0-rc1: the move from v1.0.9 with flashrom kept settings
 and VPD; vboot verified and booted slot A; verstage wrote `RW_NVRAM` from
