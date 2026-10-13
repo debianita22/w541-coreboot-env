@@ -14,6 +14,9 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `RuntimeFreeMem()`). The three commits before it load an Intel GOP
   driver and VBT from CBFS, which this firmware does not use: libgfxinit
   draws the screen.
+- v1.3.3-rc1 is the same firmware with another version, tested on the
+  W541: the capsule update from v1.3.2, suspend and resume. From it:
+  `sudo python3 update.py stage --latest`.
 - The smoke test of the build also checks the UEFI variables: in two
   boots of the emulated laptop the UEFI Shell writes a test variable, and
   it must be in SMMSTORE, then rewritten with the first copy deleted.
