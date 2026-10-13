@@ -211,7 +211,7 @@ jobs:
           if-no-files-found: error
 
   # In parallelo alle ROM: lo stesso albero, il crossgcc dalla cache (lo
-  # salva il job build), un payload EDK2 DEBUG e tre ROM per q35
+  # salva il job build), un payload EDK2 DEBUG e quattro ROM per q35
   update-test:
     name: Aggiornamento A/B in QEMU
     needs: setup

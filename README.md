@@ -243,7 +243,9 @@ vboot must go back to the old slot when the new one does not verify or does
 not reach the payload; from the setup (keys sent by QEMU), *Go back to* must
 switch to the other slot without writing it, and a UEFI application
 started from the disk (`tools/efi/slot-lock-test.c`) must be refused, before
-and after `ExitBootServices()`; the ESRT is checked at every boot
+and after `ExitBootServices()`; a full `RW_NVRAM`, a power cut halfway
+through a slot and a capsule on a USB drive must leave a laptop that boots
+and finishes the update; the ESRT is checked at every boot
 ([docs/vboot.md](docs/vboot.md#how-it-is-tested)). It needs
 `qemu-system-x86`, `mtools`, `clang` and `lld`; the serial console goes to
 `work/update-test/out`.

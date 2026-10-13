@@ -24,7 +24,10 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   laptops declare the same embedded controller registers.
 - The update test in QEMU goes back from the setup too, with the keys sent
   by QEMU, and checks that a boot option cannot switch slot, before or after
-  `ExitBootServices()` (`tools/efi/slot-lock-test.c`).
+  `ExitBootServices()` (`tools/efi/slot-lock-test.c`). It also fills
+  `RW_NVRAM` before a capsule, cuts the power halfway through a slot (vboot
+  stays on the old one, the capsule staged again finishes it) and applies a
+  capsule from a USB drive.
 
 ## v1.3.3
 

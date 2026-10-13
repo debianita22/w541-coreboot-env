@@ -183,20 +183,28 @@ at every reset:
   (`tools/efi/slot-lock-test.c`), asks coreboot for the other slot as a boot
   loader would, then after `ExitBootServices()` as an OS: refused both
   times, `RW_NVRAM` stays on B;
+- `RW_NVRAM` full (4096 records) before capsule C: it is erased and written
+  again from the start, the request is the second record; vboot tries C in
+  slot A for two boots and the payload confirms it;
+- power cut halfway through a slot (capsule C into slot B, QEMU killed at
+  *Update Progress - 50%*): the read-only part and slot A unchanged, slot B
+  half written, no request in `RW_NVRAM`, so vboot boots A again; the
+  capsule, already gone from the ESP, staged again finishes slot B, which
+  vboot tries and the payload confirms;
+- capsule A on a USB drive instead of the ESP (`edk2/0012`, what *Update
+  from a USB drive* of the setup prepares): slot A written, the capsule
+  removed from the drive;
 - the ESRT at every boot: the version of the slot that runs, and as last
   attempt the version of the capsule, status 0 (patch `edk2/0018`). After a
   fallback the last attempt is still the capsule that was written, with
   status 0: the ESRT does not say that vboot went back (`update.py status`
   notes the version mismatch);
-- after the six capsules and the switch from the setup, the read-only part
-  is the one of ROM A, and a UEFI variable written before the first update
-  is still in the store.
+- after the ten capsules, one of them cut off, and the switch from the
+  setup, the read-only part is the one of ROM A, and a UEFI variable written
+  before the first update is still in the store.
 
 The S3 resume path of the lock is not emulated: QEMU's q35 boots no OS
 here that could suspend.
-
-By hand, in QEMU with v1.3.0: `RW_NVRAM` full, the payload erases it and
-writes the request at the start.
 
 On the W541, v1.3.0-rc1: the move from v1.0.9 with flashrom kept settings
 and VPD; vboot verified and booted slot A; verstage wrote `RW_NVRAM` from

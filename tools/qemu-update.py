@@ -42,6 +42,11 @@
 #      dell'ESP) chiede l'altro slot come un boot loader, poi chiama
 #      ExitBootServices() e lo chiede come un sistema operativo: coreboot
 #      rifiuta le due volte, l'altro slot resta quello di prima
+#  10. RW_NVRAM pieno prima di una capsula: cancellato e riscritto
+#      dall'inizio, la richiesta di provare il nuovo slot c'e'
+#  11. corrente tolta a meta' della scrittura di uno slot: vboot resta sullo
+#      slot di prima; la stessa capsula, preparata di nuovo, lo finisce
+#  12. la capsula su una chiavetta USB invece che nell'ESP
 # A ogni avvio fino al payload, l'ESRT che il payload stampa (build DEBUG):
 # il firmware di sistema con la versione dello slot che gira, e l'ultimo
 # tentativo.
@@ -112,15 +117,18 @@ def run(cmd):
 class Esp:
     """Un disco con una sola partizione, di sistema EFI (MBR, tipo 0xEF),
     FAT16 con \\EFI\\UpdateCapsule, dove tools/update.py mette le capsule, e
-    \\EFI\\BOOT, dove un sistema operativo mette il suo avvio."""
+    \\EFI\\BOOT, dove un sistema operativo mette il suo avvio. Con usb, una
+    chiavetta USB con una partizione FAT16 qualsiasi (tipo 0x0E), dove le
+    capsule le mette chi aggiorna dal setup (patch edk2/0012)."""
 
-    def __init__(self, path):
-        self.path = path
+    def __init__(self, path, usb=False):
+        self.path, self.usb = path, usb
         part = path + ".part"
-        run(["mformat", "-C", "-i", part, "-T", str(ESP_SECTORS), "-h", "64", "-s", "32", "-v", "ESP", "::"])
+        run(["mformat", "-C", "-i", part, "-T", str(ESP_SECTORS), "-h", "64", "-s", "32",
+             "-v", "USB" if usb else "ESP", "::"])
         run(["mmd", "-i", part, "::/EFI", "::/EFI/UpdateCapsule", "::/EFI/BOOT"])
         mbr = bytearray(512)
-        mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff",
+        mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x0E if usb else 0xEF, b"\xfe\xff\xff",
                                    ESP_OFFSET // 512, ESP_SECTORS)
         mbr[510:512] = b"\x55\xaa"
         with open(path, "wb") as f, open(part, "rb") as p:
@@ -147,6 +155,9 @@ class Esp:
         return [line.rsplit("/", 1)[-1] for line in out.split("\n") if line.strip()]
 
     def qemu_args(self):
+        if self.usb:
+            return ["-device", "qemu-xhci,id=xhci", "-drive", "file=%s,format=raw,if=none,id=usb" % self.path,
+                    "-device", "usb-storage,bus=xhci.0,drive=usb"]
         return ["-drive", "file=%s,format=raw,if=none,id=esp" % self.path,
                 "-device", "ide-hd,drive=esp,bus=ide.0"]
 
@@ -262,6 +273,7 @@ class UpdateTest:
     def __init__(self, caps, lock_test, out, timeout):
         self.paths, self.lock_test, self.out, self.timeout = caps, lock_test, out, timeout
         self.tmp = self.m = None
+        self.usb = None
         self.steps = []
 
     def setup(self):
@@ -321,7 +333,7 @@ class UpdateTest:
         dal disco, aspetta un tasto ("booted"), fino a un reset (QEMU esce:
         "reset") o, con cut_at, fino alla riga della seriale dopo cui si
         toglie la corrente ("cut"). Torna (come e' finito, seriale)."""
-        extra = self.esp.qemu_args()
+        extra = self.esp.qemu_args() + (self.usb.qemu_args() if self.usb else [])
         if trace:
             # i byte scritti uno a uno e quelli del buffer di scrittura (0xE8),
             # le cancellazioni dei blocchi
@@ -365,7 +377,8 @@ class UpdateTest:
         provando (trying), il payload lo deve aver confermato; se no vboot lo
         avvia senza prova (risultato "-") e non c'e' niente da confermare.
         Nell'ESRT il firmware di sistema con la versione della ROM key e
-        l'ultimo tentativo last (versione della capsula, stato)."""
+        l'ultimo tentativo last (versione della capsula, stato; None: quello
+        che c'e')."""
         self.running(tag, text, slot, key)
         m = re.search(r"Capsules: firmware slot marked good: (\S+)", text)
         if not m or m.group(1) != "Success":
@@ -380,17 +393,17 @@ class UpdateTest:
         kind, ver, lsv, _, aver, astat = rows[0][1], *(int(x, 16) for x in rows[0][2:])
         cap = self.caps[key]["cap"]
         got = (kind, ver, lsv, aver, astat)
-        exp = ("System FW", cap["version"], cap["lsv"]) + tuple(last)
+        exp = ("System FW", cap["version"], cap["lsv"]) + (tuple(last) if last else (aver, astat))
         if got != exp:
             raise Fail("%s: ESRT %s %s minima %s, ultimo %s stato 0x%x; attesi %s %s minima %s, ultimo %s stato 0x%x"
                        % ((tag, kind, update.version_str(ver), update.version_str(lsv), update.version_str(aver), astat)
                           + (exp[0], update.version_str(exp[1]), update.version_str(exp[2]),
                              update.version_str(exp[3]), exp[4])))
 
-    def stage(self, key):
-        """La capsula nell'ESP, il bit in OsIndications, RW_MRC_CACHE pieno:
-        la capsula lo deve riscrivere."""
-        self.esp.put(self.caps[key]["path"], "ouroBIOS-%s.cap" % key)
+    def stage(self, key, drive=None):
+        """La capsula nell'ESP (o in drive), il bit in OsIndications,
+        RW_MRC_CACHE pieno: la capsula lo deve riscrivere."""
+        (drive or self.esp).put(self.caps[key]["path"], "ouroBIOS-%s.cap" % key)
         self.flash.set_var("OsIndications", EFI_GLOBAL, update.VAR_ATTRS,
                            struct.pack("<Q", self.flash.os_indications() | update.FILE_CAPSULE_DELIVERY))
         self.flash.fill("RW_MRC_CACHE", 0x5A)
@@ -422,8 +435,9 @@ class UpdateTest:
         st = self.flash.nv()
         if not st["valid"] or SLOTS[st["try_next"]] != target or st["try_count"] != 2:
             raise Fail("%s: RW_NVRAM %s, atteso: prossimo lo slot %s, 2 tentativi" % (tag, nv_str(st), target))
-        if self.esp.files():
-            raise Fail("%s: la capsula e' ancora nell'ESP: %s" % (tag, self.esp.files()))
+        for drive, where in ((self.esp, "nell'ESP"), (self.usb, "nella chiavetta USB")):
+            if drive and drive.files():
+                raise Fail("%s: la capsula e' ancora %s: %s" % (tag, where, drive.files()))
         if self.flash.os_indications() & update.FILE_CAPSULE_DELIVERY:
             raise Fail("%s: il bit delle capsule su disco e' ancora in OsIndications" % tag)
         fmp = self.flash.fmp_state(self.guid)
@@ -432,6 +446,19 @@ class UpdateTest:
             raise Fail("%s: FmpState %s, atteso l'ultimo tentativo %s riuscito"
                        % (tag, fmp, update.version_str(want)))
         return text
+
+    def fill_nv(self):
+        """RW_NVRAM pieno: il record corrente ripetuto fino in fondo, come
+        dopo molti avvii. Torna quanti record ci sono."""
+        off, size = self.flash.areas["RW_NVRAM"]
+        region = self.flash.region("RW_NVRAM")
+        st = update.nv_state(region)
+        if not st["valid"]:
+            raise Fail("RW_NVRAM senza un record valido da ripetere")
+        rec = region[st["offset"]:st["offset"] + update.NV_RECORD]
+        used = st["used"] * update.NV_RECORD
+        self.flash.write(off + used, rec * ((size - used) // update.NV_RECORD))
+        return self.flash.nv()["used"]
 
     # --- il setup -------------------------------------------------------------
 
@@ -675,13 +702,75 @@ class UpdateTest:
         self.ok("una voce di boot, prima e dopo ExitBootServices(): il payload ha bloccato il cambio "
                 "di slot, coreboot lo rifiuta, RW_NVRAM resta su B")
 
+        # 10. RW_NVRAM pieno: chi scrive dopo (verstage o il payload con la
+        # richiesta) lo cancella e riparte dall'inizio
+        self.stage("C")
+        full = self.fill_nv()
+        if full != f.nv()["total"]:
+            raise Fail("RW_NVRAM non riempito: %d record su %d" % (full, f.nv()["total"]))
+        self.capsule_boot("10-capsula-C-nvram-pieno", "C", "B")
+        used = f.nv()["used"]
+        if used > 4:
+            raise Fail("10-capsula-C-nvram-pieno: RW_NVRAM non ripartito dall'inizio, %d record" % used)
+        # due avvii: vboot usa i due tentativi di A, che il payload conferma
+        for tag in ("10-C", "10-C-2"):
+            how, text = self.boot(tag)
+            self.expect(tag, how, text, "booted")
+            self.confirmed(tag, text, "A", "C", trying=True, last=(v["C"], 0))
+        self.ok("RW_NVRAM pieno (%d record): cancellato e riscritto dall'inizio, la richiesta e' il record "
+                "%d; vboot prova C nello slot A per due avvii, il payload lo conferma" % (full, used))
+
+        # 11. corrente tolta a meta' della scrittura dello slot: la capsula
+        # e' gia' tolta dall'ESP e il bit da OsIndications, la richiesta non
+        # c'e', vboot resta sullo slot di prima (A, finiti i suoi tentativi:
+        # se lo stesse ancora provando, al riavvio passerebbe all'altro, a
+        # meta', e ne tornerebbe con un reset in piu'). Preparata di nuovo,
+        # la capsula finisce lo slot. La capsula C, che nello slot B (con B)
+        # cambia quasi tutti i blocchi: c'e' tempo per interromperla
+        self.stage("C")
+        before = f.data()
+        how, text = self.boot("11-capsula-C-interrotta", cut_at="Update Progress - 50%")
+        self.expect("11-capsula-C-interrotta", how, text, "cut")
+        after = f.data()
+        image = self.caps["C"]["image"]
+        if f.region("WP_RO", after) != self.ro or f.region("RW_SECTION_A", after) != f.region("RW_SECTION_A", before):
+            raise Fail("11-capsula-C-interrotta: scritta la parte RO o lo slot A, quello che gira")
+        if f.region("RW_SECTION_B", after) in (f.region("RW_SECTION_B", before), f.region("RW_SECTION_B", image)):
+            raise Fail("11-capsula-C-interrotta: lo slot B non e' rimasto a meta' (interruzione troppo presto o "
+                       "troppo tardi)")
+        st = f.nv()
+        if not st["valid"] or (SLOTS[st["try_next"]] == "B" and st["try_count"] > 0):
+            raise Fail("11-capsula-C-interrotta: RW_NVRAM %s, chiede B prima della fine della scrittura" % nv_str(st))
+        how, text = self.boot("11-A")
+        self.expect("11-A", how, text, "booted")
+        self.confirmed("11-A", text, "A", "C", trying=False, last=None)
+        self.stage("C")
+        self.capsule_boot("11-capsula-C", "C", "A")
+        how, text = self.boot("11-B")
+        self.expect("11-B", how, text, "booted")
+        self.confirmed("11-B", text, "B", "C", trying=True, last=(v["C"], 0))
+        self.ok("corrente tolta a meta' dello slot B: vboot resta su A (slot B a meta', nessuna richiesta); "
+                "la stessa capsula, preparata di nuovo, finisce B, che vboot prova e il payload conferma")
+
+        # 12. la capsula su una chiavetta USB, come la prepara chi aggiorna
+        # dal setup (Firmware Update, Update from a USB drive)
+        self.usb = Esp(os.path.join(self.tmp, "usb.img"), usb=True)
+        self.stage("A", drive=self.usb)
+        self.capsule_boot("12-capsula-A-usb", "A", "B")
+        how, text = self.boot("12-A")
+        self.expect("12-A", how, text, "booted")
+        self.confirmed("12-A", text, "A", "A", trying=True, last=(v["A"], 0))
+        self.usb = None
+        self.ok("capsula A da una chiavetta USB: scritto lo slot A, capsula tolta dalla chiavetta; vboot "
+                "prova A e il payload lo conferma")
+
         # alla fine
         if f.region("WP_RO") != self.ro:
             raise Fail("la parte RO e' cambiata")
         if f.var(MARK_NAME, MARK_GUID) != MARK_DATA:
             raise Fail("la variabile %s scritta all'inizio non c'e' piu'" % MARK_NAME)
-        self.ok("dopo 6 capsule e un ritorno dal setup: la parte RO e' quella della ROM A, la variabile "
-                "UEFI scritta prima degli aggiornamenti c'e' ancora")
+        self.ok("dopo 10 capsule, una interrotta, e un ritorno dal setup: la parte RO e' quella della ROM A, "
+                "la variabile UEFI scritta prima degli aggiornamenti c'e' ancora")
         return self.steps
 
 
