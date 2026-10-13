@@ -353,8 +353,8 @@ def parse_metainfo(xml):
 
 def verify_jcat(jcat, files, cert, label="firmware.jcat"):
     """SHA-256 e firma PKCS#7 di ogni file in files ({nome: contenuto}), come
-    le controlla fwupd con il certificato in /etc/pki/fwupd (i metadati di un
-    remote: in /etc/pki/fwupd-metadata)."""
+    le controlla fwupd con il certificato in /etc/pki/fwupd (anche per i
+    metadati di un remote)."""
     if not shutil.which("openssl"):
         raise Error("serve openssl per verificare la firma")
     try:

@@ -255,7 +255,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: update-test-${{ needs.setup.outputs.version }}
-          path: work/update-test/out/
+          path: |
+            work/update-test/out/
+            work/update-test/qemu-update.log
           retention-days: 14
           if-no-files-found: ignore
 

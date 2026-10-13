@@ -22,7 +22,7 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `configs/fwupd/ourobios.conf` downloads it from the latest release, so
   that `fwupdmgr update`, GNOME Software and KDE Discover offer the
   releases (not the release candidates). It needs the project certificate
-  in `/etc/pki/fwupd-metadata` and, as before, in `/etc/pki/fwupd`
+  in `/etc/pki/fwupd`, as the packages already did
   ([docs/update.md](docs/update.md#the-fwupd-remote)).
 - The battery charge behaviour from Linux on the W541 too
   (`/sys/class/power_supply/BAT0/charge_behaviour`: `inhibit-charge`,

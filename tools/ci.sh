@@ -229,7 +229,7 @@ EOF
 		echo "**Pre-release**: not yet confirmed on real hardware. Keep a backup of your flash and an external programmer at hand."
 	elif [ "${v}" = mrc ]; then
 		echo
-		echo "**Tested on a W541**: the move from v1.0.x with flashrom, boot and resume from suspend, capsule updates with the A/B slots (a slot rewritten across the two chips, the switch, the result in the ESRT), the fallback to the other slot when the running one is spoiled ([docs/vboot.md](https://github.com/${repo}/blob/main/docs/vboot.md#how-it-was-tested)), and DMA translation with \`intel_iommu=on\` under load, also after a resume ([docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md#first-boot-and-settings))."
+		echo "**Tested on a W541**: the move from v1.0.x with flashrom, boot and resume from suspend, capsule updates with the A/B slots (a slot rewritten across the two chips, the switch, the result in the ESRT), the fallback to the other slot when the running one is spoiled ([docs/vboot.md](https://github.com/${repo}/blob/main/docs/vboot.md#how-it-is-tested)), and DMA translation with \`intel_iommu=on\` under load, also after a resume ([docs/flashing.md](https://github.com/${repo}/blob/main/docs/flashing.md#first-boot-and-settings))."
 	fi
 	cat <<EOF
 

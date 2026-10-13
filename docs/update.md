@@ -177,7 +177,6 @@ clone of the repository:
 ```sh
 sudo install -m 644 configs/fwupd/ourobios.conf /etc/fwupd/remotes.d/
 sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem
-sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd-metadata/ourobios.pem
 sudo systemctl restart fwupd
 fwupdmgr refresh
 ```
@@ -190,12 +189,14 @@ fwupdmgr update
 sudo systemctl reboot
 ```
 
-fwupd loads the metadata only with a signature from a certificate in
-`/etc/pki/fwupd-metadata`, downloads the `.cab` from the release, checks its
-SHA-256 against the metadata and installs it only if its own
-`firmware.jcat` is from a certificate in `/etc/pki/fwupd`: both
-certificates are needed. `fwupd-refresh.timer`, GNOME Software and Discover
-refresh the metadata about once a day.
+fwupd loads the metadata only with a signature from a trusted certificate,
+downloads the `.cab` from the release, checks its SHA-256 against the
+metadata and installs it only if its own `firmware.jcat` is from a trusted
+certificate too: the one in `/etc/pki/fwupd` serves both (fwupd puts the
+certificates of `/etc/pki/fwupd` and `/etc/pki/fwupd-metadata` in one
+trust store, verified with 2.0.20: either directory alone works).
+`fwupd-refresh.timer`, GNOME Software and Discover refresh the metadata
+about once a day.
 
 - The remote offers releases, not release candidates: those go with
   `update.py stage` or their `.cab` by hand. An rc and its release have one
@@ -206,20 +207,21 @@ refresh the metadata about once a day.
   offered nri, and an mrc one mrc.
 - Until v1.3.4 is the latest release, `fwupdmgr refresh` finds no metadata
   (404).
-- Without the certificate in `/etc/pki/fwupd-metadata` the refresh fails
-  (*signatures were required, but none supplied*); without the one in
-  `/etc/pki/fwupd` the update (*firmware signature missing or not trusted*).
-  Do not set `OnlyTrusted=false` instead.
-- To remove it: delete the three files and restart fwupd.
+- Without the certificate the refresh fails (*signatures were required,
+  but none supplied*) and so does the update (*firmware signature missing
+  or not trusted*). Do not set `OnlyTrusted=false` instead.
+- To remove it: delete the two files and restart fwupd.
 
 Tested here with fwupd 2.0.20, its daemon on a simulated ESRT (v1.3.3) and
 a copy of the release pages on a local server, with the redirect of
 `releases/latest/download`: `fwupdmgr refresh`, `get-updates` (1.3.4, from
 the metadata of v1.3.4-rc1 signed by a test key) and `update`, which
 downloaded the `.cab` of the v1.3.4-rc1 release from GitHub and staged the
-capsule with the `OsIndications` bit; refused: a `.cab` with another
-checksum (*checksum invalid*), the metadata without its certificate, the
-package without its own.
+capsule with the `OsIndications` bit; then, with the metadata of
+v1.3.4-rc2 as published, `refresh` and `reinstall` from the remote, the
+capsule in the ESP identical to the `.cap` of the release. Refused: a
+`.cab` with another checksum (*checksum invalid*), the metadata and the
+package without the certificate.
 
 ### A package by hand
 
@@ -244,10 +246,9 @@ the one of `tools/update.py`).
   `OnlyTrusted=false` instead.
 - A certificate in `/etc/pki/fwupd` is trusted for any device, not only for
   the firmware: whoever holds the project key could sign a package that fwupd
-  would install on that computer for another device; with the certificate
-  in `/etc/pki/fwupd-metadata` too, the remote could offer it, if the same
-  person could also publish a release of the project. Remove the files when
-  you no longer need them.
+  would install on that computer for another device, and the remote could
+  offer it, if the same person could also publish a release of the project.
+  Remove the files when you no longer need them.
 - The releases are not on LVFS: without the remote, download the `.cab` of
   the release.
 - `tools/update.py info FILE.cab` checks a package: capsule, metadata,
@@ -435,5 +436,5 @@ secret, and release. That release is signed with the new key, so the
 firmware in the field, which trusts the old one, refuses it: install it once
 with flashrom. Or, to stay with capsules, sign one transition release with
 the old key and the new certificate inside. fwupd needs the new certificate
-too, in `/etc/pki/fwupd` and `/etc/pki/fwupd-metadata`: until then its
-remote refuses the metadata of the releases signed with the new key.
+too, in `/etc/pki/fwupd`: until then its remote refuses the metadata of the
+releases signed with the new key.

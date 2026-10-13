@@ -26,8 +26,9 @@
 # componenti AppStream dei .cab di una release (il metainfo di ciascuno, con
 # l'indirizzo del .cab, i suoi checksum e le dimensioni), e accanto
 # ourobios.xml.gz.jcat, SHA-256 e firma PKCS#7 fatte da jcat-tool con la
-# chiave delle capsule (tools/build.sh): fwupd li carica solo con un
-# certificato in /etc/pki/fwupd-metadata. Li pubblica la release mrc, e il
+# chiave delle capsule (tools/build.sh): fwupd li carica solo con il
+# certificato in /etc/pki/fwupd (o fwupd-metadata: lo stesso elenco di
+# certificati fidati). Li pubblica la release mrc, e il
 # remote li scarica da releases/latest/download/.
 #
 # Solo la libreria standard di Python e tools/update.py, che legge e
