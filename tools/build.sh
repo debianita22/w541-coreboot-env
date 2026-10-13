@@ -31,11 +31,11 @@
 #   update-test    la prova dell'aggiornamento con le capsule (vboot A/B) in
 #                  QEMU q35, tools/qemu-update.py: un payload EDK2 DEBUG con
 #                  le patch del progetto, che si fida di una chiave creata per
-#                  la prova; tre ROM per q35 con vboot a due slot (A, B, C),
-#                  costruite in un worktree dell'albero con
-#                  patches/test/q35-update-test.patch; le loro capsule, fatte
-#                  come quelle delle release. Le ROM del W541 non c'entrano.
-#                  Seriale in WORK/update-test/out
+#                  la prova; quattro ROM per q35 con vboot a due slot (A, B,
+#                  C e D, che ha anche lo schermo per il setup), costruite in
+#                  un worktree dell'albero con patches/test/q35-update-test.patch;
+#                  le loro capsule, fatte come quelle delle release. Le ROM del
+#                  W541 non c'entrano. Seriale in WORK/update-test/out
 #   keys           controlla le chiavi di firma dell'ambiente (CAPSULE_SIGNING_KEY,
 #                  VBOOT_SIGNING_KEY) senza build: con --release devono esserci
 #   toolchain-key  stampa la chiave della cache del crossgcc (build.yml)
@@ -116,11 +116,14 @@ TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
 CAPSULE_REGIONS=(RW_MRC_CACHE RW_SECTION_A RW_SECTION_B)
 CAPSULE_CERT=keys/capsule-signing.pem
 # La prova dell'aggiornamento (update-test): il GUID dell'FMP delle ROM di
-# prova, che non e' quello di una variante; le ROM A, B e C con le loro
-# versioni e la minima; la patch per q35, che va solo nel worktree della prova
+# prova, che non e' quello di una variante; le ROM A, B, C e D con le loro
+# versioni e la minima; quella con lo schermo, per il setup del payload (la
+# grafica rallenta gli avvii, le altre non ce l'hanno); la patch per q35, che
+# va solo nel worktree della prova
 UPDATE_TEST_GUID="b195f75a-8f95-4282-950c-ee9dd1099ec9"
-UPDATE_TEST_ROMS=("A 0x01000000" "B 0x01010000" "C 0x01020000")
+UPDATE_TEST_ROMS=("A 0x01000000" "B 0x01010000" "C 0x01020000" "D 0x01030000")
 UPDATE_TEST_LSV=0x01000000
+UPDATE_TEST_SCREEN=D
 UPDATE_TEST_PATCH=patches/test/q35-update-test.patch
 # Le chiavi pubbliche di vboot (tools/vboot-keys.sh), in w541/vboot/
 # dell'albero. La chiave privata della chiave dati (firmware_data_key.vbprivk)
@@ -935,10 +938,11 @@ update_test_q35() {
 # l'albero delle ROM non vede mai
 cmd_update_test() {
 	need_prepared
-	local t ut ab
-	for t in qemu-system-x86_64 mformat mcopy mdir mmd openssl; do
+	local t ut ab rom
+	local -a caps=()
+	for t in qemu-system-x86_64 mformat mcopy mdir mmd mdel openssl clang ld.lld; do
 		command -v "${t}" > /dev/null \
-			|| die "update-test: serve ${t} (Debian/Ubuntu: apt install qemu-system-x86 mtools openssl)"
+			|| die "update-test: serve ${t} (Debian/Ubuntu: apt install qemu-system-x86 mtools openssl clang lld)"
 	done
 	if [ "${TOOLCHAIN}" = crossgcc ]; then
 		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
@@ -953,12 +957,14 @@ cmd_update_test() {
 		update_test_build "${ut}" "${ab}"
 	)
 	say "update-test: QEMU"
-	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" "${ut}/A.cap" "${ut}/B.cap" "${ut}/C.cap" \
+	for rom in "${UPDATE_TEST_ROMS[@]}"; do caps+=("${ut}/${rom%% *}.cap"); done
+	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" --lock-test "${ut}/slot-lock-test.efi" "${caps[@]}" \
 		|| die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
 }
 
-# La chiave di prova, il payload, le ROM A, B e C e le loro capsule in $1; il
-# worktree in $2
+# La chiave di prova, il payload, le ROM A, B, C e D e le loro capsule in $1;
+# il worktree in $2. Il nome di ogni ROM ha versione e variante, come quello
+# delle release: il setup le legge dallo slot (patch edk2/0020)
 update_test_build() {
 	local ut="$1" ab="$2" b d fd rom n ver
 	say "update-test: la chiave delle capsule di prova"
@@ -983,6 +989,8 @@ update_test_build() {
 		echo "CONFIG_PAYLOAD_EDK2=y"
 		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig" || true
 		echo "CONFIG_EDK2_DEBUG=y"
+		# il setup grafico del W541 (LvglPkg): con la seriale sarebbe di testo
+		echo "CONFIG_EDK2_USE_LVGL_RENDERER=y"
 		echo "CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT=\"${ut}/cert.pem\""
 		echo "CONFIG_LOCALVERSION=\"ouroBIOS-update-test-payload\""
 	} > "${b}/defconfig"
@@ -1023,7 +1031,13 @@ update_test_build() {
 			echo "CONFIG_PAYLOAD_ELF=y"
 			echo "CONFIG_PAYLOAD_FILE=\"${fd}\""
 			echo "CONFIG_DEBUG_SMI=y"
-			echo "CONFIG_LOCALVERSION=\"ouroBIOS-update-test-${n}\""
+			printf 'CONFIG_LOCALVERSION="ouroBIOS-v%d.%d.%d-mrc+update-test-%s"\n' \
+				$((ver >> 24)) $(((ver >> 16) & 0xff)) $((ver & 0xffff)) "${n}"
+			if [ "${n}" = "${UPDATE_TEST_SCREEN}" ]; then
+				echo "CONFIG_GENERIC_LINEAR_FRAMEBUFFER=y"
+				echo "CONFIG_DRIVERS_EMULATION_QEMU_XRES=1920"
+				echo "CONFIG_DRIVERS_EMULATION_QEMU_YRES=1080"
+			fi
 		} > "${d}/defconfig"
 		mk_in "${ab}" "${n}" defconfig KBUILD_DEFCONFIG="build-${n}/defconfig" > "${d}/defconfig.log" 2>&1 \
 			|| { cat "${d}/defconfig.log"; die "update-test: make defconfig della ROM ${n} fallito"; }
@@ -1035,7 +1049,14 @@ update_test_build() {
 		fi
 	done
 
-	say "update-test: capsule A, B e C, firmate con la chiave di prova"
+	say "update-test: l'applicazione UEFI che prova il blocco dell'altro slot"
+	clang --target=x86_64-unknown-windows -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
+		-fno-stack-protector -mno-red-zone -mgeneral-regs-only -nostdlib -fuse-ld=lld \
+		-Wl,-subsystem:efi_application -Wl,-entry:efi_main \
+		-o "${ut}/slot-lock-test.efi" "${O}/tools/efi/slot-lock-test.c" \
+		|| die "update-test: tools/efi/slot-lock-test.c non compila"
+
+	say "update-test: capsule A, B, C e D, firmate con la chiave di prova"
 	(umask 077; cat "${ut}/key.pem" "${ut}/cert.pem" > "${ut}/signer.pem") || die "update-test: signer.pem"
 	for rom in "${UPDATE_TEST_ROMS[@]}"; do
 		read -r n ver <<< "${rom}"

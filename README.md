@@ -140,7 +140,8 @@ Inside coreboot:
   *BIOS Lock* and *Firmware protection* on;
   the version is in the ESRT, and from v1.2.2 each release has an fwupd
   package too, `fwupdmgr install`; without an OS, the *Firmware Update* page
-  of the setup installs the capsule from a USB drive
+  of the setup installs the capsule from a USB drive and, from v1.3.4, goes
+  back to the release in the other slot
   ([docs/update.md](docs/update.md));
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
@@ -229,7 +230,7 @@ write must find and delete the first copy, leaving one. It needs
 payload and coreboot's common code, not the board.
 
 `update-test` checks the update path the same way, with
-`tools/qemu-update.py`: three coreboot images for q35 with vboot's two RW
+`tools/qemu-update.py`: four coreboot images for q35 with vboot's two RW
 slots and its nvdata in flash, built from a git worktree of the tree with
 `patches/test/q35-update-test.patch` (never in a W541 ROM), an EDK2 payload
 of the project's patches built for debugging and trusting a key made for the
@@ -239,9 +240,12 @@ boots from off at every reset: each capsule must write only the slot that
 is not running, vboot must try it and the payload confirm it, a capsule of
 the release already in the other slot must write nothing to the slots, and
 vboot must go back to the old slot when the new one does not verify or does
-not reach the payload; the ESRT is checked at every boot
+not reach the payload; from the setup (keys sent by QEMU), *Go back to* must
+switch to the other slot without writing it, and a UEFI application
+started from the disk (`tools/efi/slot-lock-test.c`) must be refused, before
+and after `ExitBootServices()`; the ESRT is checked at every boot
 ([docs/vboot.md](docs/vboot.md#how-it-is-tested)). It needs
-`qemu-system-x86` and `mtools`; the serial console goes to
+`qemu-system-x86`, `mtools`, `clang` and `lld`; the serial console goes to
 `work/update-test/out`.
 
 ## Continuous integration and releases
@@ -277,7 +281,7 @@ gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --late
 | `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
 | `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
 | `patches/` | the series applied to coreboot, optional patches, the patches to EDK2 and its LvglPkg, and the q35 patch of the update test ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU; `logo.py`, the logo as an LVGL image or a PNG |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU (with `efi/slot-lock-test.c`, a UEFI application for it); `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |

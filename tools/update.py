@@ -751,9 +751,10 @@ def cmd_status(args):
         # (tools/qemu-update.py, passi 6 e 7)
         if not fw["legacy"] and fw["last_status"] == 0 and fw["last_version"] != fw["version"]:
             print("nota:      la capsula %s e' stata scritta, ma gira la %s: vboot e' tornato all'altro "
-                  "slot (quello nuovo non si e' verificato o non e' partito), o il flash e' stato "
-                  "riscritto dopo. Gli slot: sudo flashrom -p internal -r flash.bin, poi "
-                  "update.py vboot flash.bin" % (version_str(fw["last_version"]), version_str(fw["version"])))
+                  "slot (quello nuovo non si e' verificato o non e' partito), si e' tornati indietro dal "
+                  "setup (Firmware Update), o il flash e' stato riscritto dopo. Gli slot: sudo flashrom "
+                  "-p internal -r flash.bin, poi update.py vboot flash.bin"
+                  % (version_str(fw["last_version"]), version_str(fw["version"])))
     else:
         print("ultimo:    nessun aggiornamento con capsula")
     print("su disco:  %s" % ("supportato" if cod_supported() else "NON supportato da questo firmware"))

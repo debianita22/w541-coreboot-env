@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Tue, 13 Oct 2026 16:50:10 +0200
+Subject: [PATCH] drivers/smmstore: Let the payload boot the other vboot slot
+
+With vboot, two RW slots and the nvdata in flash, a firmware update writes
+the slot that does not run and asks vboot to try it. Until the next update
+writes over it, the other slot keeps the release before: going back to it
+only takes vboot trying that slot. A payload can offer that in its setup,
+with no OS; on the ThinkPad W541 the EDK2 setup page of the firmware does.
+
+Add SMMSTORE_CMD_VBOOT_TRY_OTHER. RW_MRC_CACHE, if the FMAP has one, is
+erased first, as an update does, so that the other slot trains the memory
+itself. Then the nvdata gets try_next set to the slot that vboot did not
+boot this time, with two tries, as after an update, and is read back. If
+a write fails, so does the command, and the slot of now only trains the
+memory again. Once the payload of the other slot boots, it keeps the slot
+with SMMSTORE_CMD_VBOOT_SLOT_GOOD; if the slot does not verify or does not
+get that far, vboot comes back to the slot of now.
+
+An OS must not go back to an older release without the checks of an
+update capsule (the lowest supported version), so add
+SMMSTORE_CMD_VBOOT_LOCK, which refuses TRY_OTHER until the next boot. The
+payload sends it before it starts a boot option (an OS loader, a shell)
+and at ExitBootServices(). On S3 resume the payload does not run and SMM
+is loaded again, unlocked: ramstage sends it before the OS resumes.
+
+TEST=In QEMU q35 with vboot's two RW slots and the nvdata in flash, and
+the EDK2 payload of ouroBIOS (its update test): from the setup,
+SMMSTORE_CMD_VBOOT_TRY_OTHER set try_next to the other slot with two tries
+and erased RW_MRC_CACHE, wrote neither slot, and vboot booted the other
+slot, which the payload kept. A UEFI application started from the disk
+got SMMSTORE_RET_FAILURE, before and after ExitBootServices(), and the
+nvdata kept the slot.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/drivers/smmstore/ramstage.c | 18 +++++++++++++
+ src/drivers/smmstore/smi.c      | 46 +++++++++++++++++++++++++++++++++
+ src/include/smmstore.h          | 20 ++++++++++++++
+ src/security/vboot/vbnv.c       | 34 ++++++++++++++++++++++++
+ src/security/vboot/vbnv.h       |  8 ++++++
+ 5 files changed, 126 insertions(+)
+
+diff --git a/src/drivers/smmstore/ramstage.c b/src/drivers/smmstore/ramstage.c
+index 50767875..bff99df0 100644
+--- a/src/drivers/smmstore/ramstage.c
++++ b/src/drivers/smmstore/ramstage.c
+@@ -1,5 +1,7 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
++#include <bootstate.h>
++#include <console/console.h>
+ #include <cpu/x86/smm.h>
+ #include <commonlib/helpers.h>
+ #include <commonlib/region.h>
+@@ -37,3 +39,19 @@ void lb_smmstorev2(struct lb_header *header)
+ 	store->block_size = info.block_size;
+ 	store->apm_cmd = APM_CNT_SMMSTORE;
+ }
++
++/*
++ * The payload sends SMMSTORE_CMD_VBOOT_LOCK before an OS starts. On S3 resume
++ * the payload does not run, and SMM was loaded again, unlocked: lock it here,
++ * before the OS resumes.
++ */
++static void lock_vboot_try_other(void *unused)
++{
++	if (!CONFIG(VBOOT_SLOTS_RW_AB) || !CONFIG(VBOOT_VBNV_FLASH))
++		return;
++
++	if (call_smm(APM_CNT_SMMSTORE, SMMSTORE_CMD_VBOOT_LOCK, NULL) != SMMSTORE_RET_SUCCESS)
++		printk(BIOS_ERR, "SMMSTORE: failed to lock the switch to the other vboot slot\n");
++}
++
++BOOT_STATE_INIT_ENTRY(BS_OS_RESUME, BS_ON_ENTRY, lock_vboot_try_other, NULL);
+diff --git a/src/drivers/smmstore/smi.c b/src/drivers/smmstore/smi.c
+index 09ffbf5c..93b9f2f5 100644
+--- a/src/drivers/smmstore/smi.c
++++ b/src/drivers/smmstore/smi.c
+@@ -3,6 +3,7 @@
+ #include <console/console.h>
+ #include <commonlib/region.h>
+ #include <cpu/x86/smm.h>
++#include <fmap.h>
+ #include <security/vboot/vbnv.h>
+ #include <smmstore.h>
+ #include <stddef.h>
+@@ -24,6 +25,40 @@ static int range_check(void *start, size_t size)
+ 	return 0;
+ }
+ 
++/* SMMSTORE_CMD_VBOOT_TRY_OTHER refused until the next boot */
++static bool vboot_locked;
++
++/* The memory training cache, if the FMAP has one, which another slot must not reuse */
++static int erase_mrc_cache(void)
++{
++	struct region_device rdev;
++
++	if (fmap_locate_area_as_rdev_rw("RW_MRC_CACHE", &rdev))
++		return 0;
++	if (rdev_eraseat(&rdev, 0, region_device_sz(&rdev)) < 0) {
++		printk(BIOS_ERR, "SMMSTORE: failed to erase RW_MRC_CACHE\n");
++		return -1;
++	}
++	return 0;
++}
++
++static uint32_t vboot_try_other(void)
++{
++	if (!CONFIG(VBOOT_SLOTS_RW_AB) || !CONFIG(VBOOT_VBNV_FLASH))
++		return SMMSTORE_RET_UNSUPPORTED;
++	if (vboot_locked) {
++		printk(BIOS_WARNING, "SMMSTORE: the other vboot slot is locked until reboot\n");
++		return SMMSTORE_RET_FAILURE;
++	}
++	/*
++	 * The cache first: if the switch does not happen after that, the slot
++	 * of now only trains the memory again.
++	 */
++	if (erase_mrc_cache() || vbnv_try_other_slot(2))
++		return SMMSTORE_RET_FAILURE;
++	return SMMSTORE_RET_SUCCESS;
++}
++
+ uint32_t smmstore_exec(uint8_t command, void *param)
+ {
+ 	uint32_t ret = SMMSTORE_RET_FAILURE;
+@@ -32,6 +67,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+ 	if (smmstore_preprocess_cmd(&command, param))
+ 		return SMMSTORE_RET_SUCCESS;
+ 
++	/* No parameters: coreboot sends it too, on S3 resume */
++	if (command == SMMSTORE_CMD_VBOOT_LOCK) {
++		if (!CONFIG(VBOOT_SLOTS_RW_AB) || !CONFIG(VBOOT_VBNV_FLASH))
++			return SMMSTORE_RET_UNSUPPORTED;
++		vboot_locked = true;
++		return SMMSTORE_RET_SUCCESS;
++	}
++
+ 	if (!param)
+ 		return SMMSTORE_RET_FAILURE;
+ 
+@@ -89,6 +132,9 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+ 		vbnv_mark_tried_slot_good();
+ 		ret = SMMSTORE_RET_SUCCESS;
+ 		break;
++	case SMMSTORE_CMD_VBOOT_TRY_OTHER:
++		ret = vboot_try_other();
++		break;
+ 	default:
+ 		printk(BIOS_DEBUG, "Unknown SMM store command: 0x%02x\n", command);
+ 		ret = SMMSTORE_RET_UNSUPPORTED;
+diff --git a/src/include/smmstore.h b/src/include/smmstore.h
+index 2020fa32..e7700ad4 100644
+--- a/src/include/smmstore.h
++++ b/src/include/smmstore.h
+@@ -23,6 +23,26 @@
+  */
+ #define SMMSTORE_CMD_VBOOT_SLOT_GOOD 8
+ 
++/*
++ * With vboot, two RW slots and the nvdata in flash: boot the RW slot that
++ * is not running at the next boots. vboot tries it twice and keeps it once
++ * its payload sends SMMSTORE_CMD_VBOOT_SLOT_GOOD; if it does not verify or
++ * does not get that far, vboot goes back to the slot that runs now. The
++ * memory training cache (RW_MRC_CACHE), if the FMAP has one, is erased first,
++ * as an update capsule does, so that the other slot trains the memory itself.
++ *
++ * For the setup of the payload: SMMSTORE_CMD_VBOOT_LOCK, which takes no
++ * parameters, refuses it until the next boot. The payload sends that before
++ * an OS starts, and ramstage on S3 resume, so that an OS cannot go back to an
++ * older release without the checks of an update capsule.
++ *
++ * Both return SMMSTORE_RET_UNSUPPORTED without two slots and the nvdata in
++ * flash; TRY_OTHER returns SMMSTORE_RET_FAILURE when locked, without valid
++ * nvdata, or when the cache or the nvdata could not be written.
++ */
++#define SMMSTORE_CMD_VBOOT_TRY_OTHER 9
++#define SMMSTORE_CMD_VBOOT_LOCK 10
++
+ /*
+  * Used by capsule updates as a standalone command or modifier to v2 commands.
+  *
+diff --git a/src/security/vboot/vbnv.c b/src/security/vboot/vbnv.c
+index 069c3e10..d47e8e11 100644
+--- a/src/security/vboot/vbnv.c
++++ b/src/security/vboot/vbnv.c
+@@ -96,6 +96,40 @@ int vbnv_mark_tried_slot_good(void)
+ 	return 1;
+ }
+ 
++int vbnv_try_other_slot(uint8_t tries)
++{
++	uint8_t vbnv_copy[VBOOT_VBNV_BLOCK_SIZE];
++	uint8_t stored[VBOOT_VBNV_BLOCK_SIZE];
++	char other;
++
++	read_vbnv(vbnv_copy);
++	/* read_vbnv() clears a copy that is not valid: nothing to start from */
++	if ((vbnv_copy[HEADER_OFFSET] & HEADER_MASK) != HEADER_SIGNATURE)
++		return -1;
++
++	if (vbnv_copy[BOOT2_OFFSET] & BOOT2_TRIED) {
++		vbnv_copy[BOOT2_OFFSET] &= ~BOOT2_TRY_NEXT;
++		other = 'A';
++	} else {
++		vbnv_copy[BOOT2_OFFSET] |= BOOT2_TRY_NEXT;
++		other = 'B';
++	}
++	vbnv_copy[BOOT_OFFSET] &= ~BOOT_TRY_B_COUNT_MASK;
++	vbnv_copy[BOOT_OFFSET] |= tries & BOOT_TRY_B_COUNT_MASK;
++	regen_vbnv_crc(vbnv_copy);
++	save_vbnv(vbnv_copy);
++
++	/* save_vbnv() reports no error: the stored copy must be the new one */
++	read_vbnv(stored);
++	if (memcmp(stored, vbnv_copy, sizeof(stored))) {
++		printk(BIOS_ERR, "VBNV: failed to store slot %c next\n", other);
++		return -1;
++	}
++	printk(BIOS_INFO, "VBNV: slot %c next, %u tries\n", other,
++	       (unsigned int)(tries & BOOT_TRY_B_COUNT_MASK));
++	return 0;
++}
++
+ /* Read the USB Device Controller(UDC) enable flag from VBNV. */
+ int vbnv_udc_enable_flag(void)
+ {
+diff --git a/src/security/vboot/vbnv.h b/src/security/vboot/vbnv.h
+index bf64734b..7dbc84d7 100644
+--- a/src/security/vboot/vbnv.h
++++ b/src/security/vboot/vbnv.h
+@@ -20,6 +20,14 @@ void regen_vbnv_crc(uint8_t *vbnv_copy);
+  */
+ int vbnv_mark_tried_slot_good(void);
+ 
++/*
++ * Ask vboot to boot the RW slot that it did not boot this time at the next
++ * boots, with the given number of tries. Works on the stored copy, like
++ * vbnv_mark_tried_slot_good(). Returns 0 on success, -1 without valid
++ * nvdata to start from or when the new copy was not stored.
++ */
++int vbnv_try_other_slot(uint8_t tries);
++
+ /* Read the USB Device Controller(UDC) enable flag from VBNV. */
+ int vbnv_udc_enable_flag(void);
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Tue, 13 Oct 2026 17:39:02 +0200
+Subject: [PATCH] LvglDisplayEngineDxe: Give the entries to the other vboot
+ slot an icon
+
+The Firmware Update page of UefiPayloadPkg goes to the release of the
+other vboot slot: "Go back to <release>", or "Switch to <release>" when
+that one is newer. Both get a letter for an icon, and a release name
+could hold a word of the table.
+
+Show them with the previous and next symbols on orange, before any other
+word.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ LvglDisplayEngineDxe/LvglFormRenderer.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/LvglDisplayEngineDxe/LvglFormRenderer.c b/LvglDisplayEngineDxe/LvglFormRenderer.c
+index d0a303c..e8b67ef 100644
+--- a/LvglDisplayEngineDxe/LvglFormRenderer.c
++++ b/LvglDisplayEngineDxe/LvglFormRenderer.c
+@@ -553,6 +553,13 @@ LookupPromptIcon (
+     CONST CHAR8    *Symbol;
+     UINT32         Color;
+   } Map[] = {
++    //
++    // The Firmware Update page of UefiPayloadPkg: back to the release of the
++    // other vboot slot, or to a newer one there. First, as a release name
++    // could hold any of the words below.
++    //
++    { "Go back to",           LV_SYMBOL_PREV,      THEME_COLOR_ICON_ORANGE },
++    { "Switch to",            LV_SYMBOL_NEXT,      THEME_COLOR_ICON_ORANGE },
+     { "Default Boot",         LV_SYMBOL_PLAY,      THEME_COLOR_ICON_GREEN  },
+     { "Boot Menu",            LV_SYMBOL_LIST,      THEME_COLOR_ICON_BLUE   },
+     { "Boot Manager",         LV_SYMBOL_DRIVE,     THEME_COLOR_ICON_GRAY   },
+-- 
+2.43.0
+

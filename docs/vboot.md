@@ -67,7 +67,13 @@ confirms it; if two boots in a row do not get there (a hang, a power-off),
 vboot goes back to the old slot. If the new slot does not verify, it goes
 back at once. The update after that writes the other slot, so the slots
 alternate. Until then the old slot keeps the release before:
-`update.py rollback` goes back to it ([docs/update.md](update.md#going-back)).
+`update.py rollback` goes back to it ([docs/update.md](update.md#going-back)),
+and so does, without an OS, *Go back to* on the *Firmware Update* page of the
+setup ([From the setup](update.md#from-the-setup)): the payload asks
+coreboot's SMMSTORE handler to try the other slot, with two tries, and to
+clear `RW_MRC_CACHE` (patch 0065). The payload locks that request before it
+starts a boot option and at `ExitBootServices()`, coreboot on S3 resume: an
+OS loader or an OS goes back only with a capsule.
 
 The capsule never writes `WP_RO`, `SMMSTORE`, `RO_VPD` or `RW_ELOG`.
 
@@ -148,10 +154,12 @@ At every build, before a release (`tools/build.sh update-test`, the
 with the EDK2 payload of the project's patches (a DEBUG build that trusts a
 key made for the test), coreboot's common code with the project's patches,
 vboot with two RW slots and its nvdata in flash, and the W541's map cut down
-to the regions an update touches. Three ROMs, A, B and C, and their capsules,
-made as those of the releases; each capsule goes into `\EFI\UpdateCapsule`
-of an EFI system partition with the capsule-on-disk bit of `OsIndications`,
-as `update.py stage` puts it; QEMU starts from off at every reset:
+to the regions an update touches. Four ROMs, A, B, C and D (D with a
+screen, for the setup), named with their versions as the releases are, and
+their capsules, made as those of the releases; each capsule goes into
+`\EFI\UpdateCapsule` of an EFI system partition with the capsule-on-disk
+bit of `OsIndications`, as `update.py stage` puts it; QEMU starts from off
+at every reset:
 
 - capsule B while A runs: the payload writes slot B and `RW_MRC_CACHE`, asks
   vboot to try B for two boots and restarts; slot A and the read-only part
@@ -165,13 +173,27 @@ as `update.py stage` puts it; QEMU starts from off at every reset:
   signature check fails, the laptop restarts from B and records A as failed;
 - capsule A again, then two boots cut right after verstage chose A:
   *try_count used up; falling back to slot B*;
+- capsule D into slot A, then in D's setup (Esc, *System Configuration*,
+  *Firmware Update*, the keys sent by QEMU, the pages followed on the
+  serial port): the page shows slot A with D and slot B with B, *Go back
+  to* B is confirmed with Y, coreboot asks vboot to try B with two tries and
+  clears `RW_MRC_CACHE`, nothing is written to the slots; vboot boots B and
+  the payload confirms it;
+- a boot option, a UEFI application in `\EFI\BOOT\BOOTX64.EFI`
+  (`tools/efi/slot-lock-test.c`), asks coreboot for the other slot as a boot
+  loader would, then after `ExitBootServices()` as an OS: refused both
+  times, `RW_NVRAM` stays on B;
 - the ESRT at every boot: the version of the slot that runs, and as last
   attempt the version of the capsule, status 0 (patch `edk2/0018`). After a
   fallback the last attempt is still the capsule that was written, with
   status 0: the ESRT does not say that vboot went back (`update.py status`
   notes the version mismatch);
-- after the five capsules, the read-only part is the one of ROM A, and a
-  UEFI variable written before the first update is still in the store.
+- after the six capsules and the switch from the setup, the read-only part
+  is the one of ROM A, and a UEFI variable written before the first update
+  is still in the store.
+
+The S3 resume path of the lock is not emulated: QEMU's q35 boots no OS
+here that could suspend.
 
 By hand, in QEMU with v1.3.0: `RW_NVRAM` full, the payload erases it and
 writes the request at the start.

@@ -1,0 +1,1076 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Tue, 13 Oct 2026 16:49:58 +0200
+Subject: [PATCH] UefiPayloadPkg: Go back to the other vboot slot from the
+ setup
+
+With coreboot's vboot and two RW slots, an update capsule writes the slot
+that does not run and boots it; the other slot keeps the release before,
+until the next update. Going back to it needed an OS: tools/update.py
+rollback stages the capsule of that release, which the firmware finds
+already written, so that it only asks vboot to try that slot.
+
+coreboot's SMMSTORE handler now does that on request
+(SMMSTORE_CMD_VBOOT_TRY_OTHER), and refuses it until the next boot after
+SMMSTORE_CMD_VBOOT_LOCK. Add both to SmmStoreLib. PlatformBootManagerLib
+sends the lock when a boot option starts (ReadyToBoot, which booting the
+setup does not signal) and at ExitBootServices(), or at once if it cannot
+wait for those: an OS loader, the UEFI Shell or an OS cannot go back to an
+older release without the checks of a capsule.
+
+The Firmware Update page shows the slot that runs (the one of the CBFS
+that coreboot reports) and the release in each slot: COREBOOT_EXTRA_VERSION
+of the "revision" file in the CBFS of the slot, read through the flash
+window. "Go back to <release>" asks for a confirmation and restarts into
+the other slot, after the checks of a capsule that can be made here: a
+release that is not the one that runs, of the same variant (mrc or nri,
+whose cache-as-RAM layouts differ; both must be known), with a version not
+older than the lowest supported one. vboot checks the signature of the
+slot at the next boot, and comes back if it does not verify or does not
+boot twice.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../FirmwareUpdateDxe/FirmwareUpdate.c        | 582 +++++++++++++++++-
+ .../FirmwareUpdateDxe/FirmwareUpdate.uni      |  13 +-
+ .../FirmwareUpdateDxe/FirmwareUpdateDxe.inf   |   7 +-
+ .../FirmwareUpdateDxe/FirmwareUpdateVfr.vfr   |  19 +-
+ .../Include/Guid/FirmwareUpdateConfig.h       |   1 +
+ UefiPayloadPkg/Include/Library/SmmStoreLib.h  |  36 ++
+ .../PlatformBootManager.h                     |   3 +-
+ .../PlatformBootManagerLib.inf                |   2 +
+ .../PlatformBootManagerLib/PlatformCapsule.c  |  58 +-
+ UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c |  50 ++
+ UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h |   7 +
+ 11 files changed, 771 insertions(+), 7 deletions(-)
+
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
+index 89703514b..a102822ba 100644
+--- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
+@@ -13,10 +13,20 @@
+   stages: PlatformBootManagerLib applies it at the next boot, which coreboot
+   starts with the whole flash writable.
+ 
++  With vboot and two RW slots, shows which slot runs and the release in the
++  other one, read from the "revision" file of each slot's CBFS, and goes back
++  to that release: coreboot's SMMSTORE handler asks vboot to try the other
++  slot at the next boots, as after an update, and the system restarts.
++  coreboot refuses that once a boot option or an OS starts
++  (PlatformBootManagerLib locks it at ReadyToBoot and ExitBootServices()), so
++  here is checked what a capsule would be: not the same release, the same
++  variant, not older than the lowest supported version.
++
+   SPDX-License-Identifier: BSD-2-Clause-Patent
+ **/
+ 
+ #include <Uefi.h>
++#include <Guid/BootMediaInfoGuid.h>
+ #include <Guid/FileInfo.h>
+ #include <Guid/FirmwareUpdateConfig.h>
+ #include <Guid/FmpCapsule.h>
+@@ -29,9 +39,11 @@
+ #include <Library/DebugLib.h>
+ #include <Library/DevicePathLib.h>
+ #include <Library/HiiLib.h>
++#include <Library/HobLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Library/PcdLib.h>
+ #include <Library/PrintLib.h>
++#include <Library/SmmStoreLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+ #include <Library/UefiLib.h>
+ #include <Library/UefiRuntimeServicesTableLib.h>
+@@ -47,6 +59,12 @@
+ #define FILE_INFO_SIZE      (SIZE_OF_EFI_FILE_INFO + 256 * sizeof (CHAR16))
+ #define FILE_NAME_LENGTH    64
+ #define VERSION_LENGTH      16
++#define RELEASE_LENGTH      64
++
++#define FLASH_WINDOW_SIZE   SIZE_16MB         // the flash decoded below 4 GiB
++#define CBFS_ALIGNMENT      64
++#define CBFS_METADATA_MAX   256
++#define REVISION_MAX_SIZE   SIZE_16KB         // coreboot's build.h
+ 
+ //
+ // The FMP_PAYLOAD_HEADER of FmpPayloadHeaderLibV1, in front of the image.
+@@ -60,6 +78,37 @@ typedef struct {
+   UINT32    LowestSupportedVersion;
+ } FMP_PAYLOAD_HEADER_V1;
+ 
++//
++// coreboot's flash map (FMAP) and the header of a CBFS file, whose fields are
++// big-endian.
++//
++#pragma pack(1)
++typedef struct {
++  CHAR8     Signature[8];
++  UINT8     VerMajor;
++  UINT8     VerMinor;
++  UINT64    Base;
++  UINT32    Size;
++  CHAR8     Name[32];
++  UINT16    AreaCount;
++} FMAP_HEADER;
++
++typedef struct {
++  UINT32    Offset;
++  UINT32    Size;
++  CHAR8     Name[32];
++  UINT16    Flags;
++} FMAP_AREA;
++
++typedef struct {
++  CHAR8     Magic[8];
++  UINT32    Len;
++  UINT32    Type;
++  UINT32    AttributesOffset;
++  UINT32    Offset;
++} CBFS_FILE_HEADER;
++#pragma pack()
++
+ typedef struct {
+   VENDOR_DEVICE_PATH          VendorDevicePath;
+   EFI_DEVICE_PATH_PROTOCOL    End;
+@@ -73,6 +122,18 @@ typedef struct {
+   UINT32     LastStatus;
+ } SYSTEM_FIRMWARE_INFO;
+ 
++//
++// The RW slots of vboot: the one that runs, the other one, and the release in
++// each (empty when there is none).
++//
++typedef struct {
++  BOOLEAN    Found;
++  CHAR16     Running;
++  CHAR16     Other;
++  CHAR16     RunningName[RELEASE_LENGTH];
++  CHAR16     OtherName[RELEASE_LENGTH];
++} SLOT_INFO;
++
+ //
+ // The files of the \EFI\UpdateCapsule folders that the next boot would read.
+ //
+@@ -291,6 +352,376 @@ GetBiosVersion (
+   return String;
+ }
+ 
++/**
++  The flash, as coreboot reports it: its layout, and the address where it
++  ends at 4 GiB.
++
++  @param[out] Flash  The address of the start of the flash.
++
++  @return Its layout, or NULL if not reported or not decoded below 4 GiB.
++**/
++STATIC
++CONST BOOT_MEDIA_INFO *
++GetBootMedia (
++  OUT CONST UINT8  **Flash
++  )
++{
++  EFI_HOB_GUID_TYPE  *GuidHob;
++  BOOT_MEDIA_INFO    *Media;
++
++  GuidHob = GetFirstGuidHob (&gEfiBootMediaInfoHobGuid);
++  if ((GuidHob == NULL) || (GET_GUID_HOB_DATA_SIZE (GuidHob) < sizeof (BOOT_MEDIA_INFO))) {
++    return NULL;
++  }
++
++  Media = GET_GUID_HOB_DATA (GuidHob);
++  if ((Media->BootMediaSize == 0) || (Media->BootMediaSize > FLASH_WINDOW_SIZE)) {
++    return NULL;
++  }
++
++  *Flash = (CONST UINT8 *)(UINTN)(BASE_4GB - Media->BootMediaSize);
++  return Media;
++}
++
++/**
++  Where the FMAP of the running firmware puts an area.
++
++  @retval TRUE   Found, inside the flash.
++  @retval FALSE  No FMAP, or no such area.
++**/
++STATIC
++BOOLEAN
++FindFmapArea (
++  IN  CONST BOOT_MEDIA_INFO  *Media,
++  IN  CONST UINT8            *Flash,
++  IN  CONST CHAR8            *Name,
++  OUT UINT32                 *Offset,
++  OUT UINT32                 *Size
++  )
++{
++  FMAP_HEADER  Header;
++  FMAP_AREA    Area;
++  CHAR8        AreaName[sizeof (Area.Name) + 1];
++  UINTN        Index;
++
++  if ((Media->FmapOffset > Media->BootMediaSize) ||
++      (Media->BootMediaSize - Media->FmapOffset < sizeof (Header)))
++  {
++    return FALSE;
++  }
++
++  CopyMem (&Header, Flash + Media->FmapOffset, sizeof (Header));
++  if ((CompareMem (Header.Signature, "__FMAP__", sizeof (Header.Signature)) != 0) || (Header.VerMajor != 1) ||
++      ((UINT64)Header.AreaCount * sizeof (Area) > Media->BootMediaSize - Media->FmapOffset - sizeof (Header)))
++  {
++    return FALSE;
++  }
++
++  for (Index = 0; Index < Header.AreaCount; Index++) {
++    CopyMem (&Area, Flash + Media->FmapOffset + sizeof (Header) + Index * sizeof (Area), sizeof (Area));
++    CopyMem (AreaName, Area.Name, sizeof (Area.Name));
++    AreaName[sizeof (Area.Name)] = '\0';
++    if ((AsciiStrCmp (AreaName, Name) == 0) && ((UINT64)Area.Offset + Area.Size <= Media->BootMediaSize)) {
++      *Offset = Area.Offset;
++      *Size   = Area.Size;
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  The value of a string #define of coreboot's build.h, without the leading
++  dashes of COREBOOT_EXTRA_VERSION ("-ouroBIOS-v1.3.3-mrc").
++
++  @retval TRUE   Found, printable and not empty.
++  @retval FALSE  Not found, or too long for Value.
++**/
++STATIC
++BOOLEAN
++GetBuildDefine (
++  IN  CONST CHAR8  *Text,
++  IN  CONST CHAR8  *Name,
++  OUT CHAR16       *Value,
++  IN  UINTN        ValueLength
++  )
++{
++  CHAR8        Prefix[48];
++  CONST CHAR8  *Start;
++  UINTN        Index;
++
++  AsciiSPrint (Prefix, sizeof (Prefix), "#define %a \"", Name);
++  Start = AsciiStrStr (Text, Prefix);
++  if (Start == NULL) {
++    return FALSE;
++  }
++
++  for (Start += AsciiStrLen (Prefix); *Start == '-'; Start++) {
++  }
++
++  for (Index = 0; (Index + 1 < ValueLength) && (Start[Index] >= ' ') && (Start[Index] <= '~') && (Start[Index] != '"'); Index++) {
++    Value[Index] = (CHAR16)Start[Index];
++  }
++
++  Value[Index] = L'\0';
++  return (Index > 0) && (Start[Index] == '"');
++}
++
++/**
++  The release in a slot: the name that coreboot was built with
++  (CONFIG_LOCALVERSION, in COREBOOT_EXTRA_VERSION of the "revision" file, its
++  build.h), read from the CBFS of the slot through the flash window.  The walk
++  is the one of cbfs_walk() in coreboot.
++
++  @retval TRUE   Found, in Name.
++  @retval FALSE  No CBFS with that file: an empty or damaged slot.
++**/
++STATIC
++BOOLEAN
++GetSlotRelease (
++  IN  CONST UINT8  *Cbfs,
++  IN  UINT32       CbfsSize,
++  OUT CHAR16       *Name,
++  IN  UINTN        NameLength
++  )
++{
++  CBFS_FILE_HEADER  Header;
++  CHAR8             FileName[sizeof ("revision")];
++  UINT32            Offset;
++  UINT32            DataOffset;
++  UINT32            DataLength;
++  UINT32            NameEnd;
++  CHAR8             *Text;
++  BOOLEAN           Found;
++
++  Name[0] = L'\0';
++  Offset  = 0;
++  while ((UINT64)Offset + sizeof (Header) <= CbfsSize) {
++    CopyMem (&Header, Cbfs + Offset, sizeof (Header));
++    if (CompareMem (Header.Magic, "LARCHIVE", sizeof (Header.Magic)) != 0) {
++      Offset += CBFS_ALIGNMENT;
++      continue;
++    }
++
++    DataOffset = SwapBytes32 (Header.Offset);
++    DataLength = SwapBytes32 (Header.Len);
++    if ((DataOffset < sizeof (Header)) || (DataOffset > CBFS_METADATA_MAX) ||
++        ((UINT64)Offset + DataOffset + DataLength > CbfsSize))
++    {
++      Offset += CBFS_ALIGNMENT;
++      continue;
++    }
++
++    NameEnd = SwapBytes32 (Header.AttributesOffset);
++    if ((NameEnd == 0) || (NameEnd > DataOffset)) {
++      NameEnd = DataOffset;
++    }
++
++    if (NameEnd >= sizeof (Header) + sizeof (FileName)) {
++      CopyMem (FileName, Cbfs + Offset + sizeof (Header), sizeof (FileName));
++      if ((CompareMem (FileName, "revision", sizeof (FileName)) == 0) && (DataLength <= REVISION_MAX_SIZE)) {
++        Text = AllocateZeroPool (DataLength + 1);
++        if (Text == NULL) {
++          return FALSE;
++        }
++
++        CopyMem (Text, Cbfs + Offset + DataOffset, DataLength);
++        Found = GetBuildDefine (Text, "COREBOOT_EXTRA_VERSION", Name, NameLength) ||
++                GetBuildDefine (Text, "COREBOOT_VERSION", Name, NameLength);
++        FreePool (Text);
++        if (!Found) {
++          Name[0] = L'\0';
++        }
++
++        return Found;
++      }
++    }
++
++    Offset = ALIGN_VALUE (Offset + DataOffset + DataLength, CBFS_ALIGNMENT);
++  }
++
++  return FALSE;
++}
++
++/**
++  The RW slots of vboot (FW_MAIN_A and FW_MAIN_B in the FMAP): the one that
++  runs is the one of the CBFS that coreboot reports to the payload.
++**/
++STATIC
++VOID
++GetSlotInfo (
++  OUT SLOT_INFO  *Slots
++  )
++{
++  CONST BOOT_MEDIA_INFO  *Media;
++  CONST UINT8            *Flash;
++  UINT32                 Offset[2];
++  UINT32                 Size[2];
++  UINTN                  Running;
++
++  ZeroMem (Slots, sizeof (*Slots));
++  Media = GetBootMedia (&Flash);
++  if ((Media == NULL) ||
++      !FindFmapArea (Media, Flash, "FW_MAIN_A", &Offset[0], &Size[0]) ||
++      !FindFmapArea (Media, Flash, "FW_MAIN_B", &Offset[1], &Size[1]))
++  {
++    return;
++  }
++
++  for (Running = 0; Running < 2; Running++) {
++    if ((Media->CbfsOffset >= Offset[Running]) && (Media->CbfsOffset - Offset[Running] < Size[Running])) {
++      break;
++    }
++  }
++
++  if (Running == 2) {
++    return;
++  }
++
++  Slots->Found   = TRUE;
++  Slots->Running = (Running == 0) ? L'A' : L'B';
++  Slots->Other   = (Running == 0) ? L'B' : L'A';
++  GetSlotRelease (Flash + Offset[Running], Size[Running], Slots->RunningName, ARRAY_SIZE (Slots->RunningName));
++  GetSlotRelease (Flash + Offset[1 - Running], Size[1 - Running], Slots->OtherName, ARRAY_SIZE (Slots->OtherName));
++}
++
++/**
++  The version in the name of a release, "...-vX.Y.Z[-...]", numbered as the
++  ESRT numbers the releases: (X << 24) | (Y << 16) | Z.
++
++  @retval TRUE   Found.
++  @retval FALSE  The name has none.
++**/
++STATIC
++BOOLEAN
++ParseReleaseVersion (
++  IN  CONST CHAR16  *Name,
++  OUT UINT32        *Version
++  )
++{
++  CONST CHAR16  *Text;
++  CONST CHAR16  *Digit;
++  UINT32        Part[3];
++  UINTN         Index;
++
++  for (Text = Name; *Text != L'\0'; Text++) {
++    if ((*Text != L'v') || ((Text != Name) && (Text[-1] != L'-'))) {
++      continue;
++    }
++
++    ZeroMem (Part, sizeof (Part));
++    Digit = Text + 1;
++    for (Index = 0; Index < ARRAY_SIZE (Part); Index++) {
++      if ((Index > 0) && (*Digit++ != L'.')) {
++        break;
++      }
++
++      if ((*Digit < L'0') || (*Digit > L'9')) {
++        break;
++      }
++
++      for ( ; (*Digit >= L'0') && (*Digit <= L'9') && (Part[Index] <= MAX_UINT16); Digit++) {
++        Part[Index] = Part[Index] * 10 + (*Digit - L'0');
++      }
++    }
++
++    if ((Index == ARRAY_SIZE (Part)) && ((*Digit == L'\0') || (*Digit == L'-') || (*Digit == L'+')) &&
++        (Part[0] <= MAX_UINT8) && (Part[1] <= MAX_UINT8) && (Part[2] <= MAX_UINT16))
++    {
++      *Version = (Part[0] << 24) | (Part[1] << 16) | Part[2];
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  The variant in the name of a release: "mrc" or "nri" after a dash, at the
++  end or before the optional patches ("+...").
++
++  @return The variant, or NULL.
++**/
++STATIC
++CONST CHAR16 *
++ReleaseVariant (
++  IN CONST CHAR16  *Name
++  )
++{
++  STATIC CONST CHAR16  *Variants[] = { L"mrc", L"nri" };
++  CONST CHAR16         *Text;
++  UINTN                Index;
++  UINTN                Length;
++
++  for (Text = Name; *Text != L'\0'; Text++) {
++    if (*Text != L'-') {
++      continue;
++    }
++
++    for (Index = 0; Index < ARRAY_SIZE (Variants); Index++) {
++      Length = StrLen (Variants[Index]);
++      if ((StrnCmp (Text + 1, Variants[Index], Length) == 0) &&
++          ((Text[1 + Length] == L'\0') || (Text[1 + Length] == L'+')))
++      {
++        return Variants[Index];
++      }
++    }
++  }
++
++  return NULL;
++}
++
++/**
++  Fill in the slots of vboot, and the entry that goes to the other one.
++**/
++STATIC
++VOID
++RefreshSlots (
++  IN CONST SYSTEM_FIRMWARE_INFO  *Info
++  )
++{
++  SLOT_INFO  Slots;
++  CHAR16     Value[128];
++  UINT32     Version;
++
++  GetSlotInfo (&Slots);
++  if (!Slots.Found) {
++    return;
++  }
++
++  DEBUG ((
++    DEBUG_INFO,
++    "FirmwareUpdate: slot %c runs %s, slot %c holds %s\n",
++    Slots.Running,
++    (Slots.RunningName[0] != L'\0') ? Slots.RunningName : L"no release",
++    Slots.Other,
++    (Slots.OtherName[0] != L'\0') ? Slots.OtherName : L"no release"
++    ));
++  if (Slots.RunningName[0] != L'\0') {
++    UnicodeSPrint (Value, sizeof (Value), L"%c: %s", Slots.Running, Slots.RunningName);
++  } else {
++    UnicodeSPrint (Value, sizeof (Value), L"%c", Slots.Running);
++  }
++
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_RUNNING_VALUE), Value, NULL);
++  if (Slots.OtherName[0] == L'\0') {
++    UnicodeSPrint (Value, sizeof (Value), L"%c: empty or damaged", Slots.Other);
++    HiiSetString (mHiiHandle, STRING_TOKEN (STR_OTHER_VALUE), Value, NULL);
++    return;
++  }
++
++  UnicodeSPrint (Value, sizeof (Value), L"%c: %s", Slots.Other, Slots.OtherName);
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_OTHER_VALUE), Value, NULL);
++  if (Info->Found && ParseReleaseVersion (Slots.OtherName, &Version) && (Version < Info->Version)) {
++    UnicodeSPrint (Value, sizeof (Value), L"Go back to %s", Slots.OtherName);
++  } else {
++    UnicodeSPrint (Value, sizeof (Value), L"Switch to %s", Slots.OtherName);
++  }
++
++  HiiSetString (mHiiHandle, STRING_TOKEN (STR_SLOT_PROMPT), Value, NULL);
++}
++
+ /**
+   Fill in the values of the page.
+ **/
+@@ -313,6 +744,7 @@ RefreshInfo (
+   }
+ 
+   GetSystemFirmwareInfo (&Info);
++  RefreshSlots (&Info);
+   if (!Info.Found) {
+     return;
+   }
+@@ -731,6 +1163,149 @@ UpdateFromDrive (
+   CpuDeadLoop ();
+ }
+ 
++/**
++  Start the release of the other vboot slot from the next boot, then restart.
++  The checks of a capsule that apply here first: a release, not the one that
++  runs, of the same variant, not older than the lowest supported version.
++  The signature of the slot is vboot's to check, at the next boot.
++**/
++STATIC
++VOID
++GoToOtherSlot (
++  VOID
++  )
++{
++  EFI_STATUS            Status;
++  SLOT_INFO             Slots;
++  SYSTEM_FIRMWARE_INFO  Info;
++  UINT32                Version;
++  CONST CHAR16          *Variant;
++  CONST CHAR16          *OtherVariant;
++  CHAR16                Lowest[VERSION_LENGTH];
++
++  GetSlotInfo (&Slots);
++  if (!Slots.Found) {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"This firmware does not run from one of two slots: there is no other one to start.");
++    return;
++  }
++
++  if (Slots.OtherName[0] == L'\0') {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"Slot %c holds no firmware that can start: it is empty or damaged.", Slots.Other);
++    return;
++  }
++
++  if (Slots.RunningName[0] == L'\0') {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"The release in slot %c, which runs, is not known: the one in slot %c cannot be checked against it.",
++      Slots.Running,
++      Slots.Other
++      );
++    return;
++  }
++
++  if (StrCmp (Slots.OtherName, Slots.RunningName) == 0) {
++    ShowPopup (
++      EfiHiiPopupStyleInfo,
++      EfiHiiPopupTypeOk,
++      L"Slot %c holds the same firmware as slot %c, %s: there is nothing to go back to.",
++      Slots.Other,
++      Slots.Running,
++      Slots.OtherName
++      );
++    return;
++  }
++
++  Variant      = ReleaseVariant (Slots.RunningName);
++  OtherVariant = ReleaseVariant (Slots.OtherName);
++  if ((Variant == NULL) || (OtherVariant == NULL)) {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"The variant of %s (mrc or nri) is not known: it may not start after the read-only part of this firmware.",
++      (OtherVariant == NULL) ? Slots.OtherName : Slots.RunningName
++      );
++    return;
++  }
++
++  if (StrCmp (Variant, OtherVariant) != 0) {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"%s, in slot %c, is the %s variant: it does not start after the read-only part of this firmware, %s. Write the whole image of a release with flashrom instead.",
++      Slots.OtherName,
++      Slots.Other,
++      OtherVariant,
++      Variant
++      );
++    return;
++  }
++
++  GetSystemFirmwareInfo (&Info);
++  if (!Info.Found) {
++    ShowPopup (EfiHiiPopupStyleError, EfiHiiPopupTypeOk, L"The system firmware is not in the EFI System Resource Table: the oldest accepted update is not known.");
++    return;
++  }
++
++  if (!ParseReleaseVersion (Slots.OtherName, &Version)) {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"%s, in slot %c, has no version in its name: it cannot be checked against the oldest accepted update.",
++      Slots.OtherName,
++      Slots.Other
++      );
++    return;
++  }
++
++  if (Version < Info.Lowest) {
++    FormatVersion (Info.Lowest, Lowest, sizeof (Lowest));
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"%s, in slot %c, is older than the oldest accepted update, %s.",
++      Slots.OtherName,
++      Slots.Other,
++      Lowest
++      );
++    return;
++  }
++
++  if (ShowPopup (
++        EfiHiiPopupStyleWarning,
++        EfiHiiPopupTypeYesNo,
++        L"Start %s, in slot %c, from now on?\nThe computer restarts into it. If it does not start twice in a row, the firmware comes back to this one, %s. The first start trains the memory again, a few seconds longer. Settings, boot entries and Secure Boot keys are kept. Unsaved changes in the setup are lost.",
++        Slots.OtherName,
++        Slots.Other,
++        Slots.RunningName
++        ) != EfiHiiPopupSelectionYes)
++  {
++    return;
++  }
++
++  Status = SmmStoreLibInitialize ();
++  if (!EFI_ERROR (Status)) {
++    Status = SmmStoreLibVbootTryOtherSlot ();
++    SmmStoreLibDeinitialize ();
++  }
++
++  if (EFI_ERROR (Status)) {
++    ShowPopup (
++      EfiHiiPopupStyleError,
++      EfiHiiPopupTypeOk,
++      L"The firmware did not switch to slot %c (%r). Once a boot option has started, the switch waits for a restart: restart, press Esc and try again.",
++      Slots.Other,
++      Status
++      );
++    return;
++  }
++
++  DEBUG ((DEBUG_INFO, "FirmwareUpdate: slot %c next, %s, restarting\n", Slots.Other, Slots.OtherName));
++  gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
++  CpuDeadLoop ();
++}
++
+ /**
+   No varstore: nothing to extract.
+ **/
+@@ -773,8 +1348,9 @@ FirmwareUpdateRouteConfig (
+ }
+ 
+ /**
+-  Refresh the page when it opens; update when the entry is selected (the
+-  browser calls a goto question only with EFI_BROWSER_ACTION_CHANGING).
++  Refresh the page when it opens; update, or go to the other slot, when the
++  entry is selected (the browser calls a goto question only with
++  EFI_BROWSER_ACTION_CHANGING).
+ **/
+ STATIC
+ EFI_STATUS
+@@ -804,6 +1380,8 @@ FirmwareUpdateCallback (
+ 
+   if (QuestionId == FIRMWARE_UPDATE_INSTALL_QUESTION_ID) {
+     UpdateFromDrive ();
++  } else if (QuestionId == FIRMWARE_UPDATE_SLOT_QUESTION_ID) {
++    GoToOtherSlot ();
+   }
+ 
+   return EFI_SUCCESS;
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
+index f27a00cbb..4c0e3b5c4 100644
+--- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
+@@ -7,7 +7,7 @@
+ #langdef en-US "English"
+ 
+ #string STR_FORMSET_TITLE        #language en-US "Firmware Update"
+-#string STR_FORMSET_HELP         #language en-US "The installed firmware, its last update, and updates from a USB drive"
++#string STR_FORMSET_HELP         #language en-US "The installed firmware, its last update, updates from a USB drive, and the firmware of before"
+ #string STR_FORM_TITLE           #language en-US "Firmware Update"
+ 
+ #string STR_INSTALLED_SUBTITLE   #language en-US "Installed firmware"
+@@ -28,10 +28,21 @@
+ #string STR_LAST_HELP            #language en-US "The version and the result of the last update capsule that the firmware processed."
+ #string STR_LAST_VALUE           #language en-US "None"
+ 
++#string STR_RUNNING_PROMPT       #language en-US "Running slot"
++#string STR_RUNNING_HELP         #language en-US "The firmware after the read-only part is kept twice, in slots A and B. An update writes the slot that is not running and starts it; the other slot keeps the firmware of before."
++#string STR_RUNNING_VALUE        #language en-US "None"
++
++#string STR_OTHER_PROMPT         #language en-US "Other slot"
++#string STR_OTHER_HELP           #language en-US "The firmware in the slot that is not running: the release before the last update, until the next update writes over it."
++#string STR_OTHER_VALUE          #language en-US "None"
++
+ #string STR_UPDATE_SUBTITLE      #language en-US "Update"
+ 
+ #string STR_INSTALL_PROMPT       #language en-US "Update from a USB drive"
+ #string STR_INSTALL_HELP         #language en-US "Copy the capsule of a release (the .cap file) into the folder EFI\\UpdateCapsule of a FAT USB drive, and connect the drive and the AC adapter. The firmware checks the capsule, restarts, and writes it before anything else starts, in about a minute. Settings, boot entries and Secure Boot keys are kept. Unsaved changes in the setup are lost.\n\nFrom Linux, tools/update.py and fwupd install the same capsules."
+ 
++#string STR_SLOT_PROMPT          #language en-US "Go back to the other slot"
++#string STR_SLOT_HELP            #language en-US "Restart into the firmware of the other slot, and keep it once it starts: if it does not start twice in a row, the firmware comes back to this one. Only the memory training cache is cleared: the first start trains the memory again, a few seconds longer. Settings, boot entries and Secure Boot keys are kept. Unsaved changes in the setup are lost.\n\nFrom Linux, tools/update.py rollback does the same with the capsule of that release."
++
+ #string STR_POPUP_MESSAGE        #language en-US ""
+ #string STR_NULL_STRING          #language en-US ""
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+index ea77ceaae..d14720682 100644
+--- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
+@@ -5,7 +5,9 @@
+ #  PcdSystemFmpCapsuleImageTypeIdGuid): version, lowest supported version
+ #  and the result of its last update. Updates it from a USB drive: checks
+ #  the capsule in \EFI\UpdateCapsule, then requests a capsule on disk and
+-#  restarts, so that PlatformBootManagerLib applies it.
++#  restarts, so that PlatformBootManagerLib applies it. With vboot and two
++#  RW slots, shows the release in each and starts the other one, through
++#  coreboot's SMMSTORE handler.
+ #
+ #  SPDX-License-Identifier: BSD-2-Clause-Patent
+ #
+@@ -35,9 +37,11 @@
+   DebugLib
+   DevicePathLib
+   HiiLib
++  HobLib
+   MemoryAllocationLib
+   PcdLib
+   PrintLib
++  SmmStoreLib
+   UefiBootServicesTableLib
+   UefiDriverEntryPoint
+   UefiLib
+@@ -50,6 +54,7 @@
+   gEfiFmpCapsuleGuid                            ## CONSUMES
+   gEfiPartTypeSystemPartGuid                    ## CONSUMES
+   gEfiFileInfoGuid                              ## CONSUMES
++  gEfiBootMediaInfoHobGuid                      ## CONSUMES ## HOB
+ 
+ [Protocols]
+   gEfiDevicePathProtocolGuid                    ## PRODUCES
+diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
+index aeb41d881..0ea2142f7 100644
+--- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
++++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateVfr.vfr
+@@ -1,6 +1,7 @@
+ /** @file
+   Firmware Update setup page: the installed system firmware, the result of
+-  its last update, and an update from a USB drive.
++  its last update, the vboot slots, an update from a USB drive, and the
++  release of the other slot.
+ 
+   SPDX-License-Identifier: BSD-2-Clause-Patent
+ **/
+@@ -39,6 +40,16 @@ formset
+       text = STRING_TOKEN(STR_LAST_PROMPT),
+       text = STRING_TOKEN(STR_LAST_VALUE);
+ 
++    text
++      help = STRING_TOKEN(STR_RUNNING_HELP),
++      text = STRING_TOKEN(STR_RUNNING_PROMPT),
++      text = STRING_TOKEN(STR_RUNNING_VALUE);
++
++    text
++      help = STRING_TOKEN(STR_OTHER_HELP),
++      text = STRING_TOKEN(STR_OTHER_PROMPT),
++      text = STRING_TOKEN(STR_OTHER_VALUE);
++
+     subtitle text = STRING_TOKEN(STR_NULL_STRING);
+     subtitle text = STRING_TOKEN(STR_UPDATE_SUBTITLE);
+ 
+@@ -48,5 +59,11 @@ formset
+       flags  = INTERACTIVE,
+       key    = FIRMWARE_UPDATE_INSTALL_QUESTION_ID;
+ 
++    goto FIRMWARE_UPDATE_FORM_ID,
++      prompt = STRING_TOKEN(STR_SLOT_PROMPT),
++      help   = STRING_TOKEN(STR_SLOT_HELP),
++      flags  = INTERACTIVE,
++      key    = FIRMWARE_UPDATE_SLOT_QUESTION_ID;
++
+   endform;
+ endformset;
+diff --git a/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h b/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
+index 68939a0c4..67857457a 100644
+--- a/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
++++ b/UefiPayloadPkg/Include/Guid/FirmwareUpdateConfig.h
+@@ -14,5 +14,6 @@
+ 
+ #define FIRMWARE_UPDATE_FORM_ID              0x1000
+ #define FIRMWARE_UPDATE_INSTALL_QUESTION_ID  0x1001
++#define FIRMWARE_UPDATE_SLOT_QUESTION_ID     0x1002
+ 
+ #endif
+diff --git a/UefiPayloadPkg/Include/Library/SmmStoreLib.h b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+index fab6c3385..3b7d054ab 100644
+--- a/UefiPayloadPkg/Include/Library/SmmStoreLib.h
++++ b/UefiPayloadPkg/Include/Library/SmmStoreLib.h
+@@ -175,6 +175,42 @@ SmmStoreLibVbootSlotGood (
+   VOID
+   );
+ 
++/**
++  Ask coreboot to boot the RW slot that is not running from the next boot:
++  vboot tries it twice, as after an update, and comes back to the slot that
++  runs now if it does not boot.  coreboot also clears the memory training
++  cache, which that slot must not reuse.
++
++  @retval EFI_SUCCESS       vboot tries the other slot at the next boot.
++  @retval EFI_NO_MEDIA      SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED   coreboot has no two RW slots with the vboot nvdata
++                            in flash.
++  @retval others            The handler refused: locked until the next boot,
++                            or no valid nvdata.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootTryOtherSlot (
++  VOID
++  );
++
++/**
++  Make coreboot refuse SmmStoreLibVbootTryOtherSlot() until the next boot.
++  To be called before a boot option or an OS starts.  Allocates nothing: it
++  can be called from ExitBootServices().
++
++  @retval EFI_SUCCESS       Refused until the next boot.
++  @retval EFI_NO_MEDIA      SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED   coreboot has no two RW slots with the vboot nvdata
++                            in flash: nothing to refuse.
++  @retval others            The handler failed.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootLockSlots (
++  VOID
++  );
++
+ /**
+   Function to update a pointer on virtual address change.  Matches the signature
+   and operation of EfiConvertPointer.
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+index 7e63564cd..137a8831b 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.h
+@@ -166,7 +166,8 @@ PlatformProcessCapsules (
+ 
+ /**
+   Tell coreboot that the firmware booted, so that vboot keeps a new RW slot
+-  that it is trying.
++  that it is trying; lock the switch to the other slot before a boot option
++  starts and at ExitBootServices().
+ **/
+ VOID
+ PlatformMarkFirmwareGood (
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+index 8ce723505..c4b5bdfe5 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+@@ -59,6 +59,8 @@
+ 
+ [Guids]
+   gEfiEndOfDxeEventGroupGuid
++  gEfiEventExitBootServicesGuid   ## CONSUMES ## Event
++  gEfiEventReadyToBootGuid        ## CONSUMES ## Event
+   gUefiShellFileGuid
+   gUefiPayloadBootSplashGuid
+   gEfiCapsuleReportGuid           ## CONSUMES ## Variable:L"CapsuleLast"
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+index b7f389725..e7911b824 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+@@ -478,10 +478,41 @@ CapsuleApply (
+   }
+ }
+ 
++STATIC BOOLEAN  mFirmwareSlotsLocked;
++
++/**
++  A boot option or an OS is about to start: from now on, only an update
++  capsule, with its checks, may change the RW slot that vboot boots.
++  Allocates nothing.
++**/
++STATIC
++VOID
++EFIAPI
++PlatformLockFirmwareSlots (
++  IN EFI_EVENT  Event,
++  IN VOID       *Context
++  )
++{
++  EFI_STATUS  Status;
++
++  if (mFirmwareSlotsLocked) {
++    return;
++  }
++
++  Status               = SmmStoreLibVbootLockSlots ();
++  mFirmwareSlotsLocked = !EFI_ERROR (Status);
++  DEBUG ((DEBUG_INFO, "Capsules: switch to the other firmware slot locked: %r\n", Status));
++}
++
+ /**
+   Tell coreboot that the firmware booted: with vboot, a new RW slot that it is
+   trying (after an update) is then kept, instead of being given up for the
+   other one when its tries run out.  Called once the console is up.
++
++  With two RW slots, the setup can also switch to the other slot (the
++  Firmware Update page); coreboot refuses that once a boot option starts
++  (ReadyToBoot, which booting the setup does not signal) or anything calls
++  ExitBootServices().
+ **/
+ VOID
+ PlatformMarkFirmwareGood (
+@@ -489,6 +520,7 @@ PlatformMarkFirmwareGood (
+   )
+ {
+   EFI_STATUS  Status;
++  EFI_EVENT   Event;
+ 
+   if (EFI_ERROR (SmmStoreLibInitialize ())) {
+     return;
+@@ -499,7 +531,31 @@ PlatformMarkFirmwareGood (
+     DEBUG ((DEBUG_INFO, "Capsules: firmware slot marked good: %r\n", Status));
+   }
+ 
+-  SmmStoreLibDeinitialize ();
++  if (Status == EFI_UNSUPPORTED) {
++    SmmStoreLibDeinitialize ();
++    return;
++  }
++
++  //
++  // The library stays initialized for the lock: at ExitBootServices() it
++  // cannot allocate.  Without both events, lock now: the setup then cannot
++  // switch slots in this boot.
++  //
++  if (EFI_ERROR (EfiCreateEventReadyToBootEx (TPL_CALLBACK, PlatformLockFirmwareSlots, NULL, &Event)) ||
++      EFI_ERROR (
++        gBS->CreateEventEx (
++               EVT_NOTIFY_SIGNAL,
++               TPL_CALLBACK,
++               PlatformLockFirmwareSlots,
++               NULL,
++               &gEfiEventExitBootServicesGuid,
++               &Event
++               )
++        ))
++  {
++    DEBUG ((DEBUG_ERROR, "Capsules: no event for the lock of the firmware slots\n"));
++    PlatformLockFirmwareSlots (NULL, NULL);
++  }
+ }
+ 
+ /**
+diff --git a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+index e7a6b73c7..98f282b82 100644
+--- a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
++++ b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c
+@@ -430,6 +430,56 @@ SmmStoreLibVbootSlotGood (
+   return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_VBOOT_SLOT_GOOD, mArgComBufPhys);
+ }
+ 
++/**
++  Ask coreboot to boot the RW slot that is not running from the next boot:
++  vboot tries it twice, as after an update, and comes back to the slot that
++  runs now if it does not boot.  coreboot also clears the memory training
++  cache, which that slot must not reuse.
++
++  @retval EFI_SUCCESS       vboot tries the other slot at the next boot.
++  @retval EFI_NO_MEDIA      SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED   coreboot has no two RW slots with the vboot nvdata
++                            in flash.
++  @retval others            The handler refused: locked until the next boot,
++                            or no valid nvdata.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootTryOtherSlot (
++  VOID
++  )
++{
++  if (mSmmStoreInfo == NULL) {
++    return EFI_NO_MEDIA;
++  }
++
++  return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_VBOOT_TRY_OTHER, mArgComBufPhys);
++}
++
++/**
++  Make coreboot refuse SmmStoreLibVbootTryOtherSlot() until the next boot.
++  To be called before a boot option or an OS starts.  Allocates nothing: it
++  can be called from ExitBootServices().
++
++  @retval EFI_SUCCESS       Refused until the next boot.
++  @retval EFI_NO_MEDIA      SmmStore is not initialized.
++  @retval EFI_UNSUPPORTED   coreboot has no two RW slots with the vboot nvdata
++                            in flash: nothing to refuse.
++  @retval others            The handler failed.
++
++**/
++EFI_STATUS
++SmmStoreLibVbootLockSlots (
++  VOID
++  )
++{
++  if (mSmmStoreInfo == NULL) {
++    return EFI_NO_MEDIA;
++  }
++
++  return CallSmm (mSmmStoreInfo->ApmCmd, SMMSTORE_CMD_VBOOT_LOCK, mArgComBufPhys);
++}
++
+ /**
+   Fixup internal data so that EFI can be called in virtual mode.
+   Converts any pointers in lib to virtual mode. This function is meant to
+diff --git a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
+index 2e78cc89e..f899b5dca 100644
+--- a/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
++++ b/UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h
+@@ -24,6 +24,13 @@
+ //
+ #define SMMSTORE_CMD_VBOOT_SLOT_GOOD  8
+ 
++//
++// coreboot with vboot and two RW slots: try the slot that is not running at
++// the next boots, and refuse that until the next boot.
++//
++#define SMMSTORE_CMD_VBOOT_TRY_OTHER  9
++#define SMMSTORE_CMD_VBOOT_LOCK       10
++
+ /* Used by capsule updates as a standalone command or modifier to v2 commands */
+ #define SMMSTORE_CMD_USE_FULL_FLASH  0x80
+ 
+-- 
+2.43.0
+

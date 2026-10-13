@@ -19,8 +19,9 @@
 # update-test, accanto alle ROM: tools/build.sh update-test): in QEMU q35,
 # con vboot a due slot e il payload EDK2 di queste patch, le capsule devono
 # scrivere solo lo slot che non gira, vboot deve provarlo e tornare indietro
-# se non si verifica o non parte; la seriale e' nell'artifact
-# update-test-<versione>.
+# se non si verifica o non parte; dal setup si torna all'altro slot, e una
+# voce di boot (boot loader, sistema operativo) non puo'; seriale e
+# schermate del setup nell'artifact update-test-<versione>.
 #
 # La capsula si firma con il secret CAPSULE_SIGNING_KEY (Settings -> Secrets
 # and variables -> Actions): la chiave privata di keys/capsule-signing.pem,
@@ -219,13 +220,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # come il job build, senza jcat; mtools: l'ESP delle capsule su disco
+      # come il job build, senza jcat; mtools: l'ESP delle capsule su disco;
+      # clang e lld: l'applicazione UEFI che fa da sistema operativo
       - name: Pacchetti
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
             zlib1g-dev m4 curl git python3 uuid-dev imagemagick \
-            libssl-dev pkg-config qemu-system-x86 mtools >/dev/null
+            libssl-dev pkg-config qemu-system-x86 mtools clang lld >/dev/null
 
       - name: coreboot ed EDK2 pinnati, submodule, patch e blob
         run: ./tools/build.sh prepare

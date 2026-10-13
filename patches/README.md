@@ -25,6 +25,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0045-0046 | Security options: *BIOS Lock* (`bios_lock` of `BOOTMEDIA_SMM_BWP_RUNTIME_OPTION`: only SMM writes the flash, off by default) and *Clear memory at power-on* (`clear_dram_on_boot`, on by default; 1.7 s with 32 GB) |
 | 0047 | the machine's data from the VPD as the OEM firmware reports it: the machine type as the base board product too, the system serial on the chassis; machine type, serial and UUID in the About card of the setup menu |
 | 0048-0052 | firmware updates with UEFI capsules (`docs/update.md`): the capsules coalesced in memory kept by the DRAM clearing at boot, the EDK2 build without a PCD that MrChromebox's tree does not declare, an SMMSTORE command for the payload to give up the whole-flash access of an update boot when it writes nothing, the certificate the payload trusts written after the EDK2 clean (with parallel make it raced with it, and the build could pick another file), and the whole-flash decision taken on S3 resume too (upstream the OS could take it after a resume, and write the flash past the BIOS lock) |
+| 0065 | vboot A/B: the payload can boot the other RW slot (`SMMSTORE_CMD_VBOOT_TRY_OTHER`: *try next* that slot, two tries, `RW_MRC_CACHE` erased, as after an update) until it sends `SMMSTORE_CMD_VBOOT_LOCK` before a boot option or an OS starts; ramstage sends the lock on S3 resume, when the payload does not run. For the *Firmware Update* page of the setup (`edk2/0020`) |
 | 0063 | Haswell VT-d: `SPCAPCTRL` set in the remapping engine for the devices other than the IGD also with the IGD present. Without it the engine reports 2 MiB and 1 GiB pages (`dmar1: ... cap d2008c20660462`, the same either way) but rejects them: with `intel_iommu=on` Linux mapped SATA reads with them and got `fault reason 0x0c non-zero reserved fields in PTE`, and btrfs found blocks of zeros. Tested on the W541: 21 faults without, none with |
 | 0061-0062 | the size of the flash read from the descriptor with the 4-bit density fields of the 8 series (`FLCOMP` 0x34 is 8 + 4 MiB): no more `SF size 0x2800000 does not correspond to CONFIG_ROM_SIZE` at every boot; `ifdtool -d` decodes it the same way |
 | 0060 | the interrupt routing (`_PRT`) of the root bus with all four pins of the CPU's PCIe root port for graphics, which has no `_PRT` of its own: the HD audio function of the NVIDIA GPU (01:00.1, INTB) had no interrupt, so no audio on the outputs of the dGPU |
@@ -56,6 +57,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `edk2/0018` | the ESRT built at every boot from what FmpDxe reports (EsrtFmpDxe instead of EsrtDxe): with the version and the result of the last capsule, which EsrtDxe's cached copy never got from capsules on disk, and nothing kept in variables that could outlive a flash rewritten with flashrom |
 | `edk2/0019` | one TCPA table, coreboot's, with the events EDK2 measures (the Secure Boot variables in PCR 7, the boot actions): TcgDxe logs into its log area instead of adding a second table, which the OS never read because it takes the first one, whose log stayed empty |
 | `edk2/0017` | the firmware named ouroBIOS: next to its logo in the menu bar of the setup (`PcdLvglAptioHeaderVendor`) and as the vendor of the UEFI system table (`PcdFirmwareVendor`) |
+| `edk2/0020` | the *Firmware Update* page shows the running vboot slot and the release in each slot (`COREBOOT_EXTRA_VERSION` of the `revision` file in its CBFS), and goes back to the release of the other slot: checked as a capsule would be (a release, not the one that runs, the same variant, not older than the lowest accepted version), confirmed, then coreboot asks vboot to try it (patch 0065) and the laptop restarts. `PlatformBootManagerLib` locks that at ReadyToBoot and `ExitBootServices()` |
 | `lvglpkg/0001-0003` | a 1.25x UI scale, a PCD for the default scale, the stock LVGL widgets styled from `LvglTheme.h` |
 | `lvglpkg/0004` | the setup UI redesigned as System Preferences: menu bar, icon grid on the front page, windows with cards, switches and drop-down menus |
 | `lvglpkg/0005` | password questions in dialogs (current, new, confirmation), as the text UI does |
@@ -65,6 +67,7 @@ a clean tree to the pinned commit but leaves a modified one alone.
 | `lvglpkg/0012` | the cursor moved by the speed of the pointer: 12 px/mm when slow, up to 3x when fast, the same move counted the same whether it arrives in one read or several |
 | `lvglpkg/0013` | the *Firmware Update* page under *General*, with its icon |
 | `lvglpkg/0014` | the ouroBIOS logo (`assets/ourobios.svg`, 16 x 16 pixel art as an LVGL image, enlarged by whole factors only) and the firmware name at the left of the menu bar, in place of the settings symbol |
+| `lvglpkg/0015` | the entries of the *Firmware Update* page to the other vboot slot (*Go back to*, *Switch to*) with the previous and next symbols, checked before the other words, which a release name could hold |
 
 ## Optional patches
 
@@ -94,9 +97,14 @@ read-only CBFS, and the W541's map cut down to `RW_MRC_CACHE`, `SMMSTORE`,
 After a change in a coreboot tree based on `COREBOOT_COMMIT`:
 
 ```sh
-git format-patch --zero-commit -o /path/to/ourobios/patches/ <COREBOOT_COMMIT>..HEAD
+git format-patch --zero-commit -o /path/to/ourobios/patches/ <COREBOOT_COMMIT>..HEAD~1
+git format-patch --zero-commit --start-number 65 -o /path/to/ourobios/patches/ -1 HEAD
 ls /path/to/ourobios/patches/0*.patch | xargs -n1 basename > /path/to/ourobios/patches/series
 ```
+
+The number 0064 stays unused: it was the patch of v1.3.2-rc1 that the
+CHANGELOG mentions. So the patches after 0063 (now one, the last commit)
+start from 65.
 
 The same for EDK2 (a tree at `CONFIG_EDK2_TAG_OR_REV`) and for its LvglPkg
 submodule (at the commit EDK2 pins), into `edk2/` and `lvglpkg/`, each with

@@ -2,12 +2,15 @@
 # qemu-update.py - la prova dell'aggiornamento con le capsule, in QEMU q35:
 # vboot con due slot RW e RW_NVRAM come sul W541, il payload EDK2 con le
 # patch del progetto (FmpDeviceSmmLib, capsule su disco, conferma dello
-# slot) e il codice comune di coreboot che scrive il flash (SMMSTORE).
-# tools/build.sh update-test prepara tre ROM per q35 (A, B, C, tre versioni),
-# un payload DEBUG che si fida di una chiave di prova creata per la prova, e
-# le loro capsule, fatte come quelle delle release.
+# slot, ritorno all'altro slot dal setup) e il codice comune di coreboot che
+# scrive il flash (SMMSTORE). tools/build.sh update-test prepara quattro ROM
+# per q35 (A, B, C, D, quattro versioni; D con lo schermo, per il setup), un
+# payload DEBUG che si fida di una chiave di prova creata per la prova, le
+# loro capsule, fatte come quelle delle release, e un'applicazione UEFI che
+# si comporta da sistema operativo (tools/efi/slot-lock-test.c).
 #
-#   python3 tools/qemu-update.py [--out DIR] [--timeout S] A.cap B.cap C.cap
+#   python3 tools/qemu-update.py [--out DIR] [--timeout S] --lock-test EFI
+#                                A.cap B.cap C.cap D.cap
 #
 # Il flash parte dalla ROM della capsula A e resta lo stesso da un avvio
 # all'altro. QEMU esce a ogni reset (-no-reboot) e riparte da spento, come
@@ -30,13 +33,26 @@
 #      verifica, riavvia e torna a B, e segna A fallito
 #   7. capsula A di nuovo, poi due avvii interrotti appena vboot sceglie A:
 #      finiti i tentativi, vboot torna a B
+#   8. capsula D nello slot A; avviato D, dal setup (Esc, System
+#      Configuration, Firmware Update) "Go back to" la release di B,
+#      confermato con Y: coreboot chiede a vboot di provare B per due avvii e
+#      cancella RW_MRC_CACHE, il sistema riparte; nessuno slot scritto. vboot
+#      prova B e il payload lo conferma
+#   9. una voce di boot (slot-lock-test.efi, \EFI\BOOT\BOOTX64.EFI
+#      dell'ESP) chiede l'altro slot come un boot loader, poi chiama
+#      ExitBootServices() e lo chiede come un sistema operativo: coreboot
+#      rifiuta le due volte, l'altro slot resta quello di prima
 # A ogni avvio fino al payload, l'ESRT che il payload stampa (build DEBUG):
 # il firmware di sistema con la versione dello slot che gira, e l'ultimo
 # tentativo.
 #
-# Le ROM non hanno grafica: in QEMU (TCG) la barra di avanzamento disegnata
-# nel framebuffer rende cinque volte piu' lento l'avvio con una capsula, e la
-# grafica del payload la prova tools/qemu-smoke.py. Seriale di coreboot e del payload
+# Solo D ha la grafica, per il setup (LvglPkg): in QEMU (TCG) la barra di
+# avanzamento disegnata nel framebuffer rende cinque volte piu' lento l'avvio
+# con una capsula, e il resto della grafica del payload lo prova
+# tools/qemu-smoke.py. Nel setup la prova va avanti con i tasti e legge la
+# seriale (le pagine che LvglPkg disegna, i messaggi della pagina Firmware
+# Update), non lo schermo; la pagina e la conferma restano in DIR come
+# schermate. Seriale di coreboot e del payload
 # e un riassunto in DIR; il flash finale solo se la prova fallisce. Solo la
 # libreria standard di Python, qemu-system-x86_64 e mtools (l'ESP).
 import argparse
@@ -78,6 +94,8 @@ VAR_ADDED, VAR_DELETED = 0x3F, 0xFD
 VAR_VALID = (0x3F, 0x3E)
 NV_UNKNOWN, NV_TRYING, NV_SUCCESS, NV_FAILURE = 0, 1, 2, 3
 SLOTS = "AB"
+ROMS = "ABCD"
+TAG_RE = r"ouroBIOS-v\d+\.\d+\.\d+-mrc\+update-test-[A-Z]"
 
 ESP_OFFSET = 1 << 20            # la partizione a 1 MiB, come la fanno gli installer
 ESP_SECTORS = 65536             # 32 MiB: FAT16
@@ -93,13 +111,14 @@ def run(cmd):
 
 class Esp:
     """Un disco con una sola partizione, di sistema EFI (MBR, tipo 0xEF),
-    FAT16 con \\EFI\\UpdateCapsule: dove tools/update.py mette le capsule."""
+    FAT16 con \\EFI\\UpdateCapsule, dove tools/update.py mette le capsule, e
+    \\EFI\\BOOT, dove un sistema operativo mette il suo avvio."""
 
     def __init__(self, path):
         self.path = path
         part = path + ".part"
         run(["mformat", "-C", "-i", part, "-T", str(ESP_SECTORS), "-h", "64", "-s", "32", "-v", "ESP", "::"])
-        run(["mmd", "-i", part, "::/EFI", "::/EFI/UpdateCapsule"])
+        run(["mmd", "-i", part, "::/EFI", "::/EFI/UpdateCapsule", "::/EFI/BOOT"])
         mbr = bytearray(512)
         mbr[446:462] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff",
                                    ESP_OFFSET // 512, ESP_SECTORS)
@@ -115,6 +134,13 @@ class Esp:
 
     def put(self, src, name):
         run(["mcopy", "-o", "-i", self.image(), src, "::/EFI/UpdateCapsule/" + name])
+
+    def put_os(self, src):
+        """src come \\EFI\\BOOT\\BOOTX64.EFI: il payload lo avvia dal disco."""
+        run(["mcopy", "-o", "-i", self.image(), src, "::/EFI/BOOT/BOOTX64.EFI"])
+
+    def del_os(self):
+        run(["mdel", "-i", self.image(), "::/EFI/BOOT/BOOTX64.EFI"])
 
     def files(self):
         out = run(["mdir", "-b", "-i", self.image(), "::/EFI/UpdateCapsule"])
@@ -233,15 +259,15 @@ class UpdateTest:
     # flash in corso, si puo' spegnere
     IDLE = "Press any key to continue"
 
-    def __init__(self, caps, out, timeout):
-        self.paths, self.out, self.timeout = caps, out, timeout
+    def __init__(self, caps, lock_test, out, timeout):
+        self.paths, self.lock_test, self.out, self.timeout = caps, lock_test, out, timeout
         self.tmp = self.m = None
         self.steps = []
 
     def setup(self):
         """Le capsule, il flash dalla ROM della capsula A, l'ESP."""
         self.caps = {}
-        for key, path in zip("ABC", self.paths):
+        for key, path in zip(ROMS, self.paths):
             _, cap = update.load_capsule(path)
             if cap["regions"] != update.REGIONS:
                 raise Fail("%s: la capsula scrive %s, non %s come quelle delle release"
@@ -249,7 +275,7 @@ class UpdateTest:
             self.caps[key] = {"path": path, "cap": cap, "image": cap["image"]}
         guids = {c["cap"]["type_id"] for c in self.caps.values()}
         if len(guids) != 1:
-            raise Fail("le tre capsule non sono dello stesso firmware (GUID)")
+            raise Fail("le capsule non sono dello stesso firmware (GUID)")
         self.guid = guids.pop().bytes_le
         self.tmp = tempfile.mkdtemp(prefix="qemu-update-")
         rom = os.path.join(self.tmp, "start.rom")
@@ -257,15 +283,19 @@ class UpdateTest:
             f.write(self.caps["A"]["image"])
         self.m = smoke.Smoke(rom, self.out, self.timeout)
         self.flash = Flash(self.m.flash)
-        for c in self.caps.values():
+        for key, c in self.caps.items():
             if update.fmap_areas(c["image"]) != self.flash.areas:
                 raise Fail("%s: un'altra mappa del flash" % c["path"])
             # il nome nel banner di coreboot (CONFIG_LOCALVERSION): dice quale
-            # firmware gira, dalla romstage dello slot
-            tags = set(re.findall(rb"ouroBIOS-update-test-[A-Z]", self.flash.region("FW_MAIN_A", c["image"])))
+            # firmware gira, dalla romstage dello slot; ha versione e variante,
+            # come quello di una release, e il setup le legge dallo slot
+            tags = set(re.findall(TAG_RE.encode(), self.flash.region("FW_MAIN_A", c["image"])))
             if len(tags) != 1:
                 raise Fail("%s: non e' una ROM di build.sh update-test" % c["path"])
             c["tag"] = tags.pop().decode()
+            if c["tag"] != "ouroBIOS-%s-mrc+update-test-%s" % (update.version_str(c["cap"]["version"]), key):
+                raise Fail("%s: la ROM si chiama %s, non ha la versione della capsula %s"
+                           % (c["path"], c["tag"], update.version_str(c["cap"]["version"])))
         self.ro = self.flash.region("WP_RO")
         self.esp = Esp(os.path.join(self.tmp, "esp.img"))
         self.t0 = time.monotonic()
@@ -326,7 +356,7 @@ class UpdateTest:
         sel = re.findall(r"Slot ([AB]) is selected", text)
         if sel != [slot]:
             raise Fail("%s: vboot ha scelto %s, atteso lo slot %s" % (tag, sel or "nessuno slot", slot))
-        tags = re.findall(r"(ouroBIOS-update-test-[A-Z])\S* .*romstage starting", text)
+        tags = re.findall(r"(%s)\S* .*romstage starting" % TAG_RE, text)
         if tags != [self.caps[key]["tag"]]:
             raise Fail("%s: romstage %s, attesa quella di %s" % (tag, tags or "assente", self.caps[key]["tag"]))
 
@@ -402,6 +432,141 @@ class UpdateTest:
             raise Fail("%s: FmpState %s, atteso l'ultimo tentativo %s riuscito"
                        % (tag, fmp, update.version_str(want)))
         return text
+
+    # --- il setup -------------------------------------------------------------
+
+    # LvglPkg, quando una pagina e' disegnata e aspetta i tasti; la pagina
+    # Firmware Update, quando si apre (patch edk2/0020)
+    LVGL_PAGE = "LvglRenderer: entering event loop"
+    FW_PAGE = re.compile(r"FirmwareUpdate: slot ([AB]) runs (.*?), slot ([AB]) holds (.*?)\r?\n")
+    FW_MESSAGE = re.compile(r"FirmwareUpdate: (.*?)\r?\n")
+
+    def keys_then(self, tag, keys, what, test):
+        """Lascia finire il disegno della pagina, preme keys e aspetta che la
+        seriale soddisfi test."""
+        time.sleep(2)
+        self.m.key(*keys)
+        return self.m.wait("%s: %s (serial-%s.log)" % (tag, what, tag),
+                           lambda: (self.m.alive(), test(self.m.serial_text()))[1], self.timeout)
+
+    def setup_other_slot(self, tag, running, other, other_key):
+        """Un avvio della ROM con lo schermo: Esc apre il setup, Giu' e Invio
+        System Configuration, Giu' e Invio la pagina Firmware Update, che deve
+        mostrare gli slot; Su porta all'ultima voce, "Go back to" la release
+        dell'altro slot, Invio chiede la conferma, Y conferma. coreboot fa
+        provare l'altro slot a vboot e il sistema riparte (QEMU esce). Nel
+        flash: nessuno slot scritto, RW_MRC_CACHE cancellato, l'altro slot
+        prossimo con due tentativi."""
+        m = self.m
+        want = self.caps[other_key]["tag"]
+        self.flash.fill("RW_MRC_CACHE", 0x5A)
+        before = self.flash.data()
+        m.boot(tag, self.esp.qemu_args())
+        m.wait("%s: coreboot non e' arrivato al payload (serial-%s.log)" % (tag, tag),
+               lambda: (m.alive(), "Jumping to boot code" in m.serial_text())[1], self.timeout)
+
+        def opened():
+            text = m.serial_text()
+            if self.IDLE in text:
+                raise Fail("%s: Esc non ha aperto il setup, il payload ha provato il disco" % tag)
+            if self.LVGL_PAGE in text:
+                return True
+            m.key("esc")
+            return False
+        m.wait("%s: Esc non ha aperto il setup (serial-%s.log)" % (tag, tag), opened, self.timeout)
+        pages = m.serial_text().count(self.LVGL_PAGE)
+        self.keys_then(tag, ("down", "ret"), "Giu' e Invio non hanno aperto un'altra pagina",
+                       lambda t: t.count(self.LVGL_PAGE) > pages)
+
+        def fw_page(t):
+            # la pagina si apre (FW_PAGE), poi LvglPkg la disegna
+            found = self.FW_PAGE.search(t)
+            return found if found and self.LVGL_PAGE in t[found.end():] else None
+        page = self.keys_then(tag, ("down", "ret"), "la pagina Firmware Update non si e' aperta", fw_page)
+        got = page.groups()
+        exp = (running, self.caps[self.key_of(running)]["tag"], other, want)
+        if got != exp:
+            raise Fail("%s: la pagina Firmware Update dice slot %s con %s, l'altro %s con %s; attesi %s, %s, %s, %s"
+                       % ((tag,) + got + exp))
+        time.sleep(2)
+        m.shot("%s-firmware-update" % tag)
+
+        # Su porta dalla prima voce all'ultima, "Go back to": se la pagina
+        # avesse altre voci dopo, Invio aprirebbe quella e il messaggio dopo
+        # non sarebbe la domanda attesa
+        said = len(self.FW_MESSAGE.findall(m.serial_text()))
+        msg = self.keys_then(tag, ("up", "ret"), "nessun messaggio dopo Su e Invio sulla pagina Firmware Update",
+                             lambda t: len(self.FW_MESSAGE.findall(t)) > said and self.FW_MESSAGE.findall(t)[said])
+        if not msg.startswith("Start %s, in slot %s, from now on?" % (want, other)):
+            raise Fail("%s: dopo Su e Invio la pagina Firmware Update dice \"%s\", non chiede di avviare %s"
+                       % (tag, msg, want))
+        time.sleep(2)
+        m.shot("%s-conferma" % tag)
+        m.key("y")
+        m.wait("%s: confermato con Y, il sistema non e' ripartito (serial-%s.log)" % (tag, tag),
+               lambda: m.proc.poll() is not None, self.timeout)
+        m.halt()
+        text = m.serial_text()
+        for line in ("VBNV: slot %s next, 2 tries" % other,
+                     "FirmwareUpdate: slot %s next, %s, restarting" % (other, want)):
+            if line not in text:
+                raise Fail("%s: nella seriale manca \"%s\"" % (tag, line))
+
+        after = self.flash.data()
+        for area in ("WP_RO", "RW_SECTION_A", "RW_SECTION_B"):
+            if self.flash.region(area, after) != self.flash.region(area, before):
+                raise Fail("%s: scritto %s" % (tag, area))
+        if self.flash.region("RW_MRC_CACHE", after).strip(b"\xff"):
+            raise Fail("%s: RW_MRC_CACHE non cancellato" % tag)
+        st = self.flash.nv()
+        if (not st["valid"] or SLOTS[st["try_next"]] != other or st["try_count"] != 2
+                or SLOTS[st["tried"]] != running or st["result"] != NV_SUCCESS):
+            raise Fail("%s: RW_NVRAM %s, atteso: prossimo lo slot %s, 2 tentativi, %s confermato"
+                       % (tag, nv_str(st), other, running))
+        return text
+
+    def key_of(self, slot):
+        """La ROM (A, B, C, D) che lo slot ha nel flash, dal nome nel suo CBFS."""
+        tags = set(re.findall(TAG_RE.encode(), self.flash.region("FW_MAIN_" + slot)))
+        for k, c in self.caps.items():
+            if tags == {c["tag"].encode()}:
+                return k
+        raise Fail("lo slot %s non ha una sola ROM della prova: %s" % (slot, tags or "nessuna"))
+
+    def os_boot(self, tag, running):
+        """Un avvio fino al "sistema operativo" (slot-lock-test.efi), una voce
+        di boot: chiede l'altro slot a coreboot prima di ExitBootServices(),
+        come un boot loader, e dopo, come un sistema operativo. coreboot deve
+        rifiutarlo le due volte (SMMSTORE_RET_FAILURE, 1); RW_NVRAM non deve
+        cambiare slot."""
+        m = self.m
+        mark = re.compile(r"ouroBIOS slot lock test: (TRY_OTHER (before|after) ExitBootServices: (\d+)|.*failed)\r?\n")
+        def done():
+            m.alive()
+            return any(when == "after" or line.endswith("failed") for line, when, _ in mark.findall(m.serial_text()))
+        self.esp.put_os(self.lock_test)
+        try:
+            m.boot(tag, self.esp.qemu_args())
+            m.wait("%s: il payload non ha avviato slot-lock-test.efi, o non ha risposto (serial-%s.log)"
+                   % (tag, tag), done, self.timeout)
+            m.halt()
+        finally:
+            self.esp.del_os()
+        text = m.serial_text()
+        got = {when: int(ret) for _, when, ret in mark.findall(text) if when}
+        if set(got) != {"before", "after"}:
+            raise Fail("%s: %s" % (tag, "; ".join(x[0] for x in mark.findall(text)) or "nessuna risposta"))
+        if "Capsules: switch to the other firmware slot locked: Success" not in text:
+            raise Fail("%s: il payload non ha bloccato l'altro slot prima di avviare la voce di boot" % tag)
+        for when in ("before", "after"):
+            if got[when] != 1:
+                raise Fail("%s: %s ExitBootServices() coreboot ha risposto %d, non 1 (SMMSTORE_RET_FAILURE)"
+                           % (tag, {"before": "prima di", "after": "dopo"}[when], got[when]))
+        if text.count("SMMSTORE: the other vboot slot is locked until reboot") != 2:
+            raise Fail("%s: coreboot non dice due volte che l'altro slot e' bloccato" % tag)
+        st = self.flash.nv()
+        if not st["valid"] or SLOTS[st["try_next"]] != running or SLOTS[st["tried"]] != running:
+            raise Fail("%s: RW_NVRAM %s, atteso lo slot %s, quello che gira" % (tag, nv_str(st), running))
 
     # --- la prova -------------------------------------------------------------
 
@@ -491,13 +656,32 @@ class UpdateTest:
             raise Fail("7-B: RW_NVRAM %s, atteso lo slot A rimasto in prova" % nv_str(st))
         self.ok("capsula A, due avvii interrotti dopo verstage: finiti i tentativi, vboot torna a B")
 
+        # 8. capsula D (con lo schermo) nello slot A, poi dal setup di D di
+        # nuovo B, con la conferma; vboot prova B e il payload lo conferma
+        self.stage("D")
+        self.capsule_boot("8-capsula-D", "D", "B")
+        self.setup_other_slot("8-setup-D", "A", "B", "B")
+        self.ok("capsula D nello slot A; dal setup di D, Firmware Update: slot A con D, slot B con B, "
+                "\"Go back to\" B confermato: vboot provera' B (2 tentativi), RW_MRC_CACHE cancellato, "
+                "nessuno slot scritto")
+        how, text = self.boot("8-B")
+        self.expect("8-B", how, text, "booted")
+        self.confirmed("8-B", text, "B", "B", trying=True, last=(v["D"], 0))
+        self.ok("vboot prova lo slot B, il payload lo conferma; nell'ESRT %s, ultimo tentativo %s riuscito"
+                % (update.version_str(v["B"]), update.version_str(v["D"])))
+
+        # 9. una voce di boot (boot loader, poi sistema operativo) non cambia slot
+        self.os_boot("9-sistema", "B")
+        self.ok("una voce di boot, prima e dopo ExitBootServices(): il payload ha bloccato il cambio "
+                "di slot, coreboot lo rifiuta, RW_NVRAM resta su B")
+
         # alla fine
         if f.region("WP_RO") != self.ro:
             raise Fail("la parte RO e' cambiata")
         if f.var(MARK_NAME, MARK_GUID) != MARK_DATA:
             raise Fail("la variabile %s scritta all'inizio non c'e' piu'" % MARK_NAME)
-        self.ok("dopo 5 capsule: la parte RO e' quella della ROM A, la variabile UEFI scritta prima "
-                "degli aggiornamenti c'e' ancora")
+        self.ok("dopo 6 capsule e un ritorno dal setup: la parte RO e' quella della ROM A, la variabile "
+                "UEFI scritta prima degli aggiornamenti c'e' ancora")
         return self.steps
 
 
@@ -511,15 +695,18 @@ def nv_str(st):
 
 def main():
     ap = argparse.ArgumentParser(description="Prova dell'aggiornamento con le capsule (vboot A/B) in QEMU q35")
-    ap.add_argument("caps", nargs=3, metavar="CAP", help="le capsule A, B e C (tools/build.sh update-test)")
+    ap.add_argument("caps", nargs=len(ROMS), metavar="CAP",
+                    help="le capsule %s (tools/build.sh update-test)" % ", ".join(ROMS))
+    ap.add_argument("--lock-test", required=True, metavar="EFI",
+                    help="tools/efi/slot-lock-test.c compilato (tools/build.sh update-test)")
     ap.add_argument("--out", default="update-test", help="seriale e riassunto (default: update-test/)")
     ap.add_argument("--timeout", type=float, default=300, help="secondi per ogni avvio (default 300)")
     args = ap.parse_args()
-    for tool in ("qemu-system-x86_64", "mformat", "mcopy", "mdir", "mmd"):
+    for tool in ("qemu-system-x86_64", "mformat", "mcopy", "mdir", "mmd", "mdel"):
         if not shutil.which(tool):
             sys.exit("serve %s (Debian/Ubuntu: apt install qemu-system-x86 mtools)" % tool)
     os.makedirs(args.out, exist_ok=True)
-    test = UpdateTest(args.caps, args.out, args.timeout)
+    test = UpdateTest(args.caps, args.lock_test, args.out, args.timeout)
     passed = False
     try:
         test.run()

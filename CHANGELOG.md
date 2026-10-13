@@ -5,6 +5,22 @@ GitHub include its section; release candidates take the section of the
 version they lead to. For the releases before v1.3.0, see their notes on
 the [releases page](https://github.com/debianita22/ourobios/releases).
 
+## v1.3.4
+
+- Going back without an OS: the *Firmware Update* page of the setup shows
+  the slot that runs and the release in the other one, and *Go back to*
+  restarts into that release, which vboot tries at the next two boots and
+  leaves if it does not boot, as `update.py rollback` does. The setup
+  checks what a capsule would (not the release that runs, the same
+  variant, not older than the oldest accepted update), and only the setup
+  can do it: the payload locks the switch before it starts a boot option
+  (an OS loader, the UEFI Shell) and at `ExitBootServices()`, coreboot on
+  resume from suspend (patches 0065, `edk2/0020` and `lvglpkg/0015`,
+  [docs/update.md](docs/update.md#from-the-setup)).
+- The update test in QEMU goes back from the setup too, with the keys sent
+  by QEMU, and checks that a boot option cannot switch slot, before or after
+  `ExitBootServices()` (`tools/efi/slot-lock-test.c`).
+
 ## v1.3.3
 
 - EDK2 at MrChromebox's `0d39245e6`: writing a Secure Boot key from

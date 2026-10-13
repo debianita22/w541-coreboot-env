@@ -17,3 +17,4 @@
 0017-UefiPayloadPkg-Name-the-firmware-ouroBIOS.patch
 0018-UefiPayloadPkg-Build-the-ESRT-from-FmpDxe-at-every-b.patch
 0019-SecurityPkg-TcgDxe-Log-into-the-bootloader-s-TCPA-ta.patch
+0020-UefiPayloadPkg-Go-back-to-the-other-vboot-slot-from-.patch

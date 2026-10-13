@@ -26,6 +26,7 @@ to the old one if the new one does not verify or does not boot
 - [From the setup, with a USB drive](#from-the-setup-with-a-usb-drive)
 - [fwupd](#fwupd)
 - [Versions, variants, downgrades](#versions-variants-downgrades)
+- [Going back](#going-back)
 - [Without tools/update.py](#without-toolsupdatepy)
 - [If it goes wrong](#if-it-goes-wrong)
 - [How it works](#how-it-works)
@@ -240,6 +241,30 @@ already came back from it: `stage` tries it again), the other variant
 when the copy of the flash is not of the running boot. Going back further
 than the other slot works as before: `stage --allow-older FILE.cap`, which
 writes the older release into the slot that is not running.
+
+### From the setup
+
+From v1.3.4, without an OS: *System Preferences* (Esc at power-on) →
+*System Configuration* → *Firmware Update* shows the slot that runs and the
+release in the other one (*Other slot*). *Go back to* that release asks to
+confirm, then restarts into it as `update.py rollback` does: vboot tries the
+slot at the next two boots and comes back to the slot of now if it does not
+boot; only `RW_MRC_CACHE` is cleared, so the first boot trains the memory
+again. Settings, boot entries and Secure Boot keys stay.
+
+The setup checks what a capsule would: it refuses an empty or damaged slot,
+the release that runs, the other variant and a release older than the
+oldest accepted update; vboot checks the signature at the next boot. With a
+newer release in the other slot (after going back), the entry reads *Switch
+to* that release.
+
+Only the setup can do it: the firmware refuses the switch once it starts a
+boot option (an OS loader, the UEFI Shell), after `ExitBootServices()` and
+after a resume from suspend, so an OS goes back only with a signed capsule
+and its checks. What runs before the boot options, a `Driver####` option or
+the option ROM of a device, could still ask for it: with Secure Boot it must
+be signed. Without *BIOS Lock*, flashrom from the OS can rewrite the vboot
+data anyway.
 
 ## Without tools/update.py
 

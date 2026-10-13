@@ -236,9 +236,16 @@ open(trace, "w").write("pflash_data_write system.flash0: data offset:0x10010 siz
 hits, total = qu.traced_writes(trace, f.areas, ("WP_RO", "RW_SECTION_A", "RW_SECTION_B"))
 assert total == 4 and hits == {"WP_RO": 0, "RW_SECTION_A": 1, "RW_SECTION_B": 0x1000}, (hits, total)
 tmp.cleanup()
+# il nome delle ROM (build.sh) e la pagina Firmware Update (edk2/0020) nella seriale
+import re
+assert re.fullmatch(qu.TAG_RE, "ouroBIOS-v1.3.0-mrc+update-test-D")
+line = ("FirmwareUpdate: slot A runs ouroBIOS-v1.3.0-mrc+update-test-D, slot B holds "
+        "ouroBIOS-v1.1.0-mrc+update-test-B\r\n")
+assert qu.UpdateTest.FW_PAGE.search(line).groups() == ("A", "ouroBIOS-v1.3.0-mrc+update-test-D", "B",
+                                                        "ouroBIOS-v1.1.0-mrc+update-test-B")
 EOF
 	then
-		ok "tools/qemu-update.py: variabili scritte nello store, FmpState, ESRT e traccia del pflash letti"
+		ok "tools/qemu-update.py: variabili scritte nello store, FmpState, ESRT, traccia del pflash e pagina Firmware Update letti"
 	else
 		bad "tools/qemu-update.py: le funzioni della prova dell'aggiornamento non fanno quello che devono"
 	fi
@@ -308,6 +315,16 @@ else
 fi
 for p in patches/test/*.patch; do
 	[ "${p}" = "${t}" ] || bad "${p}: in patches/test ma non usata da tools/build.sh"
+done
+# i comandi SMMSTORE dei due slot di vboot: lo stesso numero in coreboot
+# (src/include/smmstore.h), in SmmStoreLib di EDK2 e nell'applicazione della
+# prova che fa da sistema operativo
+for c in SMMSTORE_CMD_VBOOT_SLOT_GOOD SMMSTORE_CMD_VBOOT_TRY_OTHER SMMSTORE_CMD_VBOOT_LOCK; do
+	v="$(cat patches/*.patch patches/edk2/*.patch tools/efi/*.c \
+		| sed -n "s/^[+]\{0,1\}#define[[:space:]]\{1,\}${c}[[:space:]]\{1,\}\([0-9]\{1,\}\)[[:space:]]*\$/\1/p" \
+		| tr -d '\r' | sort -u)"
+	n="$(printf '%s\n' "${v}" | grep -c .)"
+	if [ "${n}" = 1 ]; then ok "${c} = ${v} in coreboot, EDK2 e tools/efi"; else bad "${c}: numeri diversi o assente (${v//$'\n'/ })"; fi
 done
 
 step "chiave Optimus NVIDIA"
