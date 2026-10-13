@@ -74,7 +74,12 @@ setup ([From the setup](update.md#from-the-setup)): the payload asks
 coreboot's SMMSTORE handler to try the other slot, with two tries, and to
 clear `RW_MRC_CACHE` (patch 0065). The payload locks that request before it
 starts a boot option and at `ExitBootServices()`, coreboot on S3 resume: an
-OS loader or an OS goes back only with a capsule.
+OS loader or an OS goes back only with a capsule. Before the lock, coreboot
+checks the request as the setup does, for the code that runs earlier
+(`Driver####`, `SysPrep####`, option ROMs): the release in the other slot
+(`COREBOOT_EXTRA_VERSION` of the `revision` file in its CBFS) must have the
+variant of the running one and a version not below its lowest supported
+version.
 
 The capsule never writes `WP_RO`, `SMMSTORE`, `RO_VPD` or `RW_ELOG`.
 

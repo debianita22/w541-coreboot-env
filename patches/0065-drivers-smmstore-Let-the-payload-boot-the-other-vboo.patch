@@ -25,23 +25,34 @@ payload sends it before it starts a boot option (an OS loader, a shell)
 and at ExitBootServices(). On S3 resume the payload does not run and SMM
 is loaded again, unlocked: ramstage sends it before the OS resumes.
 
+Other code can still run before the payload locks: boot manager driver
+options (Driver####, SysPrep####) and option ROMs. So TRY_OTHER applies
+the rules of the setup itself: the name of the release in the other slot,
+read from the "revision" file of its CBFS, must have the variant of the
+running one ("mrc" or "nri") and a version not below
+CONFIG_DRIVERS_EFI_MAIN_FW_LSV. The CBFS of the slot is walked in place
+through the flash mapping, as the stack of SMM is small.
+
 TEST=In QEMU q35 with vboot's two RW slots and the nvdata in flash, and
 the EDK2 payload of ouroBIOS (its update test): from the setup,
 SMMSTORE_CMD_VBOOT_TRY_OTHER set try_next to the other slot with two tries
 and erased RW_MRC_CACHE, wrote neither slot, and vboot booted the other
 slot, which the payload kept. A UEFI application started from the disk
 got SMMSTORE_RET_FAILURE, before and after ExitBootServices(), and the
-nvdata kept the slot.
+nvdata kept the slot. With the new checks the setup still switched (the
+same variant, a version above the lowest supported one). The parsing of
+the names and the walk of the CBFS were tested on the host, under ASan
+and UBSan, with valid, cut and corrupt slots.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- src/drivers/smmstore/ramstage.c | 18 +++++++++++++
- src/drivers/smmstore/smi.c      | 46 +++++++++++++++++++++++++++++++++
- src/include/smmstore.h          | 20 ++++++++++++++
- src/security/vboot/vbnv.c       | 34 ++++++++++++++++++++++++
- src/security/vboot/vbnv.h       |  8 ++++++
- 5 files changed, 126 insertions(+)
+ src/drivers/smmstore/ramstage.c |  18 +++
+ src/drivers/smmstore/smi.c      | 235 +++++++++++++++++++++++++++++++-
+ src/include/smmstore.h          |  29 ++++
+ src/security/vboot/vbnv.c       |  45 ++++++
+ src/security/vboot/vbnv.h       |  14 ++
+ 5 files changed, 340 insertions(+), 1 deletion(-)
 
 diff --git a/src/drivers/smmstore/ramstage.c b/src/drivers/smmstore/ramstage.c
 index 50767875..bff99df0 100644
@@ -76,18 +87,30 @@ index 50767875..bff99df0 100644
 +
 +BOOT_STATE_INIT_ENTRY(BS_OS_RESUME, BS_ON_ENTRY, lock_vboot_try_other, NULL);
 diff --git a/src/drivers/smmstore/smi.c b/src/drivers/smmstore/smi.c
-index 09ffbf5c..93b9f2f5 100644
+index 09ffbf5c..4976d121 100644
 --- a/src/drivers/smmstore/smi.c
 +++ b/src/drivers/smmstore/smi.c
-@@ -3,6 +3,7 @@
- #include <console/console.h>
+@@ -1,12 +1,18 @@
+ /* SPDX-License-Identifier: GPL-2.0-only */
+ 
+-#include <console/console.h>
++#include <commonlib/bsd/cbfs_serialized.h>
++#include <commonlib/helpers.h>
  #include <commonlib/region.h>
++#include <console/console.h>
  #include <cpu/x86/smm.h>
++#include <endian.h>
 +#include <fmap.h>
  #include <security/vboot/vbnv.h>
  #include <smmstore.h>
  #include <stddef.h>
-@@ -24,6 +25,40 @@ static int range_check(void *start, size_t size)
+ #include <stdint.h>
++#include <string.h>
++#include <version.h>
+ 
+ /*
+  * Check that the given range is legal.
+@@ -24,6 +30,222 @@ static int range_check(void *start, size_t size)
  	return 0;
  }
  
@@ -108,6 +131,186 @@ index 09ffbf5c..93b9f2f5 100644
 +	return 0;
 +}
 +
++/*
++ * The rules of the setup of the payload, which asks for the switch: the other
++ * slot holds a release of the same variant, not older than the lowest
++ * supported version. The name of a release (CONFIG_LOCALVERSION, in
++ * COREBOOT_EXTRA_VERSION) says both: "<name>-vX.Y.Z[-...]-<variant>[+...]".
++ */
++#define RELEASE_NAME_SIZE 128
++
++/* The name of a release in its build.h, without the leading dashes */
++static bool build_h_release_name(const char *text, size_t len, char *name, size_t name_size)
++{
++	static const char key[] = "#define COREBOOT_EXTRA_VERSION \"";
++	const size_t key_len = sizeof(key) - 1;
++	const char *p, *end = text + len;
++	size_t n = 0;
++
++	for (p = text; (size_t)(end - p) >= key_len; p++) {
++		if (memcmp(p, key, key_len))
++			continue;
++		for (p += key_len; p < end && *p == '-'; p++)
++			;
++		while (p + n < end && n + 1 < name_size && p[n] >= ' ' && p[n] <= '~' && p[n] != '"') {
++			name[n] = p[n];
++			n++;
++		}
++		name[n] = '\0';
++		return n > 0 && p + n < end && p[n] == '"';
++	}
++	return false;
++}
++
++/*
++ * The name of the release in RW slot 0 (A) or 1 (B), from the "revision" file
++ * (build.h) of the CBFS of the slot. The walk is the one of cbfs_walk(), in
++ * place through the flash mapping: the stack of SMM is too small for copies
++ * of the metadata.
++ */
++static bool slot_release_name(int slot, char *name, size_t name_size)
++{
++	static const char file_name[] = "revision";
++	const struct cbfs_file *file;
++	struct region_device rdev;
++	const char *cbfs;
++	size_t size, offset = 0, name_end, data_offset, data_len;
++	bool found = false;
++
++	name[0] = '\0';
++	if (fmap_locate_area_as_rdev(slot ? "FW_MAIN_B" : "FW_MAIN_A", &rdev))
++		return false;
++	size = region_device_sz(&rdev);
++	cbfs = rdev_mmap_full(&rdev);
++	if (!cbfs)
++		return false;
++	while (offset + sizeof(*file) < size) {
++		file = (const struct cbfs_file *)(cbfs + offset);
++		data_offset = be32toh(file->offset);
++		data_len = be32toh(file->len);
++		if (memcmp(file->magic, CBFS_FILE_MAGIC, sizeof(file->magic)) ||
++		    data_offset < sizeof(*file) || data_offset > CBFS_METADATA_MAX_SIZE ||
++		    data_len > size || offset + data_offset + data_len > size) {
++			offset += CBFS_ALIGNMENT;
++			continue;
++		}
++		name_end = be32toh(file->attributes_offset);
++		if (!name_end || name_end > data_offset)
++			name_end = data_offset;
++		if (name_end >= sizeof(*file) + sizeof(file_name) &&
++		    !memcmp(file->filename, file_name, sizeof(file_name))) {
++			found = build_h_release_name(cbfs + offset + data_offset, data_len,
++						     name, name_size);
++			break;
++		}
++		offset = ALIGN_UP(offset + data_offset + data_len, CBFS_ALIGNMENT);
++	}
++	rdev_munmap(&rdev, (void *)cbfs);
++	return found;
++}
++
++/* The version in the name of a release, "...-vX.Y.Z[-...]", numbered as in the ESRT */
++static bool release_version(const char *name, uint32_t *version)
++{
++	const char *p, *d;
++	uint32_t part[3] = { 0 };
++	int i;
++
++	for (p = name; *p; p++) {
++		if (*p != 'v' || (p != name && p[-1] != '-'))
++			continue;
++		d = p + 1;
++		for (i = 0; i < 3; i++) {
++			if (i > 0 && *d++ != '.')
++				break;
++			if (*d < '0' || *d > '9')
++				break;
++			for (part[i] = 0; *d >= '0' && *d <= '9' && part[i] <= 0xffff; d++)
++				part[i] = part[i] * 10 + (*d - '0');
++		}
++		if (i == 3 && (!*d || *d == '-' || *d == '+') &&
++		    part[0] <= 0xff && part[1] <= 0xff && part[2] <= 0xffff) {
++			*version = part[0] << 24 | part[1] << 16 | part[2];
++			return true;
++		}
++	}
++	return false;
++}
++
++/*
++ * The variant in the name of a release: "mrc" or "nri" after a dash, at the
++ * end or before the optional patches ("+..."). NULL without one.
++ */
++static const char *release_variant(const char *name)
++{
++	static const char *const variants[] = { "mrc", "nri" };
++	const char *p;
++	size_t i, n;
++
++	for (p = name; *p; p++) {
++		if (*p != '-')
++			continue;
++		for (i = 0; i < ARRAY_SIZE(variants); i++) {
++			n = strlen(variants[i]);
++			if (!strncmp(p + 1, variants[i], n) && (!p[1 + n] || p[1 + n] == '+'))
++				return variants[i];
++		}
++	}
++	return NULL;
++}
++
++/*
++ * The payload checks the same before it asks, but other code can ask before
++ * the payload locks the switch: a Driver#### or SysPrep#### option, an
++ * option ROM.
++ */
++static bool other_slot_allowed(void)
++{
++	static char other[RELEASE_NAME_SIZE];
++	const char *running = coreboot_extra_version;
++	const char *variant;
++	uint32_t version;
++	int slot = vbnv_tried_slot();
++	char letter;
++
++	if (slot < 0) {
++		printk(BIOS_WARNING, "SMMSTORE: no valid vboot nvdata\n");
++		return false;
++	}
++	letter = slot ? 'A' : 'B';
++	while (*running == '-')
++		running++;
++	if (!slot_release_name(!slot, other, sizeof(other))) {
++		printk(BIOS_WARNING, "SMMSTORE: slot %c holds no release\n", letter);
++		return false;
++	}
++	/* the same entry of the list of variants */
++	variant = release_variant(running);
++	if (!variant || release_variant(other) != variant) {
++		printk(BIOS_WARNING, "SMMSTORE: %s, in slot %c, is not of the variant of %s\n",
++		       other, letter, running);
++		return false;
++	}
++	if (!release_version(other, &version)) {
++		printk(BIOS_WARNING, "SMMSTORE: %s, in slot %c, has no version in its name\n",
++		       other, letter);
++		return false;
++	}
++#if CONFIG(DRIVERS_EFI_FW_INFO)
++	if (version < CONFIG_DRIVERS_EFI_MAIN_FW_LSV) {
++		printk(BIOS_WARNING, "SMMSTORE: %s, in slot %c, is older than the lowest supported version, %u.%u.%u\n",
++		       other, letter, (unsigned int)(CONFIG_DRIVERS_EFI_MAIN_FW_LSV >> 24),
++		       (unsigned int)((CONFIG_DRIVERS_EFI_MAIN_FW_LSV >> 16) & 0xff),
++		       (unsigned int)(CONFIG_DRIVERS_EFI_MAIN_FW_LSV & 0xffff));
++		return false;
++	}
++	return true;
++#else
++	printk(BIOS_WARNING, "SMMSTORE: no lowest supported version to check %s against\n", other);
++	return false;
++#endif
++}
++
 +static uint32_t vboot_try_other(void)
 +{
 +	if (!CONFIG(VBOOT_SLOTS_RW_AB) || !CONFIG(VBOOT_VBNV_FLASH))
@@ -116,6 +319,8 @@ index 09ffbf5c..93b9f2f5 100644
 +		printk(BIOS_WARNING, "SMMSTORE: the other vboot slot is locked until reboot\n");
 +		return SMMSTORE_RET_FAILURE;
 +	}
++	if (!other_slot_allowed())
++		return SMMSTORE_RET_FAILURE;
 +	/*
 +	 * The cache first: if the switch does not happen after that, the slot
 +	 * of now only trains the memory again.
@@ -128,7 +333,7 @@ index 09ffbf5c..93b9f2f5 100644
  uint32_t smmstore_exec(uint8_t command, void *param)
  {
  	uint32_t ret = SMMSTORE_RET_FAILURE;
-@@ -32,6 +67,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+@@ -32,6 +254,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
  	if (smmstore_preprocess_cmd(&command, param))
  		return SMMSTORE_RET_SUCCESS;
  
@@ -143,7 +348,7 @@ index 09ffbf5c..93b9f2f5 100644
  	if (!param)
  		return SMMSTORE_RET_FAILURE;
  
-@@ -89,6 +132,9 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+@@ -89,6 +319,9 @@ uint32_t smmstore_exec(uint8_t command, void *param)
  		vbnv_mark_tried_slot_good();
  		ret = SMMSTORE_RET_SUCCESS;
  		break;
@@ -154,10 +359,10 @@ index 09ffbf5c..93b9f2f5 100644
  		printk(BIOS_DEBUG, "Unknown SMM store command: 0x%02x\n", command);
  		ret = SMMSTORE_RET_UNSUPPORTED;
 diff --git a/src/include/smmstore.h b/src/include/smmstore.h
-index 2020fa32..e7700ad4 100644
+index 2020fa32..b2739439 100644
 --- a/src/include/smmstore.h
 +++ b/src/include/smmstore.h
-@@ -23,6 +23,26 @@
+@@ -23,6 +23,35 @@
   */
  #define SMMSTORE_CMD_VBOOT_SLOT_GOOD 8
  
@@ -169,6 +374,14 @@ index 2020fa32..e7700ad4 100644
 + * memory training cache (RW_MRC_CACHE), if the FMAP has one, is erased first,
 + * as an update capsule does, so that the other slot trains the memory itself.
 + *
++ * The rules of the setup that asks for it apply here too, so that code that
++ * runs before the payload locks the switch (a Driver#### or SysPrep####
++ * option, an option ROM) cannot skip them: the name of the release in the
++ * other slot (COREBOOT_EXTRA_VERSION, in the "revision" file of its CBFS:
++ * "<name>-vX.Y.Z[-...]-<variant>[+...]") has the variant of the running one,
++ * "mrc" or "nri", and a version, as (X << 24) | (Y << 16) | Z, not below
++ * CONFIG_DRIVERS_EFI_MAIN_FW_LSV of the running firmware.
++ *
 + * For the setup of the payload: SMMSTORE_CMD_VBOOT_LOCK, which takes no
 + * parameters, refuses it until the next boot. The payload sends that before
 + * an OS starts, and ramstage on S3 resume, so that an OS cannot go back to an
@@ -176,7 +389,8 @@ index 2020fa32..e7700ad4 100644
 + *
 + * Both return SMMSTORE_RET_UNSUPPORTED without two slots and the nvdata in
 + * flash; TRY_OTHER returns SMMSTORE_RET_FAILURE when locked, without valid
-+ * nvdata, or when the cache or the nvdata could not be written.
++ * nvdata, when the other slot does not hold such a release, or when the
++ * cache or the nvdata could not be written.
 + */
 +#define SMMSTORE_CMD_VBOOT_TRY_OTHER 9
 +#define SMMSTORE_CMD_VBOOT_LOCK 10
@@ -185,13 +399,24 @@ index 2020fa32..e7700ad4 100644
   * Used by capsule updates as a standalone command or modifier to v2 commands.
   *
 diff --git a/src/security/vboot/vbnv.c b/src/security/vboot/vbnv.c
-index 069c3e10..d47e8e11 100644
+index 069c3e10..c1da9c85 100644
 --- a/src/security/vboot/vbnv.c
 +++ b/src/security/vboot/vbnv.c
-@@ -96,6 +96,40 @@ int vbnv_mark_tried_slot_good(void)
+@@ -96,6 +96,51 @@ int vbnv_mark_tried_slot_good(void)
  	return 1;
  }
  
++int vbnv_tried_slot(void)
++{
++	uint8_t vbnv_copy[VBOOT_VBNV_BLOCK_SIZE];
++
++	read_vbnv(vbnv_copy);
++	/* read_vbnv() clears a copy that is not valid */
++	if ((vbnv_copy[HEADER_OFFSET] & HEADER_MASK) != HEADER_SIGNATURE)
++		return -1;
++	return (vbnv_copy[BOOT2_OFFSET] & BOOT2_TRIED) ? 1 : 0;
++}
++
 +int vbnv_try_other_slot(uint8_t tries)
 +{
 +	uint8_t vbnv_copy[VBOOT_VBNV_BLOCK_SIZE];
@@ -230,13 +455,19 @@ index 069c3e10..d47e8e11 100644
  int vbnv_udc_enable_flag(void)
  {
 diff --git a/src/security/vboot/vbnv.h b/src/security/vboot/vbnv.h
-index bf64734b..7dbc84d7 100644
+index bf64734b..7d0ec773 100644
 --- a/src/security/vboot/vbnv.h
 +++ b/src/security/vboot/vbnv.h
-@@ -20,6 +20,14 @@ void regen_vbnv_crc(uint8_t *vbnv_copy);
+@@ -20,6 +20,20 @@ void regen_vbnv_crc(uint8_t *vbnv_copy);
   */
  int vbnv_mark_tried_slot_good(void);
  
++/*
++ * The RW slot that vboot booted this time, from the stored copy like
++ * vbnv_mark_tried_slot_good(): 0 for A, 1 for B, -1 without valid nvdata.
++ */
++int vbnv_tried_slot(void);
++
 +/*
 + * Ask vboot to boot the RW slot that it did not boot this time at the next
 + * boots, with the given number of tries. Works on the stored copy, like

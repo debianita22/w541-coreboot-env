@@ -16,7 +16,10 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   can do it: the payload locks the switch before it starts a boot option
   (an OS loader, the UEFI Shell) and at `ExitBootServices()`, coreboot on
   resume from suspend (patches 0065, `edk2/0020` and `lvglpkg/0015`,
-  [docs/update.md](docs/update.md#from-the-setup)).
+  [docs/update.md](docs/update.md#from-the-setup)). What runs before the
+  lock (a `Driver####` or `SysPrep####` option, an option ROM) gets the
+  same checks from coreboot itself: the variant, and not older than the
+  lowest supported version of the running release.
 - An fwupd remote: the mrc release carries the metadata of both variants,
   signed by the capsule key (`ourobios.xml.gz`, `.jcat`), and
   `configs/fwupd/ourobios.conf` downloads it from the latest release, so

@@ -329,10 +329,13 @@ to* that release.
 Only the setup can do it: the firmware refuses the switch once it starts a
 boot option (an OS loader, the UEFI Shell), after `ExitBootServices()` and
 after a resume from suspend, so an OS goes back only with a signed capsule
-and its checks. What runs before the boot options, a `Driver####` option or
-the option ROM of a device, could still ask for it: with Secure Boot it must
-be signed. Without *BIOS Lock*, flashrom from the OS can rewrite the vboot
-data anyway.
+and its checks. What runs before the boot options, a `Driver####` or
+`SysPrep####` option or the option ROM of a device, can still ask for it
+(with Secure Boot it must be signed), but from v1.3.4 coreboot checks the
+release of the other slot itself, as the setup does: the same variant, not
+older than the lowest supported version of the running release (patch
+0065). Without *BIOS Lock*, flashrom from the OS can rewrite the vboot data
+anyway.
 
 ## Without tools/update.py
 
