@@ -133,16 +133,19 @@ class Smoke:
 
     def boot(self, tag, extra=()):
         """Accende la macchina: extra sono altre opzioni di QEMU (dischi,
-        traccia: tools/qemu-update.py)."""
+        traccia: tools/qemu-update.py). QEMU parte fermo (-S) e la CPU va
+        solo dopo il saluto di QMP: un avvio che finisce subito, come un
+        reset di vboot nel bootblock, non chiude QEMU prima del socket."""
         self.halt()
         self.serial = os.path.join(self.out, "serial-%s.log" % tag)
         cmd = ["qemu-system-x86_64", "-M", "q35,acpi=off", "-cpu", "Haswell-noTSX,stepping=3",
                "-smp", "1", "-m", "2048", "-drive", "if=pflash,format=raw,file=" + self.flash,
                "-serial", "file:" + self.serial, "-qmp", "unix:%s,server=on,wait=off" % self.sock,
-               "-display", "none", "-vga", "std", "-no-reboot"] + list(extra)
+               "-display", "none", "-vga", "std", "-no-reboot", "-S"] + list(extra)
         self.log = open(os.path.join(self.out, "qemu-%s.log" % tag), "w")
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT)
         self.qmp = Qmp(self.sock)
+        self.qmp.cmd("cont")
 
     def cut(self):
         """Toglie la corrente: QEMU ucciso senza chiudere niente. Il flash

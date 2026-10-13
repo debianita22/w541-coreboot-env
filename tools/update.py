@@ -749,7 +749,7 @@ def cmd_status(args):
         # riuscito vuol dire scritto: se lo slot nuovo non si verifica o non
         # arriva al payload, vboot torna al vecchio e l'ESRT lo dice solo cosi'
         # (tools/qemu-update.py, passi 6 e 7)
-        if fw["last_status"] == 0 and fw["last_version"] != fw["version"]:
+        if not fw["legacy"] and fw["last_status"] == 0 and fw["last_version"] != fw["version"]:
             print("nota:      la capsula %s e' stata scritta, ma gira la %s: vboot e' tornato all'altro "
                   "slot (quello nuovo non si e' verificato o non e' partito), o il flash e' stato "
                   "riscritto dopo. Gli slot: sudo flashrom -p internal -r flash.bin, poi "

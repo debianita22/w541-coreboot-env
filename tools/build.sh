@@ -903,7 +903,7 @@ cmd_smoke() {
 			|| { cat "${TREE}/build-${q}/defconfig.log"; die "smoke ${v}: make defconfig fallito"; }
 		defconfig_kept "${TREE}/build-${q}" || die "smoke ${v}: il .config di q35 non ha tutto il defconfig"
 		if ! mk "${q}" -j"${JOBS}" > "${TREE}/build-${q}/make.log" 2>&1; then
-			grep -n -i -B2 -A6 'error' "${TREE}/build-${q}/make.log" | tail -n 40
+			grep -n -i -B2 -A6 'error' "${TREE}/build-${q}/make.log" | tail -n 40 || true
 			die "smoke ${v}: build per q35 fallita (build-${q}/make.log nell'albero)"
 		fi
 		say "smoke ${v}: QEMU"
@@ -926,14 +926,16 @@ update_test_q35() {
 }
 
 # La prova dell'aggiornamento. Le ROM del W541 e le chiavi delle release non
-# c'entrano: la chiave RSA delle capsule di prova nasce qui e si cancella
-# appena le ha firmate. Il payload (EDK2 con le patch del progetto e le
-# opzioni EDK2 del defconfig mrc, ma DEBUG e per q35) si costruisce in
-# build-update-test dell'albero; le ROM di q35 con vboot in un worktree
-# dell'albero con la patch di prova, che l'albero delle ROM non vede mai
+# c'entrano: la chiave RSA delle capsule di prova nasce qui, in un sottoshell
+# che la cancella quando esce, anche dopo un errore (una trap EXIT nella
+# funzione prenderebbe il posto di quella di install_vboot_key). Il payload
+# (EDK2 con le patch del progetto e le opzioni EDK2 del defconfig mrc, ma
+# DEBUG e per q35) si costruisce in build-update-test dell'albero; le ROM di
+# q35 con vboot in un worktree dell'albero con la patch di prova, che
+# l'albero delle ROM non vede mai
 cmd_update_test() {
 	need_prepared
-	local t ut ab b d fd rom n ver
+	local t ut ab
 	for t in qemu-system-x86_64 mformat mcopy mdir mmd openssl; do
 		command -v "${t}" > /dev/null \
 			|| die "update-test: serve ${t} (Debian/Ubuntu: apt install qemu-system-x86 mtools openssl)"
@@ -946,7 +948,19 @@ cmd_update_test() {
 	ab="${WORK}/coreboot-update-test"
 	rm -rf "${ut:?}"
 	mkdir -p "${ut}"
+	(
+		trap 'rm -f "${ut}/key.pem" "${ut}/signer.pem" "${ut}/cert.cnf"' EXIT
+		update_test_build "${ut}" "${ab}"
+	)
+	say "update-test: QEMU"
+	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" "${ut}/A.cap" "${ut}/B.cap" "${ut}/C.cap" \
+		|| die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
+}
 
+# La chiave di prova, il payload, le ROM A, B e C e le loro capsule in $1; il
+# worktree in $2
+update_test_build() {
+	local ut="$1" ab="$2" b d fd rom n ver
 	say "update-test: la chiave delle capsule di prova"
 	(
 		umask 077
@@ -967,7 +981,7 @@ cmd_update_test() {
 		echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=${UPDATE_TEST_LSV}"
 		echo "CONFIG_OPTION_BACKEND_NONE=y"
 		echo "CONFIG_PAYLOAD_EDK2=y"
-		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig"
+		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig" || true
 		echo "CONFIG_EDK2_DEBUG=y"
 		echo "CONFIG_DRIVERS_EFI_CAPSULE_TRUSTED_PUBLIC_CERT=\"${ut}/cert.pem\""
 		echo "CONFIG_LOCALVERSION=\"ouroBIOS-update-test-payload\""
@@ -977,7 +991,7 @@ cmd_update_test() {
 	defconfig_kept "${b}" || die "update-test: il .config del payload non ha tutto il defconfig"
 	if ! mk update-test -j"${JOBS}" > "${b}/make.log" 2>&1; then
 		failure_report "update-test: payload" "${b}/make.log"
-		grep -n -i -B2 -A6 'error' "${b}/make.log" | tail -n 40
+		grep -n -i -B2 -A6 'error' "${b}/make.log" | tail -n 40 || true
 		die "update-test: build del payload fallita (build-update-test/make.log nell'albero)"
 	fi
 	fd="${b}/UEFIPAYLOAD.fd"
@@ -1016,7 +1030,7 @@ cmd_update_test() {
 		defconfig_kept "${d}" || die "update-test: il .config della ROM ${n} non ha tutto il defconfig"
 		if ! mk_in "${ab}" "${n}" -j"${JOBS}" > "${d}/make.log" 2>&1; then
 			failure_report "update-test: ROM ${n}" "${d}/make.log"
-			grep -n -i -B2 -A6 'error' "${d}/make.log" | tail -n 40
+			grep -n -i -B2 -A6 'error' "${d}/make.log" | tail -n 40 || true
 			die "update-test: build della ROM ${n} fallita (${d}/make.log)"
 		fi
 	done
@@ -1028,12 +1042,6 @@ cmd_update_test() {
 		generate_capsule "${ab}/build-${n}/coreboot.rom" "${ut}/${n}.cap" "${UPDATE_TEST_GUID}" "${ver}" \
 			"${UPDATE_TEST_LSV}" "${ut}/signer.pem" "${ut}/cert.pem" || die "update-test: capsula ${n} non fatta"
 	done
-	# la chiave serviva solo a queste capsule
-	rm -f "${ut}/key.pem" "${ut}/signer.pem" "${ut}/cert.cnf"
-
-	say "update-test: QEMU"
-	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" "${ut}/A.cap" "${ut}/B.cap" "${ut}/C.cap" \
-		|| die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
 }
 
 for c in "${CMDS[@]}"; do

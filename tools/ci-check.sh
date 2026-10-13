@@ -209,7 +209,8 @@ img[st + 0x20:st + 0x28] = struct.pack("<Q", 0x80000)
 img[st + 0x28:st + 0x2C] = b"_FVH"
 img[st + 0x30:st + 0x32] = struct.pack("<H", 0x48)
 img[st + 0x48:st + 0x64] = update.AUTH_VAR_GUID + struct.pack("<IBBHI", 0x80000 - 0x48, 0x5A, 0xFE, 0, 0)
-path = os.path.join(tempfile.mkdtemp(), "flash.rom")
+tmp = tempfile.TemporaryDirectory()
+path = os.path.join(tmp.name, "flash.rom")
 open(path, "wb").write(img)
 f = qu.Flash(path)
 f.set_var("OsIndications", qu.EFI_GLOBAL, 7, struct.pack("<Q", 4))
@@ -226,12 +227,15 @@ row = ("| B195F75A-8F95-4282-950C-EE9DD1099EC9 | System FW    | 0x 1010000 | 0x 
        "| 0x 1020000 | 0x       0 |")
 assert qu.ESRT_ROW.findall(row) == [("B195F75A-8F95-4282-950C-EE9DD1099EC9", "System FW", "1010000", "1000000",
                                       "14000", "1020000", "0")]
-trace = os.path.join(os.path.dirname(path), "pflash.trace")
-open(trace, "w").write("pflash_data_write system.flash0: data offset:0x10010 size:1 value:0x0000 counter:0x0\n"
+trace = os.path.join(tmp.name, "pflash.trace")
+open(trace, "w").write("pflash_data_write system.flash0: data offset:0x10010 size:1 value:0x0000\n"
                        "pflash_write_block_erase system.flash0: block erase offset:0x400000 bytes:0x1000\n"
-                       "pflash_data_write system.flash0: data offset:0x90000 size:1 value:0x0040 counter:0x0\n")
+                       "pflash_data_write system.flash0: data offset:0x90000 size:1 value:0x0040\n"
+                       "pflash_data_write_block system.flash0: data offset:0xa0010 size:1 value:0x00ff "
+                       "counter:0x0000000000000010\n")
 hits, total = qu.traced_writes(trace, f.areas, ("WP_RO", "RW_SECTION_A", "RW_SECTION_B"))
-assert total == 3 and hits == {"WP_RO": 0, "RW_SECTION_A": 0, "RW_SECTION_B": 0x1000}, (hits, total)
+assert total == 4 and hits == {"WP_RO": 0, "RW_SECTION_A": 1, "RW_SECTION_B": 0x1000}, (hits, total)
+tmp.cleanup()
 EOF
 	then
 		ok "tools/qemu-update.py: variabili scritte nello store, FmpState, ESRT e traccia del pflash letti"

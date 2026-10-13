@@ -206,7 +206,7 @@ class Flash:
 ESRT_ROW = re.compile(r"\| ([0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}) \| (\S[^|]*?)\s*\|"
                       r" 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+) \| 0x\s*([0-9A-F]+)"
                       r" \| 0x\s*([0-9A-F]+) \|")
-TRACE_RE = re.compile(r"^(pflash_data_write|pflash_write_block_erase) \S+ .*?offset:0x([0-9a-f]+)"
+TRACE_RE = re.compile(r"^(pflash_data_write(?:_block)?|pflash_write_block_erase) \S+ .*?offset:0x([0-9a-f]+)"
                       r"(?: size:(\d+)| bytes:0x([0-9a-f]+))", re.M)
 
 
@@ -293,7 +293,9 @@ class UpdateTest:
         toglie la corrente ("cut"). Torna (come e' finito, seriale)."""
         extra = self.esp.qemu_args()
         if trace:
-            extra += ["-trace", "pflash_data_write", "-trace", "pflash_write_block_erase", "-D", trace]
+            # i byte scritti uno a uno e quelli del buffer di scrittura (0xE8),
+            # le cancellazioni dei blocchi
+            extra += ["-trace", "pflash_data_write*", "-trace", "pflash_write_block_erase", "-D", trace]
         self.m.boot(tag, extra)
         end = time.monotonic() + self.timeout
         while True:
@@ -494,7 +496,8 @@ class UpdateTest:
             raise Fail("la parte RO e' cambiata")
         if f.var(MARK_NAME, MARK_GUID) != MARK_DATA:
             raise Fail("la variabile %s scritta all'inizio non c'e' piu'" % MARK_NAME)
-        self.ok("dopo 5 capsule: parte RO intatta, variabili UEFI rimaste")
+        self.ok("dopo 5 capsule: la parte RO e' quella della ROM A, la variabile UEFI scritta prima "
+                "degli aggiornamenti c'e' ancora")
         return self.steps
 
 

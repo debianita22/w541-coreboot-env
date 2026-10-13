@@ -279,9 +279,11 @@ Any tool that delivers capsules on disk works the same way:
   still shows the update as done: it is the result of writing the slot, not
   of booting it; `update.py status` adds a *nota* when the version that runs
   is not the one of the last capsule.
-  `update.py vboot` on a copy of the flash shows *precedente: slot X,
-  fallito* when the new slot did not verify; `cbmem -c` (*try_count used
-  up; falling back*) tells the case of the two tries.
+  `update.py vboot` on a copy of the flash shows which release is in each
+  slot; a copy taken in the first boot after going back also shows
+  *precedente: slot X, fallito* when the new slot did not verify (the next
+  boot overwrites it). `cbmem -c` of that boot (*try_count used up; falling
+  back*) tells the case of the two tries.
 
 The event log (`tools/elog.py`, `elogtool`) shows the reboots of an update.
 

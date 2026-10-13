@@ -154,9 +154,9 @@ of an EFI system partition with the capsule-on-disk bit of `OsIndications`,
 as `update.py stage` puts it; QEMU starts from off at every reset:
 
 - capsule B while A runs: the payload writes slot B and `RW_MRC_CACHE`, asks
-  vboot to try B for two boots and restarts; slot A, the read-only part and
-  the UEFI variables are unchanged, the capsule is gone from the ESP and the
-  bit from `OsIndications`. vboot boots B and the payload confirms it;
+  vboot to try B for two boots and restarts; slot A and the read-only part
+  are unchanged, the capsule is gone from the ESP and the bit from
+  `OsIndications`. vboot boots B and the payload confirms it;
 - capsule C: it goes to slot A, which is no longer running, and boots;
 - capsule B again, the release already in the other slot (`update.py
   rollback`): with QEMU's trace of the flash, not one byte written to the
@@ -168,8 +168,10 @@ as `update.py stage` puts it; QEMU starts from off at every reset:
 - the ESRT at every boot: the version of the slot that runs, and as last
   attempt the version of the capsule, status 0 (patch `edk2/0018`). After a
   fallback the last attempt is still the capsule that was written, with
-  status 0: the ESRT does not say that vboot went back, `update.py vboot`
-  does.
+  status 0: the ESRT does not say that vboot went back (`update.py status`
+  notes the version mismatch);
+- after the five capsules, the read-only part is the one of ROM A, and a
+  UEFI variable written before the first update is still in the store.
 
 By hand, in QEMU with v1.3.0: `RW_NVRAM` full, the payload erases it and
 writes the request at the start.
