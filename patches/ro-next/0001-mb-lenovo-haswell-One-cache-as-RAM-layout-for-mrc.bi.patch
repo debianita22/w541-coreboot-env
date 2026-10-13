@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Tue, 13 Oct 2026 20:08:00 +0200
+Subject: [PATCH] mb/lenovo/haswell: One cache-as-RAM layout for mrc.bin and
+ NRI
+
+With vboot starting in the bootblock, the RO bootblock and verstage
+leave state in cache-as-RAM for the RW romstage: vboot's work buffer,
+the pre-RAM console, the timestamps, the CBFS metadata cache and the
+FMAP cache. car.ld puts the stack before all but the first of them, so
+they move with DCACHE_BSP_STACK_SIZE, which is 8 KiB with mrc.bin and
+128 KiB with the native RAM init. An RO region built for one RAM init
+therefore cannot start an RW slot built for the other: on QEMU q35 an
+RO region built with a 16 KiB stack and RW slots built with a 128 KiB
+one stop in romstage ("FMAP cache corrupted?!").
+
+Add CAR_STACK_AFTER_SHARED_REGIONS, which puts the stack after the
+shared regions, and LENOVO_HASWELL_COMMON_CAR, which selects it for
+the Haswell ThinkPads. Built for the W541, both RAM inits then place
+every shared region at the same address; the CAR MTRR still covers the
+same 256 KiB (64 KiB plus mrc.bin's 192 KiB, or 256 KiB), and the two
+bootblocks differ only in the addresses of their own variables and in
+the version string. The RO region of the mrc.bin build, which also
+holds mrc.bin at its fixed address, can start the RW slots of either.
+
+The same option grows the pre-RAM console from 3 KiB to 16 KiB, where
+the bootblock and verstage messages at log level 7 fit (about 7 KiB
+with romstage until CBMEM, estimated from the q35 serial output and the
+3 KiB the W541 keeps now), and shrinks the CBFS metadata
+cache and the pre-RAM CBFS cache from 16 KiB to 8 KiB each (the
+metadata cache uses about 0.5 KiB per CBFS here) to stay within the
+64 KiB that mrc.bin leaves to coreboot: 5.9 KiB remain in its romstage.
+
+TEST=On QEMU q35 with vboot RW A/B, the RO region of a build with a
+16 KiB CAR stack and this option starts romstage, ramstage and the
+payload from the RW slots of a build with a 128 KiB stack. Built for
+the W541, mrc.bin and NRI. Not run on the W541: the RO region and the
+slots must change together, which needs flashrom and, if the new RO
+region failed, an external programmer.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/arch/x86/Kconfig                 | 11 +++++++++++
+ src/arch/x86/car.ld                  |  8 ++++++++
+ src/mainboard/lenovo/haswell/Kconfig | 27 +++++++++++++++++++++++++++
+ 3 files changed, 46 insertions(+)
+
+diff --git a/src/arch/x86/Kconfig b/src/arch/x86/Kconfig
+index 14093089..7ca4f5ae 100644
+--- a/src/arch/x86/Kconfig
++++ b/src/arch/x86/Kconfig
+@@ -147,6 +147,17 @@ config X86_TOP4G_BOOTMEDIA_MAP
+ 	depends on !X86_CUSTOM_BOOTMEDIA
+ 	default y
+ 
++config CAR_STACK_AFTER_SHARED_REGIONS
++	bool
++	help
++	  Place the stack of the cache-as-RAM stages after the regions they
++	  share (vboot's work buffer, the pre-RAM console, the timestamps, the
++	  CBFS and FMAP caches) instead of before them. The shared regions
++	  then do not move with DCACHE_BSP_STACK_SIZE: stages built with
++	  another stack size, such as the RW romstage of a board variant with
++	  a different RAM init, still find them where the RO bootblock and
++	  verstage left them.
++
+ config PRERAM_CBMEM_CONSOLE_SIZE
+ 	hex
+ 	default 0xc00
+diff --git a/src/arch/x86/car.ld b/src/arch/x86/car.ld
+index bbfd6829..3472d01b 100644
+--- a/src/arch/x86/car.ld
++++ b/src/arch/x86/car.ld
+@@ -28,10 +28,12 @@
+ 	 * Needs to be transferred until CBMEM is available */
+ 	TPM_LOG(., 2K)
+ #endif
++#if !CONFIG(CAR_STACK_AFTER_SHARED_REGIONS)
+ 	/* Stack for CAR stages. Since it persists across all stages that
+ 	 * use CAR it can be reused. The chipset/SoC is expected to provide
+ 	 * the stack size. */
+ 	REGION(car_stack, ., CONFIG_DCACHE_BSP_STACK_SIZE, 4)
++#endif
+ 	/* The pre-ram cbmem console as well as the timestamp region are fixed
+ 	 * in size. Therefore place them above the car global section so that
+ 	 * multiple stages (romstage and verstage) have a consistent
+@@ -61,6 +63,12 @@
+ 	/* Reserve sizeof(struct ehci_dbg_info). */
+ 	REGION(car_ehci_dbg_info, ., 80, 1)
+ 
++#if CONFIG(CAR_STACK_AFTER_SHARED_REGIONS)
++	/* The stack, after the regions shared between stages, so that they
++	 * stay at the same addresses whatever its size. */
++	REGION(car_stack, ., CONFIG_DCACHE_BSP_STACK_SIZE, 16)
++#endif
++
+ 	/* _bss and _ebss provide symbols to per-stage
+ 	 * variables that are not shared like the timestamp and the pre-ram
+ 	 * cbmem console. This is useful for clearing this area on a per-stage
+diff --git a/src/mainboard/lenovo/haswell/Kconfig b/src/mainboard/lenovo/haswell/Kconfig
+index b65cd785..cf8da886 100644
+--- a/src/mainboard/lenovo/haswell/Kconfig
++++ b/src/mainboard/lenovo/haswell/Kconfig
+@@ -65,6 +65,33 @@ config LENOVO_HASWELL_VBOOT_MINIMAL_RO
+ 	  stops after verstage, and the flash has to be written with an
+ 	  external programmer.
+ 
++config LENOVO_HASWELL_COMMON_CAR
++	bool "One cache-as-RAM layout for mrc.bin and the native RAM init"
++	depends on VBOOT && VBOOT_STARTS_IN_BOOTBLOCK
++	select CAR_STACK_AFTER_SHARED_REGIONS
++	help
++	  Lay out the regions that the RO bootblock and verstage leave in
++	  cache-as-RAM for romstage (vboot's work buffer, the pre-RAM console,
++	  the timestamps, the CBFS and FMAP caches) in the same way with
++	  mrc.bin and with the native RAM init, which need different stack
++	  sizes: the stack goes after them. One RO region, with mrc.bin, can
++	  then start an RW slot of either. The pre-RAM console grows to
++	  16 KiB, so that it keeps the bootblock and verstage messages; the
++	  CBFS metadata cache and the pre-RAM CBFS cache shrink to 8 KiB to
++	  make room in the 64 KiB that mrc.bin leaves to coreboot.
++
++	  The RO region and the RW slots must both be built with this
++	  option: it changes what the RO region leaves to the RW slots.
++
++config PRERAM_CBMEM_CONSOLE_SIZE
++	default 0x4000 if LENOVO_HASWELL_COMMON_CAR
++
++config CBFS_MCACHE_SIZE
++	default 0x2000 if LENOVO_HASWELL_COMMON_CAR
++
++config PRERAM_CBFS_CACHE_SIZE
++	default 0x2000 if LENOVO_HASWELL_COMMON_CAR
++
+ config RW_REGION_ONLY
+ 	default "fallback/romstage fallback/postcar fallback/ramstage fallback/dsdt.aml fallback/payload vbt.bin" if LENOVO_HASWELL_VBOOT_MINIMAL_RO
+ 
+-- 
+2.43.0
+

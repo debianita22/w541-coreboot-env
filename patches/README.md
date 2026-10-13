@@ -80,6 +80,17 @@ file names; `tools/verify-rom.sh --release` rejects such an image.
 |---|---|---|
 | `test-peg-afe` | programs the PEG PHY (AFE) recipe when neither MRC nor the native RAM init does, to compare dGPU link speed and AER errors | test: runs on every boot, whatever the NVIDIA GPU setting |
 
+## The next read-only part
+
+`ro-next/` holds a draft for a release that writes the read-only part
+again ([docs/vboot.md](../docs/vboot.md#a-new-read-only-part)): no tool
+applies it, and it changes what the read-only part leaves to the slots, so
+its slots cannot run after the read-only part on the laptops.
+
+| Patch | What | Status |
+|---|---|---|
+| `ro-next/0001` | one cache-as-RAM layout for `mrc.bin` and the native RAM init (the stack after the regions shared between stages), a 16 KiB early console | built for the W541; the layout tested in QEMU q35; to rebase on the series when it is used |
+
 ## The update test
 
 `test/q35-update-test.patch` is not a coreboot change for the W541:

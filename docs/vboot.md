@@ -14,6 +14,7 @@ again from the old slot.
 - [Firmware protection](#firmware-protection)
 - [Keys](#keys)
 - [Limits](#limits)
+- [A new read-only part](#a-new-read-only-part)
 - [Moving from v1.2.x](#moving-from-v12x)
 - [How it is tested](#how-it-is-tested)
 - [Testing on the laptop](#testing-on-the-laptop)
@@ -128,7 +129,8 @@ its root key, and vboot keeps the old one).
   still read what the old read-only part leaves, or a release that writes
   the read-only part as well, with flashrom. For the same reason the early
   console (3 KiB, where vboot's messages no longer fit: `Pre-CBMEM
-  romstage console overflowed`) can only grow with such a release.
+  romstage console overflowed`) can only grow with such a release
+  ([A new read-only part](#a-new-read-only-part)).
 - **No rollback protection for the slots.** vboot keeps its anti-rollback
   data in the TPM on Chromebooks; here it is mocked
   (`VBOOT_MOCK_SECDATA`), so that the firmware does not create spaces in
@@ -138,6 +140,58 @@ its root key, and vboot keeps the old one).
   signed by the project.
 - The layout keeps the regions written at runtime where they were, but the
   slots are new: moving to v1.3.0 needs flashrom once.
+
+## A new read-only part
+
+Prepared, not released: what a release that writes `WP_RO` once more, with
+flashrom, would change. Nothing of it is in the ROMs of the releases.
+
+- **One read-only part for both variants.** The read-only part of each
+  variant leaves its state for romstage at other addresses, because the
+  stack comes before the shared regions in cache-as-RAM, and it is 8 KiB
+  with `mrc.bin` and 128 KiB with the native RAM init. The draft patch
+  [`patches/ro-next/`](../patches/ro-next/) moves the stack after them. Built
+  for the W541, both variants then have the same map below, the cache-as-RAM
+  MTRR covers the same 256 KiB, and the two bootblocks are the same code but
+  for the addresses of their own variables and the version string:
+
+  | Range | Both variants |
+  |---|---|
+  | `0xFF7C0000-0xFF7C2FFF` | vboot's work buffer |
+  | `0xFF7C3000-0xFF7C6FFF` | early console, 16 KiB (now 3 KiB) |
+  | `0xFF7C7000-0xFF7CB6CF` | timestamps, CBFS metadata cache (8 KiB, now 16), FMAP cache, pre-RAM CBFS cache (8 KiB, now 16), EHCI debug |
+  | from `0xFF7CB6D0` | the stack of each stage: 8 KiB (`mrc`) or 128 KiB (`nri`), then its variables |
+  | `0xFF7D0000-0xFF7FFFFF` | `mrc` only: `mrc.bin`'s variables |
+
+  The read-only part of `mrc`, which also holds `mrc.bin` at its fixed
+  address, could then start a slot of either variant: an `nri` slot
+  written by a capsule, which vboot leaves after two boots that fail in the
+  native RAM init, or a switch of variant without flashrom. That also needs
+  the capsule checks to accept the other variant's slots (today a capsule
+  installs only on its own variant) and the `nri` ROM to carry the `mrc`
+  read-only part.
+- **An early console of 16 KiB**, where the messages of the bootblock and
+  of vboot fit (*Pre-CBMEM romstage console overflowed* today).
+- **With the same release, optional**: a newer coreboot pin, and vboot's
+  CBFS verification (`VBOOT_CBFS_INTEGRATION`), which hashes each file as it
+  is loaded instead of reading the slot twice: about 0.2 s less at every
+  boot ([docs/flashing.md](flashing.md), boot time).
+
+Tested in QEMU q35, with vboot's two slots: the read-only part of a build
+with a 16 KiB stack and the patch starts romstage, ramstage and the payload
+from the slots of a build with a 128 KiB stack; without the patch the same
+pair stops in romstage, *FMAP cache corrupted?!*. On the W541 only the
+build: the layout above, for both variants.
+
+**Risk.** The read-only part runs first at every boot, and nothing checks
+or replaces it. A mistake in it, or in what the hardware does with it and
+QEMU cannot show (`mrc.bin` with the stack 34 KiB higher, in the same
+cache-as-RAM), leaves a laptop that does not start: only an external
+programmer on the 4 MiB chip, with the laptop opened, brings it back. The
+release would be one flashrom write of the BIOS region but `SMMSTORE`,
+`RO_VPD` and `RW_ELOG`, with *Firmware protection* off, as from v1.2.x to
+v1.3.0; after it, capsules again. Not to be written without a programmer
+and a backup of the flash at hand.
 
 ## Moving from v1.2.x
 

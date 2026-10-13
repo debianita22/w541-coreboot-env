@@ -330,6 +330,12 @@ for p in patches/optional/*.patch; do
 	head -1 "${p}" | grep -q '^From [0-9a-f]\{40\} ' || bad "${p}: non e' una mail di git format-patch"
 done
 ok "$(find patches/optional -name '*.patch' | wc -l) patch opzionali"
+# la bozza per una release che riscrive la parte RO: in nessuna serie
+for p in patches/ro-next/*.patch; do
+	[ -e "${p}" ] || continue
+	{ head -1 "${p}" | grep -q '^From [0-9a-f]\{40\} ' && grep -q '^diff --git ' "${p}"; } \
+		|| bad "${p}: non e' una mail di git format-patch"
+done
 # la patch per q35 della prova dell'aggiornamento (build.sh update-test):
 # solo nel worktree di quella prova, quindi in nessuna serie
 t="$(sed -n 's/^UPDATE_TEST_PATCH=\(.*\)$/\1/p' tools/build.sh)"
