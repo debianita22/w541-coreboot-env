@@ -746,6 +746,14 @@ def cmd_status(args):
     print("versione:  %s, minima per una capsula %s" % (version_str(fw["version"]), version_str(fw["lsv"])))
     if fw["last_version"]:
         print("ultimo:    %s, %s" % (version_str(fw["last_version"]), attempt_str(fw["last_status"])))
+        # riuscito vuol dire scritto: se lo slot nuovo non si verifica o non
+        # arriva al payload, vboot torna al vecchio e l'ESRT lo dice solo cosi'
+        # (tools/qemu-update.py, passi 6 e 7)
+        if fw["last_status"] == 0 and fw["last_version"] != fw["version"]:
+            print("nota:      la capsula %s e' stata scritta, ma gira la %s: vboot e' tornato all'altro "
+                  "slot (quello nuovo non si e' verificato o non e' partito), o il flash e' stato "
+                  "riscritto dopo. Gli slot: sudo flashrom -p internal -r flash.bin, poi "
+                  "update.py vboot flash.bin" % (version_str(fw["last_version"]), version_str(fw["version"])))
     else:
         print("ultimo:    nessun aggiornamento con capsula")
     print("su disco:  %s" % ("supportato" if cod_supported() else "NON supportato da questo firmware"))

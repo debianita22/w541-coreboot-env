@@ -27,6 +27,9 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   slots; vboot goes back to the old slot when the new one does not verify
   or does not reach the payload; the ESRT is checked at every boot
   ([docs/vboot.md](docs/vboot.md#how-it-is-tested)).
+- `tools/update.py status` adds a note when the version that runs is not
+  the one of the last capsule, written with success: vboot went back to the
+  other slot, or the flash was rewritten afterwards.
 
 ## v1.3.2
 
