@@ -179,6 +179,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, "tools")
 import update
 assert update.release_key("v1.3.1-mrc") < update.release_key("v1.3.2-rc1-mrc") < update.release_key("v1.3.2-mrc")
+assert update.release_key("v1.3.2-rc9-mrc") < update.release_key("v1.3.2-rc10-mrc") < update.release_key("v1.3.2-mrc")
 assert update.build_release_key("ouroBIOS-v1.3.2-rc1-nri") < update.build_release_key("ouroBIOS-v1.3.2-nri")
 areas = [("RW_NVRAM", 0x5A0000, 0x10000), ("RW_SECTION_A", 0x5C0000, 0x2D0000), ("FW_MAIN_A", 0x5D0000, 0x2C0000),
          ("RW_SECTION_B", 0x890000, 0x2D0000), ("FW_MAIN_B", 0x8A0000, 0x2C0000)]

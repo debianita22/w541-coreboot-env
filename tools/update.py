@@ -607,8 +607,10 @@ def release_key(tag):
     m = re.match(r"^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?-(mrc|nri)$", tag)
     if not m:
         return None
-    # a parita' di numeri la release vera viene dopo le -rcN
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) is None, m.group(4) or "")
+    # a parita' di numeri la release vera viene dopo le -rcN; i numeri del
+    # suffisso come numeri (-rc10 dopo -rc9): re.split alterna testo e cifre
+    suffix = tuple(int(x) if i % 2 else x for i, x in enumerate(re.split(r"(\d+)", m.group(4) or "")))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4) is None, suffix)
 
 
 def download_capsule(rel, dest):
