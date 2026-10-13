@@ -17,6 +17,11 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   (an OS loader, the UEFI Shell) and at `ExitBootServices()`, coreboot on
   resume from suspend (patches 0065, `edk2/0020` and `lvglpkg/0015`,
   [docs/update.md](docs/update.md#from-the-setup)).
+- The battery charge behaviour from Linux on the W541 too
+  (`/sys/class/power_supply/BAT0/charge_behaviour`: `inhibit-charge`,
+  `force-discharge`), as on the T440p (patch 0066, until v1.3.3 the
+  optional `test-charge-behaviour`): the Lenovo ACPI tables of the two
+  laptops declare the same embedded controller registers.
 - The update test in QEMU goes back from the setup too, with the keys sent
   by QEMU, and checks that a boot option cannot switch slot, before or after
   `ExitBootServices()` (`tools/efi/slot-lock-test.c`).

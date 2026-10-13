@@ -25,6 +25,7 @@ for upstream review (one change each, with the reasoning in the message).
 | 0045-0046 | Security options: *BIOS Lock* (`bios_lock` of `BOOTMEDIA_SMM_BWP_RUNTIME_OPTION`: only SMM writes the flash, off by default) and *Clear memory at power-on* (`clear_dram_on_boot`, on by default; 1.7 s with 32 GB) |
 | 0047 | the machine's data from the VPD as the OEM firmware reports it: the machine type as the base board product too, the system serial on the chassis; machine type, serial and UUID in the About card of the setup menu |
 | 0048-0052 | firmware updates with UEFI capsules (`docs/update.md`): the capsules coalesced in memory kept by the DRAM clearing at boot, the EDK2 build without a PCD that MrChromebox's tree does not declare, an SMMSTORE command for the payload to give up the whole-flash access of an update boot when it writes nothing, the certificate the payload trusts written after the EDK2 clean (with parallel make it raced with it, and the build could pick another file), and the whole-flash decision taken on S3 resume too (upstream the OS could take it after a resume, and write the flash past the BIOS lock) |
+| 0066 | the battery charge behaviour from the OS (`charge_behaviour`: inhibit charge, force discharge) on the W541 too, as on the T440p: the OEM DSDTs of the two boards declare the same EC RAM map (146 fields at the same offsets, sizes and names), and the registers used are where both leave them to the OEM SMM code |
 | 0065 | vboot A/B: the payload can boot the other RW slot (`SMMSTORE_CMD_VBOOT_TRY_OTHER`: *try next* that slot, two tries, `RW_MRC_CACHE` erased, as after an update) until it sends `SMMSTORE_CMD_VBOOT_LOCK` before a boot option or an OS starts; ramstage sends the lock on S3 resume, when the payload does not run. For the *Firmware Update* page of the setup (`edk2/0020`) |
 | 0063 | Haswell VT-d: `SPCAPCTRL` set in the remapping engine for the devices other than the IGD also with the IGD present. Without it the engine reports 2 MiB and 1 GiB pages (`dmar1: ... cap d2008c20660462`, the same either way) but rejects them: with `intel_iommu=on` Linux mapped SATA reads with them and got `fault reason 0x0c non-zero reserved fields in PTE`, and btrfs found blocks of zeros. Tested on the W541: 21 faults without, none with |
 | 0061-0062 | the size of the flash read from the descriptor with the 4-bit density fields of the 8 series (`FLCOMP` 0x34 is 8 + 4 MiB): no more `SF size 0x2800000 does not correspond to CONFIG_ROM_SIZE` at every boot; `ifdtool -d` decodes it the same way |
@@ -78,7 +79,6 @@ file names; `tools/verify-rom.sh --release` rejects such an image.
 | Patch | What | Status |
 |---|---|---|
 | `test-peg-afe` | programs the PEG PHY (AFE) recipe when neither MRC nor the native RAM init does, to compare dGPU link speed and AER errors | test: runs on every boot, whatever the NVIDIA GPU setting |
-| `test-charge-behaviour` | ACPI charge behaviour (inhibit charge, force discharge) on the W541, as on the T440p | test: the EC registers were only verified on the T440p |
 
 ## The update test
 
@@ -97,13 +97,13 @@ read-only CBFS, and the W541's map cut down to `RW_MRC_CACHE`, `SMMSTORE`,
 After a change in a coreboot tree based on `COREBOOT_COMMIT`:
 
 ```sh
-git format-patch --zero-commit -o /path/to/ourobios/patches/ <COREBOOT_COMMIT>..HEAD~1
-git format-patch --zero-commit --start-number 65 -o /path/to/ourobios/patches/ -1 HEAD
+git format-patch --zero-commit -o /path/to/ourobios/patches/ <COREBOOT_COMMIT>..HEAD~2
+git format-patch --zero-commit --start-number 65 -o /path/to/ourobios/patches/ -2 HEAD
 ls /path/to/ourobios/patches/0*.patch | xargs -n1 basename > /path/to/ourobios/patches/series
 ```
 
 The number 0064 stays unused: it was the patch of v1.3.2-rc1 that the
-CHANGELOG mentions. So the patches after 0063 (now one, the last commit)
+CHANGELOG mentions. So the patches after 0063 (now two, the last commits)
 start from 65.
 
 The same for EDK2 (a tree at `CONFIG_EDK2_TAG_OR_REV`) and for its LvglPkg

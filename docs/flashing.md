@@ -327,7 +327,11 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
     radios;
   - *Energy Saver*: battery charge thresholds (*OS controlled* keeps what
     TLP or `thinkpad_acpi` sets), SpeedStep, Turbo Boost, C-states, CPU
-    PL1/PL2 limits and lock, cooling policy, *Restore AC Power Loss*;
+    PL1/PL2 limits and lock, cooling policy, *Restore AC Power Loss*. From
+    v1.3.4 the OS can also stop charging or discharge the battery on AC
+    (`/sys/class/power_supply/BAT0/charge_behaviour`: `auto`,
+    `inhibit-charge`, `force-discharge`); unplugging the AC adapter ends a
+    forced discharge;
   - *Security*: *BIOS Lock*, *Clear memory at power-on*, VT-x, VT-d,
     *Intel Management Engine* and the supervisor password. *BIOS Lock*,
     off by default, leaves the flash writable only by the firmware in SMM,
