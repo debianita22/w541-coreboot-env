@@ -17,7 +17,9 @@ At the next boot the firmware checks the capsule, writes it with a progress
 bar under the logo (about a minute), and starts again on the new version.
 From v1.3.0 it writes the RW slot that is not running, and vboot goes back
 to the old one if the new one does not verify or does not boot
-([docs/vboot.md](vboot.md)).
+([docs/vboot.md](vboot.md)). From v1.3.4, with the project's remote set up
+once, `fwupdmgr update`, GNOME Software and KDE Discover stage the capsule
+in the same way ([The fwupd remote](#the-fwupd-remote)).
 
 - [What changes and what stays](#what-changes-and-what-stays)
 - [The first time](#the-first-time)

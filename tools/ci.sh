@@ -186,9 +186,9 @@ cmd_notes() {
 	# della stessa versione; mai una release candidate
 	local fwupd_how meta_row=""
 	if [ "${version%%-*}" = "${version}" ] && [ "${PRERELEASE:-false}" != true ]; then
-		fwupd_how="with the project remote installed (\`configs/fwupd/ourobios.conf\`), \`fwupdmgr refresh\` then \`fwupdmgr update\` (or GNOME Software, KDE Discover) offers this release as long as it is the latest; or \`sudo fwupdmgr install ${cab}\`. Then reboot."
+		fwupd_how="with the project remote installed (\`configs/fwupd/ourobios.conf\`), \`fwupdmgr refresh\` then \`fwupdmgr update\` (or GNOME Software, KDE Discover) offers this release as long as it is the latest; or \`sudo fwupdmgr install ${cab}\`. From one of its release candidates, which fwupd sees as the same version: \`sudo fwupdmgr reinstall\` with the remote, or \`install --allow-reinstall\`. Then reboot."
 	else
-		fwupd_how="the project remote (\`configs/fwupd/ourobios.conf\`) offers releases, not release candidates: \`sudo fwupdmgr install ${cab}\`, then reboot."
+		fwupd_how="the project remote (\`configs/fwupd/ourobios.conf\`) offers releases, not release candidates: \`sudo fwupdmgr install --allow-reinstall ${cab}\` (fwupd sees the candidates of a release as the same version), then reboot."
 	fi
 	if [ "${v}" = mrc ]; then
 		meta_row=$'\n'"| \`${FWUPD_METADATA}\`, \`${FWUPD_METADATA}.jcat\` | the signed metadata of the project's **fwupd remote**: the \`.cab\` of both variants of this release |"

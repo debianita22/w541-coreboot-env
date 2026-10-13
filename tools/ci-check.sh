@@ -30,6 +30,9 @@
 #   8. il pin di coreboot in tools/build.sh: commit intero e describe coerente,
 #      lo stesso della parte RO gia' sui portatili (configs/ro-interface.txt:
 #      gli slot di una capsula partono dopo quella)
+#  10. i link dei .md: i file relativi e le ancore (#titolo, come le fa
+#      GitHub), anche quelli alla documentazione che tools/ci.sh mette nelle
+#      note delle release (i link al ramo principale, con un'ancora)
 # L'applicazione delle patch e i .config li prova check.yml (job "patch").
 set -u
 O="$(cd "$(dirname "$0")/.." && pwd)"
@@ -552,6 +555,68 @@ if [ "${ro_cb}" = "${desc}" ]; then
 	ok "la parte RO sui portatili e' della stessa coreboot (configs/ro-interface.txt)"
 else
 	bad "il pin e' ${desc}, la parte RO sui portatili ${ro_cb:-?}: gli slot devono ancora leggere quello che lascia (configs/ro-interface.txt, docs/vboot.md#limits)"
+fi
+
+step "link nei documenti"
+if out="$(files | python3 -c '
+import os, re, sys
+files = sys.stdin.read().split()
+md = [f for f in files if f.endswith(".md")]
+
+def slug(title):
+    """L ancora di un titolo come la fa GitHub."""
+    t = re.sub(r"`([^`]*)`", r"\1", title.strip())
+    t = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", t)
+    t = re.sub(r"[^\w\- ]", "", t.lower())
+    return t.replace(" ", "-")
+
+def lines(f):
+    fence = False
+    for no, line in enumerate(open(f, encoding="utf-8"), 1):
+        if line.startswith("```"):
+            fence = not fence
+        elif not fence:
+            yield no, line
+
+anchors = {}
+for f in md:
+    seen, out = {}, set()
+    for _, line in lines(f):
+        m = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+        if m:
+            s = slug(m.group(1))
+            n = seen.get(s, 0)
+            seen[s] = n + 1
+            out.add(s if n == 0 else "%s-%d" % (s, n))
+    anchors[f] = out
+
+bad = []
+for f in md:
+    for no, line in lines(f):
+        for target in re.findall(r"\]\(([^)\s]+)\)", line):
+            if re.match(r"^[a-z]+:", target):
+                continue
+            path, _, anchor = target.partition("#")
+            dest = os.path.normpath(os.path.join(os.path.dirname(f), path)) if path else f
+            if path and not os.path.exists(dest):
+                bad.append("%s:%d: %s non c\x27e" % (f, no, target))
+            elif anchor and dest.endswith(".md") and anchor not in anchors.get(dest, set()):
+                bad.append("%s:%d: #%s non e\x27 un titolo di %s" % (f, no, anchor, dest))
+for f in files:
+    if f.startswith("tools/") and not f.endswith((".md", ".pyc")):
+        try:
+            text = open(f, encoding="utf-8").read()
+        except UnicodeDecodeError:
+            continue
+        for path, anchor in re.findall(r"blob/main/([A-Za-z0-9_./-]+[.]md)#([A-Za-z0-9_-]+)", text):
+            if anchor not in anchors.get(path, set()):
+                bad.append("%s: %s#%s non c\x27e" % (f, path, anchor))
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+' 2>&1)"; then
+	ok "$(files | grep -c '\.md$') file .md: link relativi e ancore, anche nelle note delle release"
+else
+	while IFS= read -r line; do [ -n "${line}" ] && bad "${line}"; done <<< "${out}"
 fi
 
 echo

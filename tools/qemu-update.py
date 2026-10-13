@@ -353,7 +353,7 @@ class UpdateTest:
         self.m.boot(tag, extra)
         end = time.monotonic() + self.timeout
         while True:
-            time.sleep(0.3)
+            time.sleep(0.1 if cut_at else 0.3)
             text = self.m.serial_text()
             if self.m.proc.poll() is not None:
                 self.m.halt()

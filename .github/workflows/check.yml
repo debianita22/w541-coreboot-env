@@ -50,6 +50,19 @@ jobs:
       - name: tools/build.sh prepare config
         run: ./tools/build.sh --toolchain host prepare config
 
+      # la bozza per una nuova parte RO (patches/ro-next) non e' in nessuna
+      # serie: un avviso, non un errore, se non applica piu' sopra la serie
+      - name: patches/ro-next sopra la serie
+        run: |
+          for p in patches/ro-next/*.patch; do
+            [ -e "${p}" ] || continue
+            if git -C work/coreboot apply --check "${PWD}/${p}"; then
+              echo "${p}: applica sopra la serie"
+            else
+              echo "::warning title=patches/ro-next::${p} non applica piu' sopra la serie: da riallineare prima di usarla"
+            fi
+          done
+
       - name: Riepilogo
         run: |
           {
