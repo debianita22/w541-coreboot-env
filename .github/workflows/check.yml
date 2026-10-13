@@ -72,10 +72,13 @@ jobs:
             echo "EDK2: $(grep -cv '^#' patches/edk2/series) patch su EDK2, $(grep -cv '^#' patches/lvglpkg/series) su LvglPkg."
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      # .config e' un file nascosto: upload-artifact lo salta se non glielo si dice
       - uses: actions/upload-artifact@v7
         with:
           name: config
           path: |
             work/coreboot/build-mrc/.config
             work/coreboot/build-nri/.config
+          include-hidden-files: true
+          if-no-files-found: error
           retention-days: 14
