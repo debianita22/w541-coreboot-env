@@ -261,7 +261,12 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
   power-on* (1.7 s), `mrc.bin` with its saved training (0.85 s), the
   graphics (0.26 s, mostly the power-up delays of the panel), vboot's
   check of the slot (0.23 s, in the read-only part) and the loading of
-  EDK2 (0.15 s). Until ramstage the processor runs at 800 MHz: a request
+  EDK2 (0.15 s). These last two read the flash at its fastest, dual output
+  at 50 MHz as the descriptor sets it (about 12.5 MB/s): the check reads
+  the 2.4 MB of the slot (and hashes them at 800 MHz), the loading reads
+  the 1.9 MB of the compressed payload again. The settings save the most:
+  *Clear memory at power-on* off, a shorter *Auto Boot Time-out*. Until
+  ramstage the processor runs at 800 MHz: a request
   for its maximum ratio before `mrc.bin`, as on Broadwell, is not applied
   (tried in v1.3.2-rc1: still 800 MHz after 1 ms, the same raminit time).
 - All the LEDs blinking with a black screen mean that coreboot stopped on a
