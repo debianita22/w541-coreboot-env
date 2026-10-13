@@ -165,7 +165,7 @@ failure_report() {
 	shift
 	for f in "$@"; do
 		[ -s "${f}" ] || continue
-		msg+="== ${f#"${WORK}/"}"$'\n'"$(tail -n 40 "${f}" | cut -c1-300)"$'\n'
+		msg+="== ${f#"${WORK}/"}"$'\n'"$(tail -n 40 "${f}" | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-300)"$'\n'
 	done
 	[ -n "${msg}" ] && note error "${title}"$'\n'"${msg}"
 	return 0
@@ -1000,8 +1000,17 @@ cmd_update_test() {
 	)
 	say "update-test: QEMU"
 	for rom in "${UPDATE_TEST_ROMS[@]}"; do caps+=("${ut}/${rom%% *}.cap"); done
+	local rc=0 last
 	python3 "${O}/tools/qemu-update.py" --out "${ut}/out" --lock-test "${ut}/slot-lock-test.efi" "${caps[@]}" \
-		|| die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
+		2>&1 | tee "${ut}/qemu-update.log" || rc=$?
+	if [ "${rc}" != 0 ]; then
+		# nella CI il log del job non si legge sempre: l'esito di ogni passo,
+		# il motivo e la fine della seriale dell'ultimo avvio in un'annotazione
+		last="$(find "${ut}/out" -maxdepth 1 -name 'serial-*.log' -printf '%T@ %p\n' 2>/dev/null \
+			| sort -n | tail -n 1 | cut -d' ' -f2-)"
+		failure_report "update-test" "${ut}/qemu-update.log" ${last:+"${last}"}
+		die "update-test: l'aggiornamento non passa la prova in QEMU (${ut}/out)"
+	fi
 }
 
 # La chiave di prova, il payload, le ROM A, B, C e D e le loro capsule in $1;
