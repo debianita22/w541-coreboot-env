@@ -1224,7 +1224,10 @@ def var_store(region):
                         "size": dsize, "bad": True})
             break
         name = region[off + hsize:off + hsize + nsize].decode("utf-16-le", "replace").rstrip("\0")
-        out.append({"off": off, "state": st, "name": name, "guid": guid, "attrs": attrs, "size": dsize})
+        # data: dove cominciano i dati (li legge solo tools/qemu-smoke.py, sul
+        # flash di QEMU; vars non li stampa mai)
+        out.append({"off": off, "state": st, "name": name, "guid": guid, "attrs": attrs, "size": dsize,
+                    "data": off + hsize + nsize})
         off = (off + hsize + nsize + dsize + 3) & ~3
     info = {"fv_len": fv_len, "store_size": size, "format": fmt, "health": state, "auth": auth,
             "used": off - start, "free": end - off}

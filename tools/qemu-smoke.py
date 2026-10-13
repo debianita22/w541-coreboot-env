@@ -13,7 +13,13 @@
 #      payload arriva senza dischi se Esc non apre il setup;
 #   4. Giu' e Invio aprono un'altra pagina, Esc torna indietro: il setup
 #      risponde ai tasti;
-#   5. QEMU e' ancora vivo: nessun riavvio, nessun triple fault (-no-reboot).
+#   5. QEMU e' ancora vivo: nessun riavvio, nessun triple fault (-no-reboot);
+#   6. le variabili UEFI in SMMSTORE: senza dischi il payload arriva alla
+#      Shell, dove setvar scrive una variabile di prova; spenta la macchina,
+#      la variabile deve essere nello store del flash, con i suoi dati. Al
+#      secondo avvio la Shell la riscrive con un altro valore: il driver deve
+#      trovare la copia di prima nel flash e cancellarla, e ne deve restare
+#      una sola valida.
 # Le schermate di ogni passo vanno in DIR (PNG), con la console seriale.
 #
 # Il W541 non si emula: qui girano il payload (UEFIPayloadPkg, LvglPkg, le
@@ -28,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 
 class Fail(Exception):
@@ -112,33 +119,62 @@ class Screen:
 
 
 class Smoke:
+    """Le macchine QEMU di una prova: una per fase, tutte sulla stessa copia
+    della ROM, che il payload scrive (SMMSTORE)."""
+
     def __init__(self, rom, out, timeout):
         self.out, self.timeout = out, timeout
         self.tmp = tempfile.mkdtemp(prefix="qemu-smoke-")
         self.flash = os.path.join(self.tmp, "flash.rom")
-        shutil.copyfile(rom, self.flash)        # la ROM si scrive (SMMSTORE): una copia
-        self.serial = os.path.join(out, "serial.log")
+        shutil.copyfile(rom, self.flash)
         self.sock = os.path.join(self.tmp, "qmp.sock")
         self.n = 0
+        self.proc = self.qmp = self.log = None
+
+    def boot(self, tag):
+        self.halt()
+        self.serial = os.path.join(self.out, "serial-%s.log" % tag)
         cmd = ["qemu-system-x86_64", "-M", "q35,acpi=off", "-cpu", "Haswell-noTSX,stepping=3",
                "-smp", "1", "-m", "2048", "-drive", "if=pflash,format=raw,file=" + self.flash,
                "-serial", "file:" + self.serial, "-qmp", "unix:%s,server=on,wait=off" % self.sock,
                "-display", "none", "-vga", "std", "-no-reboot"]
-        self.log = open(os.path.join(out, "qemu.log"), "w")
+        self.log = open(os.path.join(self.out, "qemu-%s.log" % tag), "w")
         self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT)
         self.qmp = Qmp(self.sock)
 
-    def close(self):
-        try:
-            self.qmp.cmd("quit")
-        except (Fail, OSError):
-            pass
+    def halt(self):
+        if self.proc is None:
+            return
+        if self.proc.poll() is None:
+            try:
+                self.qmp.cmd("quit")
+            except (Fail, OSError):
+                pass
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+            self.proc.wait()
         self.log.close()
+        self.proc = None
+
+    def close(self):
+        self.halt()
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def type(self, text):
+        """Scrive text sulla tastiera PS/2, maiuscole con Shift."""
+        names = {" ": "spc", "-": "minus", "=": "equal", "\n": "ret", ".": "dot", "/": "slash"}
+        for ch in text:
+            self.alive()
+            if ch.isalpha() and ch.isupper():
+                keys = ["shift", ch.lower()]
+            elif ch.isalnum():
+                keys = [ch]
+            else:
+                keys = [names[ch]]
+            self.qmp.cmd("send-key", keys=[{"type": "qcode", "data": k} for k in keys])
+            time.sleep(0.08)
 
     def alive(self):
         if self.proc.poll() is not None:
@@ -199,19 +235,51 @@ class Smoke:
         return self.wait(what, test, seconds)
 
 
+# La variabile di prova: un GUID del fornitore tutto suo, mai usato dal
+# firmware; due valori di lunghezza diversa, cosi' il secondo e' un record
+# nuovo e quello vecchio va cancellato
+VAR_NAME = "OuroSmoke"
+VAR_GUID = "2c1a8e3f-6d5b-4f1e-9a37-0b6e5f4d2c11"
+VAR_DATA = ("4F55524F", "424F4F5432")      # "OURO", "BOOT2"
+VAR_VALID = (0x3F, 0x3E)                   # VAR_ADDED, e in cancellazione
+
+
+def store_copies(flash):
+    """Le copie della variabile di prova nello store di SMMSTORE della ROM:
+    [(stato, attributi, dati)]."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import update                           # noqa: E402 (tools/update.py)
+    with open(flash, "rb") as f:
+        data = f.read()
+    areas = update.fmap_areas(data)
+    if not areas or "SMMSTORE" not in areas:
+        raise Fail("la ROM non ha una regione SMMSTORE")
+    off, size = areas["SMMSTORE"]
+    region = data[off:off + size]
+    found, _ = update.var_store(region)
+    guid = uuid.UUID(VAR_GUID).bytes_le
+    return [(v["state"], v["attrs"], region[v["data"]:v["data"] + v["size"]].hex().upper())
+            for v in found if v["name"] == VAR_NAME and v["guid"] == guid]
+
+
 def run(rom, out, timeout):
     os.makedirs(out, exist_ok=True)
     sm = Smoke(rom, out, timeout)
     steps = []
     t0 = time.monotonic()
     at = lambda: "%3.0f s" % (time.monotonic() - t0)
-    try:
+
+    def to_payload():
         sm.wait("coreboot non e' arrivato al payload (\"Jumping to boot code\" nella seriale)",
                 lambda: (sm.alive(), "Jumping to boot code" in sm.serial_text())[1], timeout)
+
+    try:
+        # 1. il setup: Esc durante l'avvio lo apre (BOOT_MANAGER_ESCAPE); la
+        # pagina principale lo ignora, cosi' si puo' premere finche' non c'e'
+        sm.boot("setup")
+        to_payload()
         steps.append("%s  coreboot -> payload" % at())
 
-        # Esc durante l'avvio apre il setup (BOOT_MANAGER_ESCAPE); la pagina
-        # principale lo ignora, cosi' si puo' premere finche' non c'e'
         def drawn():
             sm.key("esc")
             s = sm.shot()
@@ -241,13 +309,47 @@ def run(rom, out, timeout):
         sm.shot("indietro")
         if back.diff(page) < 0.03:
             raise Fail("Esc non ha lasciato la pagina")
-        steps.append("%s  Esc: di nuovo la pagina principale (%.0f%% diversa da quella di prima)"
-                     % (at(), 100 * back.diff(home)))
+        steps.append("%s  Esc: di nuovo la pagina principale" % at())
         sm.alive()
         boots = sm.serial_text().count("bootblock starting")
         if boots > 1:
             raise Fail("coreboot e' partito %d volte" % boots)
         steps.append("%s  QEMU vivo, un solo avvio" % at())
+
+        # 2. le variabili UEFI in SMMSTORE: senza dischi il payload arriva
+        # alla Shell, dove setvar scrive la variabile di prova e reset -s
+        # spegne; la si cerca poi nello store del flash. Al secondo avvio la
+        # Shell la riscrive: il driver delle variabili deve trovare la copia
+        # di prima nel flash e cancellarla, e ne deve restare una sola
+        for i, value in enumerate(VAR_DATA):
+            sm.boot("shell-%d" % (i + 1))
+            to_payload()
+            shell = sm.stable("il payload non e' arrivato alla Shell UEFI", timeout)
+            if shell.colors() > 8:
+                raise Fail("senza dischi il payload non si e' fermato nella Shell (%d colori)"
+                           % shell.colors())
+            sm.type("setvar %s -guid %s -bs -rt -nv =%s\n" % (VAR_NAME, VAR_GUID, value))
+            # setvar torna al prompt quando la variabile e' nel flash; poi si
+            # chiude QEMU, che scrive su disco il flash emulato. Niente reset
+            # -s: il PM di ICH9 in QEMU spegne con SLP_TYP 0, coreboot da' a
+            # S5 il 7 dei PCH Intel
+            sm.stable("dopo setvar la Shell non e' tornata al prompt", timeout)
+            sm.shot("shell-%d" % (i + 1))
+            sm.halt()
+            copies = store_copies(sm.flash)
+            valid = [c for c in copies if c[0] in VAR_VALID]
+            if len(valid) != 1 or valid[0][2] != value:
+                raise Fail("nello store %d copie valide di %s (%s), attesa una con %s"
+                           % (len(valid), VAR_NAME, ", ".join(c[2] for c in valid) or "nessuna", value))
+            if valid[0][1] & 0x7 != 0x7:
+                raise Fail("%s con attributi 0x%x, attesi NV+BS+RT (0x7)" % (VAR_NAME, valid[0][1]))
+            if i == 0:
+                steps.append("%s  Shell: setvar scrive %s in SMMSTORE (NV+BS+RT)" % (at(), VAR_NAME))
+            else:
+                if len(copies) < 2:
+                    raise Fail("la copia di prima di %s non c'e' piu' nello store" % VAR_NAME)
+                steps.append("%s  dopo un riavvio: riscritta, la copia di prima cancellata, una sola "
+                             "valida" % at())
         return steps
     finally:
         sm.close()

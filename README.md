@@ -219,7 +219,10 @@ tools/build.sh --help
 `smoke` puts the EDK2 payload of each variant, as built, into a coreboot
 image for QEMU's q35 and boots it with `tools/qemu-smoke.py`: coreboot must
 reach the payload, the payload must draw, Esc must open the setup, and the
-setup must open a page and go back, without a reset. It needs
+setup must open a page and go back, without a reset. Then, in two more
+boots, the UEFI Shell writes a test variable with `setvar`: it must be in
+the SMMSTORE store of the emulated flash, and after the reboot the second
+write must find and delete the first copy, leaving one. It needs
 `qemu-system-x86`; screenshots and the serial console go to
 `work/smoke-<variant>`. Nothing of the W541 itself runs there: it checks the
 payload and coreboot's common code, not the board.

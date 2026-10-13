@@ -14,6 +14,9 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `RuntimeFreeMem()`). The three commits before it load an Intel GOP
   driver and VBT from CBFS, which this firmware does not use: libgfxinit
   draws the screen.
+- The smoke test of the build also checks the UEFI variables: in two
+  boots of the emulated laptop the UEFI Shell writes a test variable, and
+  it must be in SMMSTORE, then rewritten with the first copy deleted.
 
 ## v1.3.2
 
