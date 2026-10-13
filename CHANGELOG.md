@@ -5,6 +5,16 @@ GitHub include its section; release candidates take the section of the
 version they lead to. For the releases before v1.3.0, see their notes on
 the [releases page](https://github.com/debianita22/ourobios/releases).
 
+## v1.3.3
+
+- EDK2 at MrChromebox's `0d39245e6`: writing a Secure Boot key from
+  Linux (`sbctl enroll-keys`, `efi-updatevar`) no longer faults in the
+  variable driver, which verifies authenticated variables outside SMM,
+  and no longer takes the EFI runtime services down (CryptoPkg,
+  `RuntimeFreeMem()`). The three commits before it load an Intel GOP
+  driver and VBT from CBFS, which this firmware does not use: libgfxinit
+  draws the screen.
+
 ## v1.3.2
 
 - The firmware is built from the same coreboot, EDK2, patches and blobs
