@@ -20,7 +20,8 @@
 #                  nessuna riga del defconfig sia andata persa
 #   roms           .config, build, tools/verify-rom.sh, file in dist/; con
 #                  la chiave in CAPSULE_SIGNING_KEY anche la capsula firmata
-#                  di ogni variante (docs/update.md). Gli slot RW di vboot si
+#                  e il .cab di ogni variante, e i metadati firmati del
+#                  remote fwupd (docs/update.md). Gli slot RW di vboot si
 #                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
 #                  senza, con le chiavi di prova di vboot: build di prova
 #   smoke          dopo roms, la prova di fumo del payload: per ogni variante
@@ -73,7 +74,10 @@
 # dall'ambiente, CAPSULE_SIGNING_KEY (PEM; nella CI il secret omonimo), e
 # deve essere quella del certificato keys/capsule-signing.pem, di cui le ROM
 # si fidano. Accanto, il pacchetto per fwupd (.cab, tools/fwupd-cab.py), con
-# la capsula firmata anche per fwupd da jcat-tool. La versione nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
+# la capsula firmata anche per fwupd da jcat-tool, e i metadati del remote
+# fwupd (ourobios.xml.gz e la sua firma .jcat, configs/fwupd/ourobios.conf):
+# i .cab delle due varianti con gli indirizzi delle release. La versione
+# nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
 # (il "triplet" di fwupd: X << 24 | Y << 16 | Z); con le altre versioni (dev,
 # ci-...) e' 0 e la capsula non si fa.
 set -euo pipefail
@@ -115,6 +119,8 @@ TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
 # dati di vboot (li aggiorna il payload), IFD, GbE, ME.
 CAPSULE_REGIONS=(RW_MRC_CACHE RW_SECTION_A RW_SECTION_B)
 CAPSULE_CERT=keys/capsule-signing.pem
+# i metadati del remote fwupd, nella release mrc (configs/fwupd/ourobios.conf)
+FWUPD_METADATA=ourobios.xml.gz
 # La prova dell'aggiornamento (update-test): il GUID dell'FMP delle ROM di
 # prova, che non e' quello di una variante; le ROM A, B, C e D con le loro
 # versioni e la minima; quella con lo schermo, per il setup del payload (la
@@ -694,6 +700,36 @@ make_capsule() {
 		|| die "${v}: il pacchetto fwupd non passa tools/update.py info"
 }
 
+# I metadati del remote fwupd (configs/fwupd/ourobios.conf) in dist/: i
+# .cab delle varianti, ciascuno con l'indirizzo che avra' nella sua release,
+# e la firma jcat con CAPSULE_SIGNING_KEY. Li pubblica la release mrc (ci.sh
+# publish); il remote li prende dall'ultima, releases/latest/download/
+make_fwupd_metadata() {
+	local v n repo tmp args=() cabs=()
+	repo="${GITHUB_REPOSITORY:-debianita22/ourobios}"
+	for v in "${VARIANTS[@]}"; do
+		n="$(romname "${v}").cab"
+		args+=(--cab "${DIST}/${n}" "https://github.com/${repo}/releases/download/${VERSION}-$(flavour "${v}")/${n}")
+		cabs+=("${DIST}/${n}")
+	done
+	rm -f "${DIST}/${FWUPD_METADATA}" "${DIST}/${FWUPD_METADATA}.jcat"
+	python3 "${O}/tools/fwupd-cab.py" metadata -o "${DIST}/${FWUPD_METADATA}" "${args[@]}" \
+		|| die "metadati fwupd non fatti (tools/fwupd-cab.py metadata)"
+	tmp="$(mktemp -d)"
+	chmod 700 "${tmp}"
+	(
+		umask 077
+		trap 'rm -rf "${tmp}"' EXIT
+		printf '%s\n' "${CAPSULE_SIGNING_KEY}" > "${tmp}/key.pem"
+		cd "${DIST}"
+		jcat-tool self-sign "${FWUPD_METADATA}.jcat" "${FWUPD_METADATA}" --kind sha256 > /dev/null \
+			&& jcat-tool sign "${FWUPD_METADATA}.jcat" "${FWUPD_METADATA}" "${O}/${CAPSULE_CERT}" "${tmp}/key.pem" > /dev/null
+	) || die "jcat-tool fallito sui metadati fwupd"
+	chmod 644 "${DIST}/${FWUPD_METADATA}" "${DIST}/${FWUPD_METADATA}.jcat"
+	python3 "${O}/tools/fwupd-cab.py" check-metadata --cert "${O}/${CAPSULE_CERT}" "${DIST}/${FWUPD_METADATA}" \
+		"${cabs[@]}" || die "i metadati fwupd non passano tools/fwupd-cab.py check-metadata"
+}
+
 # La chiave privata degli slot (VBOOT_SIGNING_KEY, base64 di
 # firmware_data_key.vbprivk) nel file $1, se e' quella di
 # keys/vboot/firmware_data_key.vbpubk. Spazi, a capo e virgolette attorno,
@@ -854,8 +890,14 @@ cmd_roms() {
 			make_capsule "${v}"
 		fi
 	done
-	(cd "${DIST}" && find . -maxdepth 1 -type f -name 'w541-coreboot-*' -printf '%f\n' | LC_ALL=C sort \
-		| xargs -r sha256sum > SHA256SUMS)
+	if [ "${capsule}" = yes ]; then
+		say "metadati fwupd"
+		make_fwupd_metadata
+	else
+		rm -f "${DIST}/${FWUPD_METADATA}" "${DIST}/${FWUPD_METADATA}.jcat"
+	fi
+	(cd "${DIST}" && find . -maxdepth 1 -type f \( -name 'w541-coreboot-*' -o -name "${FWUPD_METADATA}*" \) \
+		-printf '%f\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS)
 	say "dist"
 	ls -l "${DIST}"
 }

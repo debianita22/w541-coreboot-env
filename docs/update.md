@@ -156,9 +156,75 @@ If the setup refuses (*No update found*, *not an update for this firmware*,
 From v1.2.2 each release also has `w541-coreboot-vX.Y.Z-mrc.cab` (and
 `-nri.cab`): the same capsule as an fwupd package, with its metadata (the
 ESRT GUID of the variant, the version in fwupd's *triplet* format) and a
-`firmware.jcat` that signs both with the capsule key. fwupd installs only
-packages signed by a certificate in `/etc/pki/fwupd`, so trust the project
-certificate once:
+`firmware.jcat` that signs both with the capsule key. fwupd checks the
+variant, the version and the AC adapter, copies the capsule unchanged to
+`\EFI\UpdateCapsule\fwupd-<GUID>.cap` and sets the same `OsIndications`
+bit as `tools/update.py`: the firmware applies it in the same way, and after
+the reboot `fwupdmgr get-devices` shows the new version and `fwupdmgr
+get-history` the result.
+
+### The fwupd remote
+
+From v1.3.4 the mrc release also has `ourobios.xml.gz`, the metadata of the
+project's fwupd remote: the `.cab` of both variants of that release, with
+their address and checksums, signed by the capsule key
+(`ourobios.xml.gz.jcat`). The remote,
+[`configs/fwupd/ourobios.conf`](../configs/fwupd/ourobios.conf), downloads
+it from the latest release, so that `fwupdmgr update`, GNOME Software and
+KDE Discover offer each new release to the variant that runs. Once, from a
+clone of the repository:
+
+```sh
+sudo install -m 644 configs/fwupd/ourobios.conf /etc/fwupd/remotes.d/
+sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem
+sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd-metadata/ourobios.pem
+sudo systemctl restart fwupd
+fwupdmgr refresh
+```
+
+Then, at each release:
+
+```sh
+fwupdmgr get-updates                       # ouroBIOS (mrc) System Update, New version: ...
+fwupdmgr update
+sudo systemctl reboot
+```
+
+fwupd loads the metadata only with a signature from a certificate in
+`/etc/pki/fwupd-metadata`, downloads the `.cab` from the release, checks its
+SHA-256 against the metadata and installs it only if its own
+`firmware.jcat` is from a certificate in `/etc/pki/fwupd`: both
+certificates are needed. `fwupd-refresh.timer`, GNOME Software and Discover
+refresh the metadata about once a day.
+
+- The remote offers releases, not release candidates: those go with
+  `update.py stage` or their `.cab` by hand. An rc and its release have one
+  version for fwupd (v1.3.4-rc2 and v1.3.4 are both 1.3.4), so from the rc
+  `fwupdmgr update` finds nothing: `fwupdmgr reinstall` installs the
+  release, as `update.py stage --latest` does.
+- The metadata of a release has its nri too: a laptop that runs nri is
+  offered nri, and an mrc one mrc.
+- Until v1.3.4 is the latest release, `fwupdmgr refresh` finds no metadata
+  (404).
+- Without the certificate in `/etc/pki/fwupd-metadata` the refresh fails
+  (*signatures were required, but none supplied*); without the one in
+  `/etc/pki/fwupd` the update (*firmware signature missing or not trusted*).
+  Do not set `OnlyTrusted=false` instead.
+- To remove it: delete the three files and restart fwupd.
+
+Tested here with fwupd 2.0.20, its daemon on a simulated ESRT (v1.3.3) and
+a copy of the release pages on a local server, with the redirect of
+`releases/latest/download`: `fwupdmgr refresh`, `get-updates` (1.3.4, from
+the metadata of v1.3.4-rc1 signed by a test key) and `update`, which
+downloaded the `.cab` of the v1.3.4-rc1 release from GitHub and staged the
+capsule with the `OsIndications` bit; refused: a `.cab` with another
+checksum (*checksum invalid*), the metadata without its certificate, the
+package without its own.
+
+### A package by hand
+
+fwupd installs only packages signed by a certificate in `/etc/pki/fwupd`, so
+trust the project certificate once:
 
 ```sh
 sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem
@@ -168,26 +234,25 @@ sudo fwupdmgr install w541-coreboot-v1.2.2-mrc.cab
 sudo systemctl reboot
 ```
 
-fwupd checks the variant, the version (`--allow-older`, `--allow-reinstall`)
-and the AC adapter, copies the capsule unchanged to
-`\EFI\UpdateCapsule\fwupd-<GUID>.cap` and sets the same `OsIndications` bit
-as `tools/update.py`: the firmware applies it in the same way, and after the
-reboot `fwupdmgr get-devices` shows the new version and `fwupdmgr
-get-history` the result. Tested here with fwupd 2.0.20 on a simulated ESRT
-(the staging; the boot side is the one of `tools/update.py`).
+`--allow-older` and `--allow-reinstall` as in
+[Versions, variants, downgrades](#versions-variants-downgrades). Tested
+here with fwupd 2.0.20 on a simulated ESRT (the staging; the boot side is
+the one of `tools/update.py`).
 
 - Without the certificate fwupd refuses the package (*firmware signature
   missing or not trusted*, or *version formats were different*): do not set
   `OnlyTrusted=false` instead.
 - A certificate in `/etc/pki/fwupd` is trusted for any device, not only for
   the firmware: whoever holds the project key could sign a package that fwupd
-  would install on that computer for another device. Only packages that root
-  installs by hand, since no fwupd remote serves this project; remove the file
-  when you no longer need it.
-- The releases are not on LVFS, so `fwupdmgr update` and GNOME Software do
-  not offer them: download the `.cab` of the release.
+  would install on that computer for another device; with the certificate
+  in `/etc/pki/fwupd-metadata` too, the remote could offer it, if the same
+  person could also publish a release of the project. Remove the files when
+  you no longer need them.
+- The releases are not on LVFS: without the remote, download the `.cab` of
+  the release.
 - `tools/update.py info FILE.cab` checks a package: capsule, metadata,
-  signatures.
+  signatures; `tools/fwupd-cab.py check-metadata --cert
+  keys/capsule-signing.pem ourobios.xml.gz` the metadata of the remote.
 
 ## Versions, variants, downgrades
 
@@ -270,7 +335,7 @@ data anyway.
 
 Any tool that delivers capsules on disk works the same way:
 
-- fwupd: the `.cab` of the release, see [fwupd](#fwupd). For v1.2.0 and
+- fwupd: its remote or the `.cab` of the release, see [fwupd](#fwupd). For v1.2.0 and
   v1.2.1, which have no `.cab`, `sudo fwupdtool install-blob
   w541-coreboot-vX.Y.Z-mrc.cap` with the *System Firmware* device should
   stage the capsule the same way (not tested).
@@ -369,4 +434,6 @@ To change key (see `keys/README.md`): make a new pair with
 secret, and release. That release is signed with the new key, so the
 firmware in the field, which trusts the old one, refuses it: install it once
 with flashrom. Or, to stay with capsules, sign one transition release with
-the old key and the new certificate inside.
+the old key and the new certificate inside. fwupd needs the new certificate
+too, in `/etc/pki/fwupd` and `/etc/pki/fwupd-metadata`: until then its
+remote refuses the metadata of the releases signed with the new key.

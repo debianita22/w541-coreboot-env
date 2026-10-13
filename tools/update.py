@@ -351,23 +351,24 @@ def parse_metainfo(xml):
             "format": fmt[0] if fmt else None}
 
 
-def verify_jcat(jcat, files, cert):
-    """SHA-256 e firma PKCS#7 di ogni file del pacchetto, come le controlla
-    fwupd con il certificato in /etc/pki/fwupd."""
+def verify_jcat(jcat, files, cert, label="firmware.jcat"):
+    """SHA-256 e firma PKCS#7 di ogni file in files ({nome: contenuto}), come
+    le controlla fwupd con il certificato in /etc/pki/fwupd (i metadati di un
+    remote: in /etc/pki/fwupd-metadata)."""
     if not shutil.which("openssl"):
         raise Error("serve openssl per verificare la firma")
     try:
         items = {i["Id"]: i["Blobs"] for i in json.loads(gzip.decompress(jcat))["Items"]}
     except (OSError, ValueError, KeyError, TypeError) as e:
-        raise Error("firmware.jcat non valido: %s" % e)
-    for name in ("firmware.bin", "firmware.metainfo.xml"):
+        raise Error("%s non valido: %s" % (label, e))
+    for name in files:
         blobs = items.get(name, [])
         sums = [b["Data"] for b in blobs if b.get("Kind") == JCAT_SHA256]
         sigs = [b["Data"] for b in blobs if b.get("Kind") == JCAT_PKCS7]
         if sums != [hashlib.sha256(files[name]).hexdigest()]:
-            raise Error("firmware.jcat: SHA-256 di %s mancante o sbagliato" % name)
+            raise Error("%s: SHA-256 di %s mancante o sbagliato" % (label, name))
         if len(sigs) != 1:
-            raise Error("firmware.jcat: %s senza firma PKCS#7" % name)
+            raise Error("%s: %s senza firma PKCS#7" % (label, name))
         with tempfile.TemporaryDirectory() as tmp:
             sig = os.path.join(tmp, "sig.pem")
             content = os.path.join(tmp, "content.bin")
@@ -378,7 +379,7 @@ def verify_jcat(jcat, files, cert):
             r = openssl("smime", "-verify", "-binary", "-inform", "PEM", "-in", sig, "-content", content,
                         "-CAfile", cert, "-purpose", "any", "-partial_chain", "-out", os.devnull)
         if r.returncode != 0:
-            raise Error("firmware.jcat: firma di %s non valida per %s" % (name, cert))
+            raise Error("%s: firma di %s non valida per %s" % (label, name, cert))
 
 
 def load_cab(path, data):
@@ -725,7 +726,9 @@ def cmd_info(args):
         if "cab" in cap:
             if "firmware.jcat" not in cap["cab"]["files"]:
                 raise Error("pacchetto fwupd senza firmware.jcat: fwupd non lo installa")
-            verify_jcat(cap["cab"]["files"]["firmware.jcat"], cap["cab"]["files"], cert)
+            files = cap["cab"]["files"]
+            verify_jcat(files["firmware.jcat"],
+                        {n: files[n] for n in ("firmware.bin", "firmware.metainfo.xml")}, cert)
             print("fwupd:     firmware.jcat valido per %s" % cert)
     elif args.cert is None:
         print("firma:     non verificata (serve openssl e keys/capsule-signing.pem)")

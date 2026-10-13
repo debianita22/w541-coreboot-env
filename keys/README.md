@@ -4,7 +4,11 @@
 capsules ([docs/update.md](../docs/update.md)): `tools/build.sh` copies it
 into the coreboot tree, where the EDK2 payload build turns it into the
 certificate FmpDxe checks the PKCS#7 signature of every capsule against. A
-capsule installs only if it is signed by its private key.
+capsule installs only if it is signed by its private key. The same key
+signs, with `jcat-tool`, the fwupd package of each capsule (`.cab`) and the
+metadata of the fwupd remote (`ourobios.xml.gz`): fwupd trusts them with
+this certificate in `/etc/pki/fwupd` and `/etc/pki/fwupd-metadata`
+([docs/update.md](../docs/update.md#fwupd)).
 
 | | |
 |---|---|

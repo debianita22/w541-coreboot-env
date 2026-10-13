@@ -8,7 +8,8 @@
 #   1. shellcheck (livello warning) sugli script, riconosciuti dalla prima riga
 #   2. Python: la sintassi dei file .py, la VPD che scrive tools/vpd.py
 #      riletta uguale, una capsula letta da tools/update.py come la scrive
-#      GenerateCapsule, e il suo pacchetto fwupd (tools/fwupd-cab.py)
+#      GenerateCapsule, il suo pacchetto fwupd e i metadati del remote
+#      fwupd (tools/fwupd-cab.py)
 #   3. i workflow (actionlint, se c'e')
 #   4. blobs/, assets/ e legacy/: i file corrispondono ai loro SHA256SUMS
 #   5. patches/series, patches/edk2/series e patches/lvglpkg/series: ogni
@@ -21,7 +22,8 @@
 #      completa), EDK2 pinnato a un commit, i file in w541/ che
 #      tools/build.sh copia davvero; la mappa configs/w541.fmd con le regioni
 #      scrivibili nel chip da 8 MiB; i GUID e le regioni delle capsule uguali
-#      in tools/update.py e tools/build.sh
+#      in tools/update.py e tools/build.sh; il remote fwupd
+#      (configs/fwupd/ourobios.conf) sui metadati di build.sh e ci.sh
 #   9. le chiavi: in keys/ solo certificati e chiavi pubbliche di vboot, il
 #      keyblock con la chiave dati di keys/vboot, nessuna chiave privata nei
 #      file del repository
@@ -136,11 +138,34 @@ files = update.read_cab(cab)
 assert files == {"firmware.bin": data, "firmware.metainfo.xml": meta.encode()}
 capdata, cap2 = update.load_cab("prova.cab", cab)
 assert capdata == data and cap2["version"] == 0x01020003 and cap2["cab"]["meta"]["format"] == "triplet"
+# i metadati del remote fwupd con quel pacchetto (e una firma finta)
+import gzip, hashlib, os, tempfile
+import xml.etree.ElementTree as ET
+cab = fc.make_cab([("firmware.bin", data), ("firmware.metainfo.xml", meta.encode()), ("firmware.jcat", b"x")],
+                  datetime.datetime(2026, 10, 11))
+url = "https://github.com/o/r/releases/download/v1.2.3-nri/w541-coreboot-v1.2.3-nri.cab"
+with tempfile.TemporaryDirectory() as tmp:
+    path = os.path.join(tmp, "w541-coreboot-v1.2.3-nri.cab")
+    with open(path, "wb") as f:
+        f.write(cab)
+    xml = fc.make_metadata([(path, url)])
+    assert fc.make_metadata([(path, url)]) == xml
+root = ET.fromstring(gzip.decompress(xml))
+assert root.tag == "components" and len(root.findall("component")) == 1
+rel = root.find("component/releases/release")
+assert rel.findtext("location") == url and rel.get("version") == "1.2.3"
+assert rel.get("timestamp") == str(int(datetime.datetime(2026, 10, 11, tzinfo=datetime.timezone.utc).timestamp()))
+sums = {(c.get("type"), c.get("target"), c.get("filename")): c.text for c in rel.findall("checksum")}
+assert sums == {("sha1", "container", os.path.basename(path)): hashlib.sha1(cab).hexdigest(),
+                ("sha256", "container", os.path.basename(path)): hashlib.sha256(cab).hexdigest(),
+                ("sha1", "content", "firmware.bin"): hashlib.sha1(data).hexdigest(),
+                ("sha256", "content", "firmware.bin"): hashlib.sha256(data).hexdigest()}
+assert {e.get("type"): e.text for e in rel.findall("size")} == {"download": str(len(cab)), "installed": str(len(data))}
 EOF
 	then
-		ok "tools/update.py: capsula e pacchetto fwupd letti"
+		ok "tools/update.py: capsula e pacchetto fwupd letti; tools/fwupd-cab.py: i metadati del remote"
 	else
-		bad "tools/update.py: la capsula di prova non si legge come atteso"
+		bad "tools/update.py: la capsula di prova non si legge come atteso, o tools/fwupd-cab.py metadata sbaglia"
 	fi
 	# I tag di GitHub si ordinano (stage --latest), e rollback trova nello
 	# slot che non gira la release a cui tornare, solo se e' piu' vecchia
@@ -394,6 +419,20 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 		ok "regioni delle capsule: ${r_build}"
 	else
 		bad "regioni delle capsule: tools/build.sh '${r_build}', tools/update.py '${r_upd}'"
+	fi
+	# il remote fwupd scarica dalla release latest i metadati che build.sh
+	# fa e ci.sh pubblica nella release mrc
+	m_build="$(sed -n 's/^FWUPD_METADATA=\([A-Za-z0-9._-]*\)$/\1/p' tools/build.sh)"
+	m_ci="$(sed -n 's/^FWUPD_METADATA=\([A-Za-z0-9._-]*\)$/\1/p' tools/ci.sh)"
+	m_uri="https://github.com/debianita22/ourobios/releases/latest/download/${m_build}"
+	if [ -n "${m_build}" ] && [ "${m_build}" = "${m_ci}" ] \
+		&& [ "$(grep -c '^\[fwupd Remote\]$' configs/fwupd/ourobios.conf)" = 1 ] \
+		&& [ "$(grep -c '^MetadataURI=' configs/fwupd/ourobios.conf)" = 1 ] \
+		&& grep -qxF "MetadataURI=${m_uri}" configs/fwupd/ourobios.conf \
+		&& grep -qx 'Enabled=true' configs/fwupd/ourobios.conf; then
+		ok "remote fwupd: ${m_uri}"
+	else
+		bad "remote fwupd: FWUPD_METADATA di tools/build.sh '${m_build}' e tools/ci.sh '${m_ci}', MetadataURI di configs/fwupd/ourobios.conf: atteso ${m_uri}"
 	fi
 	# il certificato di cui si fida il payload: relativo all'albero di EDK2,
 	# e' w541/<file> dell'albero di coreboot, copiato da tools/build.sh

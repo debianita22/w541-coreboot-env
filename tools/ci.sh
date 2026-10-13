@@ -16,6 +16,9 @@
 #     ancora "[NOT COMPLETE]"
 #   - una release che non e' pre-release solo da un commit del ramo principale
 #   - "latest" solo alla mrc della versione piu' alta (sort -V)
+#   - i metadati del remote fwupd (FWUPD_METADATA e la sua firma .jcat) nella
+#     release mrc: il remote li scarica da releases/latest/download/, cioe'
+#     dall'ultima mrc che non e' una pre-release
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -33,6 +36,8 @@ note() {
 fail() { note error "$1" "$2"; die "$2"; }
 
 VARIANTS=(mrc nri)
+# i metadati del remote fwupd (tools/build.sh, configs/fwupd/ourobios.conf)
+FWUPD_METADATA=ourobios.xml.gz
 # Il titolo della variante nelle release
 title_of() {
 	case "$1" in
@@ -177,6 +182,17 @@ cmd_notes() {
 	# --latest salta le pre-release: per queste ci vuole anche --pre
 	local latest="--latest"
 	if [ "${pre}" = yes ]; then latest="--latest --pre"; fi
+	# il remote fwupd: i metadati dell'ultima release mrc (latest), con la nri
+	# della stessa versione; mai una release candidate
+	local fwupd_how meta_row=""
+	if [ "${version%%-*}" = "${version}" ] && [ "${PRERELEASE:-false}" != true ]; then
+		fwupd_how="with the project remote installed (\`configs/fwupd/ourobios.conf\`), \`fwupdmgr refresh\` then \`fwupdmgr update\` (or GNOME Software, KDE Discover) offers this release as long as it is the latest; or \`sudo fwupdmgr install ${cab}\`. Then reboot."
+	else
+		fwupd_how="the project remote (\`configs/fwupd/ourobios.conf\`) offers releases, not release candidates: \`sudo fwupdmgr install ${cab}\`, then reboot."
+	fi
+	if [ "${v}" = mrc ]; then
+		meta_row=$'\n'"| \`${FWUPD_METADATA}\`, \`${FWUPD_METADATA}.jcat\` | the signed metadata of the project's **fwupd remote**: the \`.cab\` of both variants of this release |"
+	fi
 
 	echo "**ouroBIOS** ${version}, $(title_of "${v}") variant: coreboot and EDK II for the **Lenovo ThinkPad W541**, reborn by design."
 	echo
@@ -225,7 +241,7 @@ EOF
 | \`${cap}\` | **signed UEFI capsule**: updates from Linux a W541 that already runs v1.3.0 or later, with \`tools/update.py\` |
 | \`${cab}\` | the same capsule as an **fwupd package** (\`fwupdmgr install\`, once the project certificate is in \`/etc/pki/fwupd\`) |
 | \`${cfg}\` | the complete coreboot \`.config\` |
-| \`${lay}\` | flash layout (FMAP) and CBFS contents |
+| \`${lay}\` | flash layout (FMAP) and CBFS contents |${meta_row}
 | \`SHA256SUMS\` | checksums of the files above |
 
 Flash layout (\`configs/w541.fmd\`): the first 5 MiB (IFD, GbE, ME) are
@@ -254,9 +270,8 @@ sudo python3 update.py stage ${latest}       # or: sudo python3 update.py stage 
 sudo systemctl reboot
 \`\`\`
 
-Or with fwupd, once the project certificate is trusted
-([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#fwupd)):
-\`sudo fwupdmgr install ${cab}\`, then reboot.
+Or with fwupd ([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#fwupd)):
+${fwupd_how}
 
 **From v1.0.3 to v1.2.x**: v1.3.0 changed the flash map (vboot, two RW
 slots), so an older firmware does not take its capsule. Write it once with
@@ -394,14 +409,17 @@ cmd_publish() {
 		# i file della variante e un SHA256SUMS solo loro
 		rm -rf "${d}/release-${v}"
 		mkdir -p "${d}/release-${v}"
-		local f
-		for f in "w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom" \
-			"w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.cap" \
-			"w541-coreboot-${VERSION}-${v}.cab" "w541-coreboot-${VERSION}-${v}.config" "w541-coreboot-${VERSION}-${v}-layout.txt"; do
+		local f up=("w541-coreboot-${VERSION}-${v}.rom" "w541-coreboot-${VERSION}-${v}-8mb-chip.rom"
+			"w541-coreboot-${VERSION}-${v}-4mb-chip.rom" "w541-coreboot-${VERSION}-${v}.cap"
+			"w541-coreboot-${VERSION}-${v}.cab" "w541-coreboot-${VERSION}-${v}.config"
+			"w541-coreboot-${VERSION}-${v}-layout.txt")
+		# i metadati del remote fwupd, con le due varianti: solo nella mrc
+		if [ "${v}" = mrc ]; then up+=("${FWUPD_METADATA}" "${FWUPD_METADATA}.jcat"); fi
+		for f in "${up[@]}"; do
 			[ -f "${d}/${f}" ] || fail "Pubblica" "${f} non c'e' negli artifact"
 			cp "${d}/${f}" "${d}/release-${v}/"
 		done
-		(cd "${d}/release-${v}" && sha256sum -- w541-coreboot-* > SHA256SUMS)
+		(cd "${d}/release-${v}" && sha256sum -- "${up[@]}" > SHA256SUMS)
 		cmd_notes "${d}" "${v}" > "${d}/release-${v}/NOTES.md"
 		local flags=()
 		if [ "${pre}" = true ] || [ "${v}" = nri ]; then flags+=(--prerelease); fi
@@ -409,7 +427,7 @@ cmd_publish() {
 			--title "ouroBIOS ${VERSION} - $(title_of "${v}")" \
 			--notes-file "${d}/release-${v}/NOTES.md" "${flags[@]}"
 		(cd "${d}/release-${v}" && gh release upload "${t}" --repo "${GITHUB_REPOSITORY}" --clobber \
-			./w541-coreboot-* SHA256SUMS)
+			"${up[@]}" SHA256SUMS)
 	done
 	# pubblicate insieme: mai una sola delle due visibile per un errore a meta'
 	for v in "${VARIANTS[@]}"; do

@@ -10,7 +10,9 @@
 # Ogni release ha l'immagine completa da 12 MiB (IFD, GbE, ME, coreboot), le
 # immagini dei due chip per un programmatore esterno, la capsula firmata per
 # l'aggiornamento da Linux (docs/update.md) e il suo pacchetto fwupd (.cab), il
-# .config, il layout e SHA256SUMS. tools/verify-rom.sh blocca la release se i primi 5 MiB non sono
+# .config, il layout e SHA256SUMS; la mrc anche i metadati firmati del remote
+# fwupd (configs/fwupd/ourobios.conf), che li scarica dalla release latest.
+# tools/verify-rom.sh blocca la release se i primi 5 MiB non sono
 # identici a legacy/coreboot-4.22/coreboot.rom o la mappa non e' quella di
 # configs/w541.fmd. La blocca anche la prova di fumo (tools/build.sh smoke):
 # il payload EDK2 di ogni variante, in una ROM per QEMU q35, deve partire e
@@ -23,9 +25,9 @@
 # voce di boot (boot loader, sistema operativo) non puo'; seriale e
 # schermate del setup nell'artifact update-test-<versione>.
 #
-# La capsula si firma con il secret CAPSULE_SIGNING_KEY (Settings -> Secrets
-# and variables -> Actions): la chiave privata di keys/capsule-signing.pem,
-# che arriva solo al passo ROM. Senza, una release vX.Y.Z si ferma; le build di
+# La capsula (e il .cab e i metadati fwupd) si firma con il secret
+# CAPSULE_SIGNING_KEY (Settings -> Secrets and variables -> Actions): la
+# chiave privata di keys/capsule-signing.pem, che arriva solo al passo ROM. Senza, una release vX.Y.Z si ferma; le build di
 # prova escono senza capsula.
 #
 # Gli slot RW di vboot (docs/vboot.md) si firmano con il secret
@@ -302,6 +304,10 @@ jobs:
             python3 ../tools/update.py info --cert ../keys/capsule-signing.pem \
               --same-as "w541-coreboot-${VERSION}-${v}.cap" "w541-coreboot-${VERSION}-${v}.cab"
           done
+          # i metadati del remote fwupd (nella release mrc): firmati dalla
+          # chiave di keys/, con i due .cab di questa release e nient'altro
+          python3 ../tools/fwupd-cab.py check-metadata --cert ../keys/capsule-signing.pem ourobios.xml.gz \
+            "w541-coreboot-${VERSION}-mrc.cab" "w541-coreboot-${VERSION}-nri.cab"
           ls -la
 
       - name: Pubblica

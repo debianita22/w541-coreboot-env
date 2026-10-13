@@ -57,6 +57,7 @@ firmware reports itself as `ouroBIOS-vX.Y.Z-<variant>` (coreboot's
 | `….cab` | the same capsule as an fwupd package (from v1.2.2), signed for fwupd with the same key ([docs/update.md](docs/update.md#fwupd)) |
 | `….config` | the complete coreboot configuration |
 | `…-layout.txt` | flash map (FMAP) and CBFS contents |
+| `ourobios.xml.gz`, `….jcat` | mrc release only (from v1.3.4): the signed metadata of the project's fwupd remote, with the `.cab` of both variants ([docs/update.md](docs/update.md#the-fwupd-remote)) |
 | `SHA256SUMS` | checksums |
 
 The W541 flash is two chips seen as one 12 MiB space. The layout is
@@ -139,7 +140,9 @@ Inside coreboot:
   slot that is not running, keeping settings, VPD and event log, also with
   *BIOS Lock* and *Firmware protection* on;
   the version is in the ESRT, and from v1.2.2 each release has an fwupd
-  package too, `fwupdmgr install`; without an OS, the *Firmware Update* page
+  package too, `fwupdmgr install`; from v1.3.4 the project's fwupd remote
+  (`configs/fwupd/ourobios.conf`) offers each release to `fwupdmgr update`,
+  GNOME Software and KDE Discover; without an OS, the *Firmware Update* page
   of the setup installs the capsule from a USB drive and, from v1.3.4, goes
   back to the release in the other slot
   ([docs/update.md](docs/update.md));
@@ -281,9 +284,9 @@ gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --late
 | `CHANGELOG.md` | what changes in each release |
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
 | `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
-| `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig` |
+| `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig`, the flash map `w541.fmd`, the interface of the read-only part already on the laptops (`ro-interface.txt`), the fwupd remote (`fwupd/ourobios.conf`) |
 | `patches/` | the series applied to coreboot, optional patches, the patches to EDK2 and its LvglPkg, and the q35 patch of the update test ([patches/README.md](patches/README.md)) |
-| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU (with `efi/slot-lock-test.c`, a UEFI application for it); `logo.py`, the logo as an LVGL image or a PNG |
+| `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `fwupd-cab.py`, the fwupd package and the metadata of the remote; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU (with `efi/slot-lock-test.c`, a UEFI application for it); `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
 | `legacy/coreboot-4.22/` | the coreboot 4.22 image and configuration this project started from, built from the same blobs |
 | `docs/` | [flashing and recovery](docs/flashing.md), [updates with capsules](docs/update.md), [verified boot and A/B](docs/vboot.md) |
