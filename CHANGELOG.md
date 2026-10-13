@@ -7,6 +7,10 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
 
 ## v1.3.2
 
+- The firmware is built from the same coreboot, EDK2, patches and blobs
+  as v1.3.1; only its version changes. It takes a laptop on v1.3.2-rc1,
+  which also had patch 0064, back to that code:
+  `sudo python3 update.py stage --latest`.
 - `tools/idle-report.py`: package and core C-states, RAPL and battery
   power and memory traffic at idle, and the power state of the devices
   that can keep the processor awake: ASPM, LTR and runtime PM of each PCI
