@@ -177,6 +177,20 @@ flashrom, would change. Nothing of it is in the ROMs of the releases.
   read-only part.
 - **An early console of 16 KiB**, where the messages of the bootblock and
   of vboot fit (*Pre-CBMEM romstage console overflowed* today).
+- **Rollback protection for the slots**, which only the read-only part can
+  give. vboot checks the version of a slot's keyblock and preamble against
+  the one kept in the TPM in verstage, that is in the bootblock of the
+  read-only part; today that data is mocked (`VBOOT_MOCK_SECDATA_NO_TPM`)
+  and the TPM 1.2 starts only in ramstage (`TPM_INIT_RAMSTAGE`), after
+  verstage. The slots stay writable from the OS by design, so an older slot
+  signed with the project key can be put back with flashrom; raising
+  `CONFIG_DRIVERS_EFI_MAIN_FW_LSV` stops older capsules, not that. The new
+  read-only part would start the TPM before verstage, create the firmware
+  space once (on a TPM 1.2, with physical presence) and leave the slots to
+  bump the keyblock or preamble version (`VBOOT_KEYBLOCK_VERSION`, 1 today)
+  when a release has to cut off the ones before.
+- **Larger RW slots**, if the payload needs them: the flash map is in the
+  read-only part, and about 507 KiB of `FW_MAIN_A` were free in v1.3.6-rc2.
 - **With the same release, optional**: a newer coreboot pin, and vboot's
   CBFS verification (`VBOOT_CBFS_INTEGRATION`), which hashes each file as it
   is loaded instead of reading the slot twice: about 0.2 s less at every
