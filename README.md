@@ -102,7 +102,10 @@ Inside coreboot:
 - the NVIDIA K2100M VBIOS, handed to the operating system through the ACPI
   `_ROM` method of the GPU, with runtime power management (the GPU is switched
   off when idle), its power state kept across suspend, and the Optimus key
-  the Windows NVIDIA driver asks for (`blobs/opvk.inc`);
+  the Windows NVIDIA driver asks for (`blobs/opvk.inc`). The W541 has no
+  display mux: the panel, mini DisplayPort and VGA are wired to the Intel
+  GPU, the dock's DisplayPort to the NVIDIA one (its VBIOS lists that single
+  connector), so there is no "discrete only" mode in any firmware;
 - CPU microcode from coreboot's `intel-microcode`, also referenced by the FIT;
 - a setup menu laid out like System Preferences (Esc at power-on): a grid
   of icons on a dark desktop whose wallpaper follows the hour of the day
