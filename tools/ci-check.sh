@@ -554,6 +554,8 @@ fi
 ro_cb="$(awk '$1 == "coreboot" { print $2 }' configs/ro-interface.txt 2>/dev/null)"
 if [ "${ro_cb}" = "${desc}" ]; then
 	ok "la parte RO sui portatili e' della stessa coreboot (configs/ro-interface.txt)"
+elif awk -v d="${desc}" '$1 == "rw-ok" && $2 == d { f = 1 } END { exit !f }' configs/ro-interface.txt 2>/dev/null; then
+	ok "pin ${desc}: slot controllati sulla parte RO ${ro_cb} (rw-ok in configs/ro-interface.txt)"
 else
 	bad "il pin e' ${desc}, la parte RO sui portatili ${ro_cb:-?}: gli slot devono ancora leggere quello che lascia (configs/ro-interface.txt, docs/vboot.md#limits)"
 fi

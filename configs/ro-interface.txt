@@ -15,8 +15,13 @@
 # ancora quello che lascia la vecchia.
 #
 #   coreboot DESCRIBE           da cosa e' costruita la parte RO sui portatili
+#   rw-ok DESCRIBE              un pin piu' nuovo i cui slot leggono ancora quello
+#                               che lascia quella parte RO: controllato a mano
+#                               (vboot: vb2_shared_data e nvdata; console, timestamp,
+#                               cache di FMAP e CBFS: struct e indirizzi uguali)
 #   VARIANTE SIMBOLO INDIRIZZO  una regione della cache-as-RAM (car.ld), come la scrive nm
 coreboot 26.09-53-g26317964960f
+rw-ok 26.09-280-gacdbfd47295d
 mrc _car_region_start ff7c0000
 mrc _vboot2_work ff7c0000
 mrc _car_stack ff7c3000
