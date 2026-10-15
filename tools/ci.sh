@@ -19,6 +19,9 @@
 #   - i metadati del remote fwupd (FWUPD_METADATA e la sua firma .jcat) nella
 #     release mrc: il remote li scarica da releases/latest/download/, cioe'
 #     dall'ultima mrc che non e' una pre-release
+#   - gli stessi metadati anche negli asset della release fissa TESTING_TAG,
+#     se la versione e' la piu' alta pubblicata finora, rc comprese: e' il
+#     remote testing (configs/fwupd/ourobios-testing.conf)
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -38,6 +41,9 @@ fail() { note error "$1" "$2"; die "$2"; }
 VARIANTS=(mrc nri)
 # i metadati del remote fwupd (tools/build.sh, configs/fwupd/ourobios.conf)
 FWUPD_METADATA=ourobios.xml.gz
+# la release fissa con i metadati del remote testing
+# (configs/fwupd/ourobios-testing.conf): i suoi asset li riscrive ogni release
+TESTING_TAG=testing
 # Il titolo della variante nelle release
 title_of() {
 	case "$1" in
@@ -447,6 +453,64 @@ cmd_publish() {
 	else
 		echo "  ${VERSION}-mrc non latest (resta ${cur}), nri pre-release"
 	fi
+	publish_testing "${d}" "${sha}"
+}
+
+# Le note della release TESTING_TAG: non e' una release, dice che versione
+# tiene (la riga "version:" la rilegge publish_testing)
+testing_notes() {
+	local repo="${GITHUB_REPOSITORY}"
+	cat <<EOF
+Not a release: the assets of this entry are the signed metadata of the
+project's fwupd **testing** remote, the \`.cab\` of both variants of the
+latest release, release candidates included ([docs/update.md](https://github.com/${repo}/blob/main/docs/update.md#the-fwupd-remote)).
+Every release replaces them; the tag stays where this entry was first made.
+
+Now: **ouroBIOS ${VERSION}** ([${VERSION}-mrc](https://github.com/${repo}/releases/tag/${VERSION}-mrc),
+[${VERSION}-nri](https://github.com/${repo}/releases/tag/${VERSION}-nri)).
+
+\`\`\`sh
+sudo install -m 644 configs/fwupd/ourobios-testing.conf /etc/fwupd/remotes.d/
+sudo fwupdmgr enable-remote ourobios-testing
+\`\`\`
+
+<!-- version: ${VERSION} -->
+EOF
+}
+
+# I metadati di questa versione negli asset della release TESTING_TAG, se
+# e' piu' alta di quella che c'e' (rc comprese: v1.3.7-rc1 dopo v1.3.6, non
+# dopo v1.3.7). La release si crea la prima volta, poi si riscrivono solo
+# gli asset e le note: niente notifica di una nuova release a ogni giro.
+publish_testing() {
+	local d="$1" sha="$2" out cur
+	say "remote testing (${TESTING_TAG})"
+	if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TESTING_TAG}" --jq .body 2>&1)"; then
+		cur="$(grep -o '<!-- version: v[0-9A-Za-z.-]* -->' <<< "${out}" | sed 's/<!-- version: \(.*\) -->/\1/' | head -n 1)"
+		if [ -n "${cur}" ] && ! newer "${VERSION}" "${cur}"; then
+			echo "  resta ${cur}: ${VERSION} non e' piu' alta"
+			summ "Remote testing: resta ${cur}."
+			return 0
+		fi
+	else
+		case "${out}" in
+			*"HTTP 404"*|*"Not Found"*)
+				echo "  la release ${TESTING_TAG} non c'e': la creo"
+				testing_notes > "${d}/TESTING.md"
+				gh release create "${TESTING_TAG}" --repo "${GITHUB_REPOSITORY}" --prerelease --target "${sha}" \
+					--title "fwupd remote: testing" --notes-file "${d}/TESTING.md" \
+					|| fail "Pubblica" "la release ${TESTING_TAG} non si crea"
+				;;
+			*) fail "Pubblica" "la release ${TESTING_TAG} non si legge: ${out}" ;;
+		esac
+	fi
+	(cd "${d}" && gh release upload "${TESTING_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
+		"${FWUPD_METADATA}" "${FWUPD_METADATA}.jcat") || fail "Pubblica" "asset di ${TESTING_TAG} non caricati"
+	testing_notes > "${d}/TESTING.md"
+	gh release edit "${TESTING_TAG}" --repo "${GITHUB_REPOSITORY}" --prerelease --latest=false \
+		--notes-file "${d}/TESTING.md" || fail "Pubblica" "note di ${TESTING_TAG} non aggiornate"
+	echo "  ${TESTING_TAG}: ${VERSION}${cur:+ (era ${cur})}"
+	summ "Remote testing: ${VERSION}${cur:+ (era ${cur})}."
 }
 
 case "${1:-}" in

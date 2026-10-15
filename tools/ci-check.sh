@@ -445,6 +445,19 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 	else
 		bad "remote fwupd: FWUPD_METADATA di tools/build.sh '${m_build}' e tools/ci.sh '${m_ci}', MetadataURI di configs/fwupd/ourobios.conf: atteso ${m_uri}"
 	fi
+	# il remote testing scarica gli stessi metadati dalla release fissa
+	# TESTING_TAG di ci.sh, spento finche' non lo si accende
+	t_ci="$(sed -n 's/^TESTING_TAG=\([A-Za-z0-9._-]*\)$/\1/p' tools/ci.sh)"
+	t_uri="https://github.com/debianita22/ourobios/releases/download/${t_ci}/${m_build}"
+	if [ -n "${t_ci}" ] && [ -n "${m_build}" ] \
+		&& [ "$(grep -c '^\[fwupd Remote\]$' configs/fwupd/ourobios-testing.conf)" = 1 ] \
+		&& [ "$(grep -c '^MetadataURI=' configs/fwupd/ourobios-testing.conf)" = 1 ] \
+		&& grep -qxF "MetadataURI=${t_uri}" configs/fwupd/ourobios-testing.conf \
+		&& grep -qx 'Enabled=false' configs/fwupd/ourobios-testing.conf; then
+		ok "remote fwupd testing: ${t_uri}, spento"
+	else
+		bad "remote fwupd testing: TESTING_TAG di tools/ci.sh '${t_ci}', MetadataURI di configs/fwupd/ourobios-testing.conf: atteso ${t_uri}, Enabled=false"
+	fi
 	# il certificato di cui si fida il payload: relativo all'albero di EDK2,
 	# e' w541/<file> dell'albero di coreboot, copiato da tools/build.sh
 	for v in mrc nri; do

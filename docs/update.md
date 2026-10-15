@@ -213,6 +213,30 @@ trust store, verified with 2.0.20: either directory alone works).
 `fwupd-refresh.timer`, GNOME Software and Discover refresh the metadata
 about once a day.
 
+The release candidates are not in that remote: `releases/latest` is the
+latest release that is not a pre-release. They are in the *testing* remote,
+[`configs/fwupd/ourobios-testing.conf`](../configs/fwupd/ourobios-testing.conf):
+the same metadata, from the assets of the fixed
+[`testing`](https://github.com/debianita22/ourobios/releases/tag/testing)
+entry of the releases page, which every release replaces with its own
+when it is the highest so far, candidates included (v1.3.7-rc1 after
+v1.3.6; v1.3.6-rc3 not after v1.3.6). It is off until turned on, next to
+the other, with the same certificate:
+
+```sh
+sudo install -m 644 configs/fwupd/ourobios-testing.conf /etc/fwupd/remotes.d/
+sudo fwupdmgr enable-remote ourobios-testing     # fwupdmgr disable-remote to stop
+fwupdmgr get-updates
+```
+
+With both on, a release is one package to fwupd (same `.cab`, same
+checksums), and each candidate, with its own version
+([Versions, variants, downgrades](#versions-variants-downgrades)), comes
+from the testing remote alone. Until the first release with the four-byte
+version is the latest one (v1.3.6), the two remotes describe the version in
+different formats; whoever follows the candidates in the meantime keeps the
+other remote off, or installs the `.cab` by hand.
+
 - The remote offers releases, not release candidates: those go with
   `update.py stage` or their `.cab` by hand. An rc and its release have one
   version for fwupd (v1.3.4-rc2 and v1.3.4 are both 1.3.4), so from the rc

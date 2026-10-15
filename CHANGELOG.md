@@ -26,6 +26,11 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   a W541 on v1.3.6-rc1 or older (X.Y.Z in the old layout, read as 1.3.0.6)
   updates to any of the new numbers as usual
   ([docs/update.md](docs/update.md#versions-variants-downgrades)).
+- A testing remote for fwupd, `configs/fwupd/ourobios-testing.conf`, off
+  until turned on (`fwupdmgr enable-remote ourobios-testing`): the metadata
+  of the latest release, candidates included, from the assets of the fixed
+  `testing` entry of the releases page, which every release replaces when
+  it is the highest so far ([docs/update.md](docs/update.md#the-fwupd-remote)).
 
 ## v1.3.5
 

@@ -145,7 +145,9 @@ Inside coreboot:
   the version is in the ESRT, and from v1.2.2 each release has an fwupd
   package too, `fwupdmgr install`; from v1.3.4 the project's fwupd remote
   (`configs/fwupd/ourobios.conf`) offers each release to `fwupdmgr update`,
-  GNOME Software and KDE Discover; without an OS, the *Firmware Update* page
+  GNOME Software and KDE Discover, and from v1.3.6 a testing remote
+  (`configs/fwupd/ourobios-testing.conf`) the release candidates too;
+  without an OS, the *Firmware Update* page
   of the setup installs the capsule from a USB drive and, from v1.3.4, goes
   back to the release in the other slot
   ([docs/update.md](docs/update.md));
@@ -287,7 +289,7 @@ gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --late
 | `CHANGELOG.md` | what changes in each release |
 | `blobs/` | IFD, GbE, ME, `mrc.bin` and VBIOS images ([blobs/README.md](blobs/README.md)) |
 | `assets/` | the logo, `ourobios.svg`, and the boot splash made from it (`tools/logo.py splash`) |
-| `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig`, the flash map `w541.fmd`, the interface of the read-only part already on the laptops (`ro-interface.txt`), the fwupd remote (`fwupd/ourobios.conf`) |
+| `configs/` | `w541-mrc.defconfig` and `w541-nri.defconfig`, the flash map `w541.fmd`, the interface of the read-only part already on the laptops (`ro-interface.txt`), the fwupd remotes (`fwupd/ourobios.conf`, the releases; `fwupd/ourobios-testing.conf`, the candidates too) |
 | `patches/` | the series applied to coreboot, optional patches, the patches to EDK2 and its LvglPkg, the q35 patch of the update test, and a draft for the next read-only part ([patches/README.md](patches/README.md)) |
 | `tools/` | build, verification, CI and upstream-check scripts; `update.py`, the capsule update from Linux; `fwupd-cab.py`, the fwupd package and the metadata of the remote; `vpd.py`, the serial number and machine type; `elog.py`, which reads the event log from a flash dump; `idle-report.py`, package C-states, power, memory traffic and device power states at idle; `pm-regs.py`, the power management registers the firmware left; `qemu-smoke.py`, the payload booted in QEMU; `qemu-update.py`, capsule updates with vboot A/B in QEMU (with `efi/slot-lock-test.c`, a UEFI application for it); `logo.py`, the logo as an LVGL image or a PNG |
 | `keys/` | the certificate of the key that signs the capsules, and vboot's public keys ([keys/README.md](keys/README.md)) |
