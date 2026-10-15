@@ -5,6 +5,13 @@ GitHub include its section; release candidates take the section of the
 version they lead to. For the releases before v1.3.0, see their notes on
 the [releases page](https://github.com/debianita22/ourobios/releases).
 
+## v1.3.5
+
+- No more `thinkpad_acpi: acpi_evalf(\BLTH, vd, ...) failed: AE_NOT_FOUND`
+  (and `\WGSV`) on the console at every shutdown and reboot: the two
+  methods the driver calls to save the Bluetooth and WWAN state for S4/S5
+  are in the DSDT now (patch 0067).
+
 ## v1.3.4
 
 - Going back without an OS: the *Firmware Update* page of the setup shows

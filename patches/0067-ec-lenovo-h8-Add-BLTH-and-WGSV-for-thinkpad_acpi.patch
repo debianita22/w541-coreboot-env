@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:05:49 +0200
+Subject: [PATCH] ec/lenovo/h8: Add \BLTH and \WGSV for thinkpad_acpi
+
+At shutdown thinkpad_acpi asks the firmware to save the state of the
+Bluetooth and WWAN radios for S4/S5, with \BLTH(5) and \WGSV(4) of the
+OEM firmware. Without them it prints two errors on the console of every
+shutdown and reboot:
+
+  thinkpad_acpi: acpi_evalf(\BLTH, vd, ...) failed: AE_NOT_FOUND
+  thinkpad_acpi: acpi_evalf(\WGSV, vd, ...) failed: AE_NOT_FOUND
+
+HKEY already keeps the state at resume (SBDC and SWAN, bit 2), so there
+is nothing to save: add both methods, with the other commands of the OEM
+firmware reading and setting that same state.
+
+TEST=ThinkPad W541: the DSDT compiles with the methods at the root scope.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/acpi/thinkpad.asl | 46 ++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/src/ec/lenovo/h8/acpi/thinkpad.asl b/src/ec/lenovo/h8/acpi/thinkpad.asl
+index 28877a61..497666c6 100644
+--- a/src/ec/lenovo/h8/acpi/thinkpad.asl
++++ b/src/ec/lenovo/h8/acpi/thinkpad.asl
+@@ -333,3 +333,49 @@ Device (HKEY)
+ 	#include "thinkpad_bat_thresholds.asl"
+ 	#endif
+ }
++
++/*
++ * \BLTH and \WGSV of the OEM firmware: thinkpad_acpi calls them at shutdown
++ * (\BLTH 5 and \WGSV 4, "save the radio state for S4/S5") and prints an
++ * AE_NOT_FOUND error on the console without them. The state at resume is
++ * already kept in HKEY (SBDC and SWAN, bit 2); the other commands read or
++ * set that same state.
++ */
++Scope (\)
++{
++	/*
++	 * Arg0: 0 get Ultraport ID, 1 get state at resume, 2 on at resume,
++	 * 3 off at resume, 5 save the state
++	 */
++	Method (BLTH, 1)
++	{
++		If (Arg0 == 1) {
++			Return (\_SB.PCI0.LPCB.EC.HKEY.WBDC)
++		}
++		If (Arg0 == 2) {
++			\_SB.PCI0.LPCB.EC.HKEY.WBDC = 1
++		}
++		If (Arg0 == 3) {
++			\_SB.PCI0.LPCB.EC.HKEY.WBDC = 0
++		}
++		Return (0)
++	}
++
++	/*
++	 * Arg0: 1 get the state (the bits of GWAN), 2 on at resume, 3 off at
++	 * resume, 4 save the state
++	 */
++	Method (WGSV, 1)
++	{
++		If (Arg0 == 1) {
++			Return (\_SB.PCI0.LPCB.EC.HKEY.GWAN ())
++		}
++		If (Arg0 == 2) {
++			\_SB.PCI0.LPCB.EC.HKEY.WWAN = 1
++		}
++		If (Arg0 == 3) {
++			\_SB.PCI0.LPCB.EC.HKEY.WWAN = 0
++		}
++		Return (0)
++	}
++}
+-- 
+2.43.0
+

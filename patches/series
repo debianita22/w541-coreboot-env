@@ -63,3 +63,4 @@
 0063-nb-intel-haswell-Set-SPCAPCTRL-with-the-IGD-too.patch
 0065-drivers-smmstore-Let-the-payload-boot-the-other-vboo.patch
 0066-mb-lenovo-haswell-Enable-ACPI-charge-behaviour-on-th.patch
+0067-ec-lenovo-h8-Add-BLTH-and-WGSV-for-thinkpad_acpi.patch
