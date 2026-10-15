@@ -5,6 +5,19 @@ GitHub include its section; release candidates take the section of the
 version they lead to. For the releases before v1.3.0, see their notes on
 the [releases page](https://github.com/debianita22/ourobios/releases).
 
+## v1.3.6
+
+- coreboot and EDK2 moved to their upstream of October 2026 (coreboot
+  `26.09-280-gacdbfd47295d`, 227 commits after the pin of v1.3.0; EDK2
+  `9c0cb3a58343`). All the patches apply as they are. The read-only part
+  on the laptops stays the one of v1.3.0: the slots of the new pin still
+  read what it leaves in cache-as-RAM (vboot's shared data and nvdata, the
+  early console, the timestamps, the FMAP and CBFS caches: same structs,
+  same addresses), checked by hand and recorded as a `rw-ok` line in
+  `configs/ro-interface.txt`, which `tools/ci-check.sh` and
+  `tools/verify-rom.sh` accept. The update test in QEMU and the two
+  variants pass on the new pin.
+
 ## v1.3.5
 
 - No more `thinkpad_acpi: acpi_evalf(\BLTH, vd, ...) failed: AE_NOT_FOUND`
