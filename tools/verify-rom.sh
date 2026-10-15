@@ -115,15 +115,23 @@ at_offset() {
 }
 hex() { printf '0x%x' "$1"; }
 
-# La versione dell'ESRT di un CONFIG_LOCALVERSION ouroBIOS-vX.Y.Z[-...]-<variante>[+...]
-# (come fw_version di tools/build.sh), 0x00000000 per le altre
+# La versione dell'ESRT di un CONFIG_LOCALVERSION ouroBIOS-vX.Y.Z[-rcN]-<variante>[+...]
+# (come fw_version di tools/build.sh: X.Y.Z.0, le rc la release prima con
+# R = N), 0x00000000 per le altre
 fw_version_of() {
-	local x y z
-	if [[ "$1" =~ ^ouroBIOS-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?-${VARIANT}(\+.*)?$ ]]; then
+	local x y z r v
+	if [[ "$1" =~ ^ouroBIOS-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([0-9]{1,3}))?-${VARIANT}(\+.*)?$ ]]; then
 		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
-		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 65535 ]; then
-			printf '0x%08x' $(( (x << 24) | (y << 16) | z ))
-			return
+		r=$((10#${BASH_REMATCH[5]:-0}))
+		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 255 ] && [ "${r}" -le 255 ]; then
+			v=$(( (x << 24) | (y << 16) | (z << 8) ))
+			if [ "${r}" -eq 0 ]; then
+				printf '0x%08x' "${v}"
+				return
+			elif [ "${v}" -ge 256 ]; then
+				printf '0x%08x' $(( v - 256 + r ))
+				return
+			fi
 		fi
 	fi
 	printf '0x%08x' 0

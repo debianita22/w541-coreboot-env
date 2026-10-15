@@ -77,9 +77,10 @@
 # la capsula firmata anche per fwupd da jcat-tool, e i metadati del remote
 # fwupd (ourobios.xml.gz e la sua firma .jcat, configs/fwupd/ourobios.conf):
 # i .cab delle due varianti con gli indirizzi delle release. La versione
-# nell'ESRT e nella capsula e' X.Y.Z di --version vX.Y.Z
-# (il "triplet" di fwupd: X << 24 | Y << 16 | Z); con le altre versioni (dev,
-# ci-...) e' 0 e la capsula non si fa.
+# nell'ESRT e nella capsula e' X.Y.Z.R, un byte ciascuno (il "quad" di
+# fwupd): X.Y.Z.0 per --version vX.Y.Z, la release prima con R = N per
+# vX.Y.Z-rcN (fw_version); con le altre versioni (dev, ci-...) e' 0 e la
+# capsula non si fa.
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -282,20 +283,30 @@ flavour() {
 localversion() { printf 'ouroBIOS-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 romname()      { printf 'w541-coreboot-%s-%s' "${VERSION}" "$(flavour "$1")"; }
 
-# La versione per l'ESRT e la capsula: vX.Y.Z[-...] -> (X << 24) | (Y << 16) | Z,
-# 0x00000000 per le altre; fw_triplet: la stessa come X.Y.Z (fwupd)
-fw_triplet() {
+# La versione per l'ESRT e la capsula, X.Y.Z.R un byte ciascuno (il "quad"
+# di fwupd): vX.Y.Z -> X.Y.Z.0; vX.Y.Z-rcN -> la release prima con R = N
+# (v1.3.7-rc2 -> 1.3.6.2), cosi' le rc vengono dopo la release precedente e
+# prima di quella a cui portano. 0x00000000 per le altre versioni (dev,
+# ci-...): niente capsula. fw_quad: la stessa come X.Y.Z.R (fwupd)
+fw_quad() {
 	local v
 	v=$(( $(fw_version) ))
-	printf '%d.%d.%d' $(( v >> 24 )) $(( (v >> 16) & 255 )) $(( v & 65535 ))
+	printf '%d.%d.%d.%d' $(( v >> 24 )) $(( (v >> 16) & 255 )) $(( (v >> 8) & 255 )) $(( v & 255 ))
 }
 fw_version() {
-	local x y z
-	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})(-.*)?$ ]]; then
+	local x y z r v
+	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([0-9]{1,3}))?$ ]]; then
 		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
-		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 65535 ]; then
-			printf '0x%08x' $(( (x << 24) | (y << 16) | z ))
-			return
+		r=$((10#${BASH_REMATCH[5]:-0}))
+		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 255 ] && [ "${r}" -le 255 ]; then
+			v=$(( (x << 24) | (y << 16) | (z << 8) ))
+			if [ "${r}" -eq 0 ]; then
+				printf '0x%08x' "${v}"
+				return
+			elif [ "${v}" -ge 256 ]; then
+				printf '0x%08x' $(( v - 256 + r ))
+				return
+			fi
 		fi
 	fi
 	printf '0x%08x' 0
@@ -679,7 +690,7 @@ make_capsule() {
 		mkdir "${tmp}/cab"
 		cp "${n}.cap" "${tmp}/cab/firmware.bin"
 		python3 "${O}/tools/fwupd-cab.py" metainfo --variant "${v}" --guid "${guid}" \
-			--version "$(fw_triplet)" --date "${date}" \
+			--version "$(fw_quad)" --date "${date}" \
 			--url "https://github.com/${repo}/releases/tag/${VERSION}-$(flavour "${v}")" \
 			> "${tmp}/cab/firmware.metainfo.xml" || die "${v}: metainfo fallito"
 		for f in firmware.bin firmware.metainfo.xml; do

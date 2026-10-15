@@ -116,7 +116,7 @@ import update
 image = bytes(range(256)) * (update.ROM_SIZE // 256)
 rmap = b"".join(r.encode().ljust(16, b"\0") for r in update.REGIONS)
 rmap += struct.pack("<IHH", update.RMAP_SIGNATURE, 1, len(update.REGIONS))
-payload = struct.pack("<4sIII", b"MSS1", 16, 0x01020003, 0x01020000) + image + rmap
+payload = struct.pack("<4sIII", b"MSS1", 16, 0x01020302, 0x01020000) + image + rmap
 cert = b"\x30" * 100
 auth = struct.pack("<QIHH", 7, 24 + len(cert), 0x200, 0x0EF1) + update.PKCS7_CERT_GUID.bytes_le + cert
 item = auth + payload
@@ -124,23 +124,24 @@ ihdr = struct.pack("<I16sB3sIIQQ", 3, update.VARIANTS["nri"].bytes_le, 1, b"", l
 fmp = struct.pack("<IHHQ", 1, 0, 1, 16) + ihdr + item
 data = update.FMP_CAPSULE_GUID.bytes_le + struct.pack("<III", 32, 0x10000, 32 + len(fmp)) + bytes(4) + fmp
 cap = update.parse_capsule(data)
-assert (cap["variant"], cap["version"], cap["lsv"]) == ("nri", 0x01020003, 0x01020000)
+assert (cap["variant"], cap["version"], cap["lsv"]) == ("nri", 0x01020302, 0x01020000)
 assert cap["regions"] == update.REGIONS and cap["image"] == image and cap["signature"] == cert
 assert cap["signed"] == payload + struct.pack("<Q", 7)
 update.check_capsule(cap, {"variant": "nri", "legacy": False})
-assert update.version_str(0x01020003) == "v1.2.3"
+assert update.version_str(0x01020302) == "v1.2.4-rc2" and update.version_quad(0x01020302) == "1.2.3.2"
+assert update.version_str(0x01020300) == "v1.2.3" and update.version_str(0x0103ff01) == "v1.4.0-rc1"
 # il pacchetto fwupd di tools/fwupd-cab.py, riletto da tools/update.py
 import datetime, importlib.util
 spec = importlib.util.spec_from_file_location("fwupd_cab", "tools/fwupd-cab.py")
 fc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fc)
-meta = fc.metainfo("nri", str(update.VARIANTS["nri"]), "1.2.3", "2026-10-11", "https://example.org/")
+meta = fc.metainfo("nri", str(update.VARIANTS["nri"]), "1.2.3.2", "2026-10-11", "https://example.org/")
 cab = fc.make_cab([("firmware.bin", data), ("firmware.metainfo.xml", meta.encode())],
                   datetime.datetime(2026, 10, 11))
 files = update.read_cab(cab)
 assert files == {"firmware.bin": data, "firmware.metainfo.xml": meta.encode()}
 capdata, cap2 = update.load_cab("prova.cab", cab)
-assert capdata == data and cap2["version"] == 0x01020003 and cap2["cab"]["meta"]["format"] == "triplet"
+assert capdata == data and cap2["version"] == 0x01020302 and cap2["cab"]["meta"]["format"] == "quad"
 # i metadati del remote fwupd con quel pacchetto (e una firma finta)
 import gzip, hashlib, os, tempfile
 import xml.etree.ElementTree as ET
@@ -156,7 +157,7 @@ with tempfile.TemporaryDirectory() as tmp:
 root = ET.fromstring(gzip.decompress(xml))
 assert root.tag == "components" and len(root.findall("component")) == 1
 rel = root.find("component/releases/release")
-assert rel.findtext("location") == url and rel.get("version") == "1.2.3"
+assert rel.findtext("location") == url and rel.get("version") == "1.2.3.2"
 assert rel.get("timestamp") == str(int(datetime.datetime(2026, 10, 11, tzinfo=datetime.timezone.utc).timestamp()))
 sums = {(c.get("type"), c.get("target"), c.get("filename")): c.text for c in rel.findall("checksum")}
 assert sums == {("sha1", "container", os.path.basename(path)): hashlib.sha1(cab).hexdigest(),

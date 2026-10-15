@@ -13,9 +13,9 @@
 #   firmware.bin           la capsula, cosi' com'e' (fwupd non tocca una
 #                          capsula FMP: comincia con il GUID FMP)
 #   firmware.metainfo.xml  il componente AppStream: il GUID dell'ESRT della
-#                          variante, la versione nel formato "triplet" (quello
-#                          dell'ESRT, X << 24 | Y << 16 | Z), il protocollo
-#                          org.uefi.capsule
+#                          variante, la versione nel formato "quad" (quello
+#                          dell'ESRT, X.Y.Z.R un byte ciascuno: fw_version di
+#                          tools/build.sh), il protocollo org.uefi.capsule
 #   firmware.jcat          SHA-256 e firma PKCS#7 dei due file sopra, fatte da
 #                          jcat-tool con la chiave delle capsule (tools/build.sh):
 #                          fwupd installa solo pacchetti firmati da un
@@ -133,7 +133,7 @@ def metainfo(variant, guid, version, date, url):
     <category>X-System</category>
   </categories>
   <custom>
-    <value key="LVFS::VersionFormat">triplet</value>
+    <value key="LVFS::VersionFormat">quad</value>
     <value key="LVFS::UpdateProtocol">org.uefi.capsule</value>
   </custom>
   <requires>
@@ -276,7 +276,7 @@ def main():
     m = sub.add_parser("metainfo", help="firmware.metainfo.xml su stdout")
     m.add_argument("--variant", required=True, choices=sorted(VARIANTS))
     m.add_argument("--guid", required=True)
-    m.add_argument("--version", required=True, help="X.Y.Z")
+    m.add_argument("--version", required=True, help="X.Y.Z.R (fw_quad di tools/build.sh)")
     m.add_argument("--date", required=True, help="AAAA-MM-GG")
     m.add_argument("--url", required=True, help="la pagina della release")
     p = sub.add_parser("pack", help="il .cab da firmware.bin, firmware.metainfo.xml [, firmware.jcat]")
@@ -310,8 +310,8 @@ def main():
     if a.cmd == "metainfo":
         if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", a.guid):
             sys.exit("GUID non valido: %s" % a.guid)
-        if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,5}", a.version):
-            sys.exit("versione non valida (X.Y.Z): %s" % a.version)
+        if not re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", a.version):
+            sys.exit("versione non valida (X.Y.Z.R): %s" % a.version)
         datetime.datetime.strptime(a.date, "%Y-%m-%d")
         sys.stdout.write(metainfo(a.variant, a.guid, a.version, a.date, a.url))
         return

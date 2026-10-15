@@ -115,8 +115,17 @@ class Error(Exception):
 
 
 def version_str(v):
-    """La versione dell'ESRT come quella delle release: (X << 24) | (Y << 16) | Z."""
-    return "v%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, v & 0xFFFF)
+    """La versione dell'ESRT come il tag della release: X.Y.Z.R un byte ciascuno,
+    vX.Y.Z e' X.Y.Z.0 e vX.Y.Z-rcN la release prima con R = N (tools/build.sh)."""
+    if v & 0xFF == 0:
+        return "v%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, (v >> 8) & 0xFF)
+    rel = (v & ~0xFF) + 0x100
+    return "v%d.%d.%d-rc%d" % (rel >> 24, (rel >> 16) & 0xFF, (rel >> 8) & 0xFF, v & 0xFF)
+
+
+def version_quad(v):
+    """La stessa versione come la scrive fwupd (formato "quad"): X.Y.Z.R."""
+    return "%d.%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF)
 
 
 def attempt_str(status):
@@ -392,9 +401,9 @@ def load_cab(path, data):
     v = cap["version"]
     if meta["guid"] != cap["type_id"]:
         raise Error("metainfo per %s, capsula per %s" % (meta["guid"], cap["type_id"]))
-    if meta["format"] != "triplet" or meta["version"] != version_str(v)[1:]:
-        raise Error("metainfo: versione %s (%s), la capsula e' %s" % (meta["version"], meta["format"],
-                                                                    version_str(v)[1:]))
+    if meta["format"] != "quad" or meta["version"] != version_quad(v):
+        raise Error("metainfo: versione %s (%s), la capsula e' %s (quad %s)" % (meta["version"], meta["format"],
+                                                                              version_str(v), version_quad(v)))
     cap["cab"] = {"files": files, "meta": meta}
     return files["firmware.bin"], cap
 
@@ -804,11 +813,8 @@ def stage_capsule(path, data, cap, fw, args, allow_older):
         raise Error("%s e' piu' vecchia della minima %s: il firmware la rifiuterebbe"
                     % (version_str(cap["version"]), version_str(fw["lsv"])))
     if cap["version"] <= fw["version"] and not allow_older:
-        step = rc_step(cap, fw)
-        if not step:
-            raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
-                        % version_str(fw["version"]))
-        print("passo:     %s -> %s, la stessa %s" % (step[0], step[1], version_str(fw["version"])))
+        raise Error("gira gia' la %s: per reinstallare o tornare indietro --allow-older"
+                    % version_str(fw["version"]))
     ac, charge = power()
     if ac is False and not args.on_battery:
         raise Error("collega l'alimentatore (o --on-battery: il firmware aspetta comunque "
@@ -961,23 +967,6 @@ def build_release_key(name):
         return None
     x, y, z, rc = m.groups()
     return (int(x), int(y), int(z), int(rc) if rc else 1 << 30)
-
-
-def rc_step(cap, fw):
-    """Le rc e la release finale di una versione hanno la stessa versione
-    X.Y.Z nella capsula: dalla vX.Y.Z-rcN a una rc dopo, o alla release, e'
-    comunque un passo avanti. (release che gira, release della capsula) se lo
-    e', None altrimenti."""
-    if cap["version"] != fw["version"]:
-        return None
-    names = region_releases(cap["image"], (0, len(cap["image"])))
-    running = RELEASE_KEY_RE.search(read_text(BIOS_VERSION) or "")
-    if len(names) != 1 or running is None:
-        return None
-    old, new = build_release_key(running.group()), build_release_key(names[0])
-    if new is None or old is None or new[:3] != old[:3] or new <= old:
-        return None
-    return running.group(), names[0]
 
 
 def region_releases(data, area):

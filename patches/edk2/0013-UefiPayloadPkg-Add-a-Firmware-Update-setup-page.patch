@@ -25,7 +25,7 @@ here.
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- .../FirmwareUpdateDxe/FirmwareUpdate.c        | 855 ++++++++++++++++++
+ .../FirmwareUpdateDxe/FirmwareUpdate.c        | 867 ++++++++++++++++++
  .../FirmwareUpdateDxe/FirmwareUpdate.uni      |  37 +
  .../FirmwareUpdateDxe/FirmwareUpdateDxe.inf   |  68 ++
  .../FirmwareUpdateDxe/FirmwareUpdateVfr.vfr   |  52 ++
@@ -45,7 +45,7 @@ new file mode 100644
 index 0000000000..89703514b4
 --- /dev/null
 +++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
-@@ -0,0 +1,855 @@
+@@ -0,0 +1,867 @@
 +/** @file
 +  Firmware Update setup page.
 +
@@ -94,7 +94,7 @@ index 0000000000..89703514b4
 +#define CAPSULE_PROBE_SIZE  SIZE_64KB         // enough for the headers and the signature
 +#define FILE_INFO_SIZE      (SIZE_OF_EFI_FILE_INFO + 256 * sizeof (CHAR16))
 +#define FILE_NAME_LENGTH    64
-+#define VERSION_LENGTH      16
++#define VERSION_LENGTH      24
 +
 +//
 +// The FMP_PAYLOAD_HEADER of FmpPayloadHeaderLibV1, in front of the image.
@@ -161,7 +161,11 @@ index 0000000000..89703514b4
 +};
 +
 +/**
-+  A version of the ESRT as the releases number it: (X << 24) | (Y << 16) | Z.
++  A version of the ESRT as the releases number it: X.Y.Z.R, one byte each.
++  A release vX.Y.Z is X.Y.Z.0; its candidate N is one release below with
++  R = N (v1.3.7-rc2 is 1.3.6.2), so the candidates sort after the release
++  before and before the one they lead to. Shown as the tag reads: "1.3.7",
++  "1.3.7-rc2".
 +**/
 +STATIC
 +VOID
@@ -171,7 +175,15 @@ index 0000000000..89703514b4
 +  IN  UINTN   BufferSize
 +  )
 +{
-+  UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, Version & 0xFFFF);
++  UINT32  Release;
++
++  if ((Version & 0xFF) == 0) {
++    UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, (Version >> 8) & 0xFF);
++    return;
++  }
++
++  Release = (Version & ~0xFFu) + 0x100;
++  UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u-rc%u", Release >> 24, (Release >> 16) & 0xFF, (Release >> 8) & 0xFF, Version & 0xFF);
 +}
 +
 +/**

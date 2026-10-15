@@ -17,6 +17,15 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `configs/ro-interface.txt`, which `tools/ci-check.sh` and
   `tools/verify-rom.sh` accept. The update test in QEMU and the two
   variants pass on the new pin.
+- The version in the ESRT and in the capsules is four bytes, X.Y.Z.R
+  (fwupd's *quad* format): a release is X.Y.Z.0, its candidate N the
+  release before with R = N (v1.3.7-rc2 is 1.3.6.2). Before, the
+  candidates had the number of their release, so fwupd saw one version and
+  offered neither a later rc nor the release after an rc. The setup page and
+  `tools/update.py` show the tag (v1.3.7-rc2), `fwupdmgr` the four numbers;
+  a W541 on v1.3.6-rc1 or older (X.Y.Z in the old layout, read as 1.3.0.6)
+  updates to any of the new numbers as usual
+  ([docs/update.md](docs/update.md#versions-variants-downgrades)).
 
 ## v1.3.5
 

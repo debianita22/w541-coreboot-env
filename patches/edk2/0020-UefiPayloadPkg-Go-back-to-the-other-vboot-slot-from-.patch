@@ -85,7 +85,7 @@ index 89703514b..a102822ba 100644
 @@ -47,6 +59,12 @@
  #define FILE_INFO_SIZE      (SIZE_OF_EFI_FILE_INFO + 256 * sizeof (CHAR16))
  #define FILE_NAME_LENGTH    64
- #define VERSION_LENGTH      16
+ #define VERSION_LENGTH      24
 +#define RELEASE_LENGTH      64
 +
 +#define FLASH_WINDOW_SIZE   SIZE_16MB         // the flash decoded below 4 GiB

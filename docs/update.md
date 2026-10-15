@@ -157,7 +157,7 @@ If the setup refuses (*No update found*, *not an update for this firmware*,
 
 From v1.2.2 each release also has `w541-coreboot-vX.Y.Z-mrc.cab` (and
 `-nri.cab`): the same capsule as an fwupd package, with its metadata (the
-ESRT GUID of the variant, the version in fwupd's *triplet* format) and a
+ESRT GUID of the variant, the version in fwupd's *quad* format) and a
 `firmware.jcat` that signs both with the capsule key. fwupd checks the
 variant, the version and the AC adapter, copies the capsule unchanged to
 `\EFI\UpdateCapsule\fwupd-<GUID>.cap` and sets the same `OsIndications`
@@ -174,7 +174,7 @@ sudo fwupdmgr install --allow-reinstall w541-coreboot-vX.Y.Z-mrc.cab
 
 Without it fwupd does not trust the metadata of the package, so it does not
 take the version format from it, and the install stops at *Firmware version
-formats were different, device was 'number' and release is 'triplet'*
+formats were different, device was 'number' and release is 'quad'*
 (before any signature message: the ESRT gives fwupd a bare number, the
 package says how to read it). The same certificate serves the remote below.
 
@@ -274,13 +274,17 @@ the one of `tools/update.py`).
 ## Versions, variants, downgrades
 
 The version in the capsule and in the firmware's ESRT entry is the release
-number: v1.2.3 is `0x01020003`, 16908291 (`fwupdmgr get-devices` shows one or
-the other, depending on the version format it picks).
-A pre-release has the number of its release: v1.3.0-rc1 and v1.3.0 are both
-1.3.0. `tools/update.py` tells them apart by the release written in the
-image, so from an rc to a later rc or to the release it installs as usual;
-back from the release to an rc, or the same one again, needs
-`--allow-older` (fwupd sees one version: `--allow-reinstall`).
+number as four bytes, X.Y.Z.R (fwupd's *quad* format, from v1.3.6): a
+release vX.Y.Z is X.Y.Z.0 (v1.3.7 is `0x01030700`, 1.3.7.0), and its
+candidate N is the release before it with R = N (v1.3.7-rc2 is
+`0x01030602`, 1.3.6.2; v1.4.0-rc1 is 1.3.255.1), so the candidates sort
+after the release before and before the one they lead to, and fwupd offers
+each rc, and then the release, as an update. The setup and `tools/update.py`
+print the tag (v1.3.7-rc2); `fwupdmgr` the four numbers.
+Up to v1.3.6-rc1 the number was X.Y.Z with Z in the low 16 bits and no
+room for the candidate (v1.3.6-rc1 is `0x01030006`): read as quad that is
+1.3.0.6, below every later number, so a W541 on one of those updates as
+usual.
 
 The firmware refuses capsules older than its lowest supported version,
 v1.3.0 (v1.2.0 for v1.2.x): an older release goes back with flashrom. Older
