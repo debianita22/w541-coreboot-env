@@ -67,5 +67,6 @@
 0068-sb-intel-lynxpoint-Drop-the-GPIO-ASL-that-no-board-u.patch
 0069-mb-lenovo-haswell-Give-the-cards-behind-the-root-por.patch
 0070-sb-intel-lynxpoint-Describe-the-USB-controllers-of-L.patch
-0071-mb-lenovo-haswell-Describe-the-USB-ports-of-the-W541.patch
+0071-mb-lenovo-haswell-Describe-the-USB-ports.patch
 0072-mb-lenovo-haswell-Let-the-network-cards-wake-the-lap.patch
+0073-ec-lenovo-h8-Add-the-battery-trip-point.patch

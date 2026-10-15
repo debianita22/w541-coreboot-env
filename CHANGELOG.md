@@ -26,6 +26,8 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   with `_PRW`, and the Wi-Fi and WWAN root ports theirs, as on the OEM
   firmware (patch 0072). Nothing wakes the laptop unless the OS enables
   it (`ethtool -s enp0s25 wol g`).
+- The battery trip point (`_BTP`, the `alarm` attribute of the battery in
+  Linux), as on the OEM firmware (patch 0073).
 
 ## v1.3.4
 

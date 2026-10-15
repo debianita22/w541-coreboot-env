@@ -1,16 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Thu, 15 Oct 2026 13:32:38 +0200
-Subject: [PATCH] mb/lenovo/haswell: Describe the USB ports of the W541
+Subject: [PATCH] mb/lenovo/haswell: Describe the USB ports
 
-_UPC and _PLD for the 21 xHCI ports of the W541, from the OEM firmware:
-the four USB connectors with their kind and side, the docking connector,
-the ExpressCard slot, the ports of the camera and of the fingerprint
-reader, and the ports with nothing. The OS reads them for the connect
-type of a port (hot-pluggable, wired inside, not used) and the position
-of a device. The devices wired inside are connectable and not visible,
-as the ACPI specification describes them, where the OEM firmware marks
-them not connectable.
+_UPC and _PLD for the 21 xHCI ports, from the OEM firmware of the T440p
+and of the W541, which have the same tables: the four USB connectors with
+their kind and side, the docking connector, the ExpressCard slot (W541),
+the ports of the camera and of the fingerprint reader, and the ports with
+nothing. The OS reads them for the connect type of a port (hot-pluggable,
+wired inside, not used) and the position of a device. The devices wired
+inside are connectable and not visible, as the ACPI specification
+describes them, where the OEM firmware marks them not connectable.
 
 TEST=ThinkPad W541: the DSDT compiles; the camera and the fingerprint
 reader are on the ports the OEM firmware names (Linux: usb 2-12, 2-11).
@@ -18,38 +18,27 @@ reader are on the ports the OEM firmware names (Linux: usb 2-12, 2-11).
 Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- src/mainboard/lenovo/haswell/dsdt.asl         |  4 +
- .../lenovo/haswell/variants/w541/acpi/usb.asl | 77 +++++++++++++++++++
+ src/mainboard/lenovo/haswell/acpi/usb.asl | 79 +++++++++++++++++++++++
+ src/mainboard/lenovo/haswell/dsdt.asl     |  2 +
  2 files changed, 81 insertions(+)
- create mode 100644 src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
+ create mode 100644 src/mainboard/lenovo/haswell/acpi/usb.asl
 
-diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
-index 50344f5a..f7e6ecae 100644
---- a/src/mainboard/lenovo/haswell/dsdt.asl
-+++ b/src/mainboard/lenovo/haswell/dsdt.asl
-@@ -47,4 +47,8 @@ DefinitionBlock(
- #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
- 	#include "acpi/dgpu.asl"
- #endif
-+
-+#if CONFIG(BOARD_LENOVO_THINKPAD_W541)
-+	#include "variants/w541/acpi/usb.asl"
-+#endif
- }
-diff --git a/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl b/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
+diff --git a/src/mainboard/lenovo/haswell/acpi/usb.asl b/src/mainboard/lenovo/haswell/acpi/usb.asl
 new file mode 100644
-index 00000000..d6a71ca7
+index 00000000..1531df4b
 --- /dev/null
-+++ b/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
-@@ -0,0 +1,77 @@
++++ b/src/mainboard/lenovo/haswell/acpi/usb.asl
+@@ -0,0 +1,79 @@
 +/* SPDX-License-Identifier: GPL-2.0-only */
 +
 +/*
-+ * The USB ports of the W541 (xHCI, Lynx Point-H), as the OEM firmware
-+ * describes them in _UPC and _PLD: which are connectors, of which kind and
-+ * on which side, and which carry the devices inside. The OS reads them for
-+ * the connect type of a port (an external port, a device wired inside, or
-+ * nothing) and for the position of a device.
++ * The USB ports of the T440p and the W541 (xHCI, Lynx Point-H), as the
++ * OEM firmware describes them in _UPC and _PLD: which are connectors, of
++ * which kind and on which side, and which carry the devices inside. The OS
++ * reads them for the connect type of a port (an external port, a device
++ * wired inside, or nothing) and for the position of a device. The two OEM
++ * DSDTs (GLET for the T440p, GNET for the W541) have the same tables; the
++ * T440p has no ExpressCard slot, so its port 10 has nothing.
 + *
 + * The _PLD buffers are the OEM ones (ACPI 5.0 revision 2): byte 8 has
 + * UserVisible (bit 0), Dock (1), Lid (2), Panel (3-5: 0 top, 1 bottom,
@@ -119,6 +108,17 @@ index 00000000..d6a71ca7
 +USB_PORT(SS04, USB_NO, USB_OEM, PLD_INSIDE)
 +USB_PORT(SS05, USB_YES, USB_OEM, PLD_DOCK)
 +USB_PORT(SS06, USB_NO, USB_OEM, PLD_INSIDE)
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 50344f5a..b8ebcb36 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -47,4 +47,6 @@ DefinitionBlock(
+ #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
+ 	#include "acpi/dgpu.asl"
+ #endif
++
++	#include "acpi/usb.asl"
+ }
 -- 
 2.43.0
 

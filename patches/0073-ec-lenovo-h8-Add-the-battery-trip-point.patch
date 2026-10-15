@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:54:19 +0200
+Subject: [PATCH] ec/lenovo/h8: Add the battery trip point
+
+_BTP on the first battery, as the OEM firmware of the ThinkPad T440p and
+W541 has it: the trip point goes to EC RAM 0x2b/0x2c, the alarm is
+enabled with bit 4 of 0x14, and the EC raises the battery status event
+when the remaining capacity crosses it. The OS passes the value in the
+unit of _BIX; the EC takes it in units of 10 mWh when it keeps the
+battery in mWh (BAMA bit 15), in mAh otherwise, as the OEM firmware
+converts it. Linux exposes it as the "alarm" attribute of the battery.
+
+TEST=ThinkPad W541: the DSDT compiles.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/ec/lenovo/h8/acpi/battery.asl | 25 +++++++++++++++++++++++++
+ src/ec/lenovo/h8/acpi/ec.asl      |  5 +++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/src/ec/lenovo/h8/acpi/battery.asl b/src/ec/lenovo/h8/acpi/battery.asl
+index ca68cb1d..0560a3ba 100644
+--- a/src/ec/lenovo/h8/acpi/battery.asl
++++ b/src/ec/lenovo/h8/acpi/battery.asl
+@@ -366,6 +366,31 @@ Device (BAT0)
+ 			Return (0x0f)
+ 		}
+ 	}
++
++	/*
++	 * Battery trip point: the EC raises the battery status event when
++	 * the remaining capacity crosses it, 0 clears it. The OS gives it in
++	 * the unit of _BIX; the EC takes it in units of 10 mWh when it keeps
++	 * the battery in mWh (BAMA bit 15), in mAh otherwise, as the OEM
++	 * firmware does.
++	 */
++	Method (_BTP, 1, NotSerialized)
++	{
++		Local0 = Arg0
++		BTAE = 0
++		If (Arg0) {
++			Acquire(ECLK, 0xffff)
++			BPAG(1)
++			Local1 = BAMA >> 15
++			Release(ECLK)
++			If (Local1) {
++				Local0 /= 10
++			}
++			BTAL = Local0 & 0xff
++			BTAH = (Local0 >> 8) & 0xff
++			BTAE = 1
++		}
++	}
+ }
+ 
+ Device (BAT1)
+diff --git a/src/ec/lenovo/h8/acpi/ec.asl b/src/ec/lenovo/h8/acpi/ec.asl
+index a8cb147f..01737ab8 100644
+--- a/src/ec/lenovo/h8/acpi/ec.asl
++++ b/src/ec/lenovo/h8/acpi/ec.asl
+@@ -23,10 +23,15 @@ Device(EC)
+ 		Offset (0x0F),
+ 				    , 7,
+ 				TBSW, 1,	/* Tablet mode switch */
++		Offset (0x14),
++				    , 4,
++				BTAE, 1,	/* Battery 0 trip point alarm enable */
+ 		Offset (0x1a),
+ 				DKR2, 1,	/* Dock register 2 */
+ 		Offset (0x2a),
+ 				EVNT, 8,	/* write will trigger EC event */
++				BTAH, 8,	/* Battery 0 trip point, high byte */
++				BTAL, 8,	/* Battery 0 trip point, low byte */
+ 		Offset (0x2f),
+ 				    , 6,
+ 				FAND, 1,	/* Fan disengage */
+-- 
+2.43.0
+
