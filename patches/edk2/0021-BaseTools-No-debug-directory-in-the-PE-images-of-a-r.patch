@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 21:40:40 +0200
+Subject: [PATCH] BaseTools: No debug directory in the PE images of a release
+ build
+
+GenFw leaves the debug directory of each module in its PE image, with
+the CodeView entry that names the .dll it was made from by the absolute
+path of the build: the same sources gave a different payload in every
+directory (116 such paths in the payload of ouroBIOS), and a build is
+reproducible only from the same path. --zero, which GenFw has for this,
+drops the directory for the release builds; the debug builds keep it,
+where the loader names the modules in its messages from it.
+
+---
+diff --git a/BaseTools/Conf/tools_def.template b/BaseTools/Conf/tools_def.template
+index 72ca0dfa2..79b701ca3 100644
+--- a/BaseTools/Conf/tools_def.template
++++ b/BaseTools/Conf/tools_def.template
+@@ -1502,6 +1502,10 @@ RELEASE_XCODE5_X64_CC_FLAGS   = -target x86_64-pc-win32-macho -c    -Os       -W
+ ##################
+ *_*_*_GENFW_PATH                   = GenFw
+ *_*_*_GENFW_FLAGS                  =
++# A release build with no debug directory in its PE images: the CodeView
++# entry names the .dll of the module with the absolute path of the build,
++# so the same sources gave a different image in every directory.
++RELEASE_GCC_*_GENFW_FLAGS          = --zero
+ 
+ ##################
+ # Asl Compiler definitions
+-- 
+2.47.0
+

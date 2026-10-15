@@ -18,3 +18,4 @@
 0018-UefiPayloadPkg-Build-the-ESRT-from-FmpDxe-at-every-b.patch
 0019-SecurityPkg-TcgDxe-Log-into-the-bootloader-s-TCPA-ta.patch
 0020-UefiPayloadPkg-Go-back-to-the-other-vboot-slot-from-.patch
+0021-BaseTools-No-debug-directory-in-the-PE-images-of-a-r.patch

@@ -31,6 +31,14 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   of the latest release, candidates included, from the assets of the fixed
   `testing` entry of the releases page, which every release replaces when
   it is the highest so far ([docs/update.md](docs/update.md#the-fwupd-remote)).
+- Reproducible builds: the release build of each variant is built a second
+  time from scratch in CI and compared bit by bit with the first
+  (`tools/build.sh repro`). The build date was already the date of the
+  commit; the payload now has no debug directory in its PE images (patch
+  `edk2/0021`, `GenFw --zero`), whose CodeView entries named the `.dll` of
+  each module with the absolute path of the build, 116 of them. With the
+  same coreboot toolchain, the ROM of a release can be rebuilt from its tag
+  and compared.
 
 ## v1.3.5
 

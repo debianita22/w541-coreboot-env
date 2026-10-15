@@ -194,6 +194,12 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # ogni variante di nuovo da capo, uguale bit a bit alla ROM di roms
+      - name: Build riproducibile
+        env:
+          VBOOT_SIGNING_KEY: ${{ secrets.VBOOT_SIGNING_KEY }}
+        run: ./tools/build.sh --release --version "${VERSION}" repro
+
       - name: Riepilogo
         run: |
           shopt -s nullglob

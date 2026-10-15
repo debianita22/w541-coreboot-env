@@ -24,6 +24,9 @@
 #                  remote fwupd (docs/update.md). Gli slot RW di vboot si
 #                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
 #                  senza, con le chiavi di prova di vboot: build di prova
+#   repro          dopo roms: ogni variante costruita di nuovo da capo e la
+#                  ROM confrontata bit a bit con quella in dist/; uguali, o
+#                  le regioni e i file CBFS diversi
 #   smoke          dopo roms, la prova di fumo del payload: per ogni variante
 #                  una ROM coreboot per QEMU q35 con lo stesso UEFIPAYLOAD.fd
 #                  (EDK2 non si ricompila), avviata in QEMU da
@@ -192,7 +195,7 @@ while [ $# -gt 0 ]; do
 		--dist)      DIST="$(realpath -m "${2:?--dist DIR}")"; shift 2 ;;
 		--jobs)      JOBS="${2:?--jobs N}"; shift 2 ;;
 		-h|--help)   sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-		prepare|toolchain|config|roms|smoke|update-test|keys|toolchain-key) CMDS+=("$1"); shift ;;
+		prepare|toolchain|config|roms|repro|smoke|update-test|keys|toolchain-key) CMDS+=("$1"); shift ;;
 		*) die "argomento sconosciuto: $1 (tools/build.sh --help)" ;;
 	esac
 done
@@ -913,6 +916,79 @@ cmd_roms() {
 	ls -l "${DIST}"
 }
 
+# La build e' riproducibile? Ogni variante di nuovo da capo (coreboot ed
+# EDK2: la cartella di build si rifa', il workspace di EDK2 si pulisce da
+# solo) e la ROM confrontata bit a bit con quella di roms in DIST. La
+# data e' quella del commit, i PE del payload sono senza la directory di
+# debug (patches/edk2/0021): con lo stesso toolchain (il crossgcc, a
+# versioni fisse) le due devono essere uguali. Se no, le regioni diverse
+# e, negli slot, i file CBFS diversi.
+cmd_repro() {
+	need_prepared
+	local v first again b bad=0
+	VBOOT_KEYS_REAL=no
+	if [ -n "${VBOOT_SIGNING_KEY:-}" ]; then
+		install_vboot_key
+		VBOOT_KEYS_REAL=yes
+	fi
+	if [ "${TOOLCHAIN}" = crossgcc ]; then
+		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
+		export PATH="${XGCC}/bin:${PATH}"
+	fi
+	for v in "${VARIANTS[@]}"; do
+		first="${DIST}/$(romname "${v}").rom"
+		[ -f "${first}" ] || die "repro: manca ${first}: prima tools/build.sh roms"
+		b="${TREE}/build-${v}"
+		say "seconda build ${v} ($(localversion "${v}"))"
+		variant_config "${v}"
+		if ! mk "${v}" -j"${JOBS}" > "${b}/make-again.log" 2>&1; then
+			grep -n -i -B2 -A6 'error' "${b}/make-again.log" | tail -n 60 > "${b}/errors.log" || true
+			failure_report "seconda build ${v}" "${b}/errors.log" "${b}/make-again.log"
+			die "${v}: seconda build fallita (build-${v}/make-again.log nell'albero)"
+		fi
+		again="${b}/coreboot.rom"
+		if cmp -s "${first}" "${again}"; then
+			echo "  ok  ${v}: la seconda build e' uguale alla prima ($(sha256sum "${first}" | cut -c1-16)...)"
+			continue
+		fi
+		bad=1
+		echo "  NO  ${v}: la seconda build e' diversa dalla prima"
+		repro_diff "${v}" "${first}" "${again}"
+	done
+	if [ "${bad}" != 0 ]; then
+		note error "Build riproducibile" "la seconda build non e' uguale alla prima (regioni e file nel log)"
+		die "repro: build non riproducibile"
+	fi
+	echo "Build riproducibile: la seconda build di ogni variante e' uguale alla prima." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+}
+
+# Le regioni della mappa e, negli slot, i file CBFS in cui $2 e $3 differiscono
+repro_diff() {
+	local v="$1" a="$2" c="$3" cb="${TREE}/build-$1/cbfstool" name size off r f tmp
+	tmp="$(mktemp -d)"
+	"${cb}" "${a}" layout -w 2>/dev/null | sed -n "s/^'\([A-Z_0-9]*\)' (.*size \([0-9]*\), offset \([0-9]*\))$/\1 \2 \3/p" \
+		| while read -r name size off; do
+			if ! cmp -s <(tail -c +$((off + 1)) "${a}" | head -c "${size}") \
+				<(tail -c +$((off + 1)) "${c}" | head -c "${size}"); then
+				echo "      regione ${name} diversa"
+			fi
+		done
+	for r in COREBOOT FW_MAIN_A FW_MAIN_B; do
+		"${cb}" "${a}" print -r "${r}" 2>/dev/null | awk 'NR > 2 && $1 != "" && $1 != "(empty)" { print $1 }' \
+			| while read -r f; do
+				# gli stage e il payload si estraggono solo con -m
+				if { "${cb}" "${a}" extract -r "${r}" -n "${f}" -f "${tmp}/a" -m x86 > /dev/null 2>&1 \
+						|| "${cb}" "${a}" extract -r "${r}" -n "${f}" -f "${tmp}/a" > /dev/null 2>&1; } \
+					&& { "${cb}" "${c}" extract -r "${r}" -n "${f}" -f "${tmp}/c" -m x86 > /dev/null 2>&1 \
+						|| "${cb}" "${c}" extract -r "${r}" -n "${f}" -f "${tmp}/c" > /dev/null 2>&1; } \
+					&& ! cmp -s "${tmp}/a" "${tmp}/c"; then
+					echo "      ${r}: ${f} diverso ($(stat -c%s "${tmp}/a") e $(stat -c%s "${tmp}/c") byte)"
+				fi
+			done
+	done
+	rm -rf "${tmp}"
+}
+
 # La prova di fumo: il payload della variante, gia' costruito da roms, in una
 # ROM per QEMU q35. Del W541 non si emula niente: girano il payload (le patch
 # di EDK2 e LvglPkg) e il codice comune di coreboot. DRIVERS_EFI_FW_INFO con
@@ -1133,6 +1209,7 @@ for c in "${CMDS[@]}"; do
 		toolchain)     cmd_toolchain ;;
 		config)        cmd_config ;;
 		roms)          cmd_roms ;;
+		repro)         cmd_repro ;;
 		smoke)         cmd_smoke ;;
 		update-test)   cmd_update_test ;;
 		keys)          cmd_keys ;;

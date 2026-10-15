@@ -223,8 +223,19 @@ tools/build.sh --version v1.0.0-local         # version string and file names
 tools/build.sh --with test-peg-afe roms       # plus a patch from patches/optional/
 tools/build.sh smoke                          # after roms: the payload in QEMU
 tools/build.sh update-test                    # capsule updates with vboot A/B in QEMU
+tools/build.sh repro                          # after roms: built again, compared bit by bit
 tools/build.sh --help
 ```
+
+The builds are reproducible (from v1.3.6): the date in the ROM is the date
+of the commit, the payload has no debug directory in its PE images, and
+CI builds each release twice and compares the two (`repro`). From a
+checkout of a release tag, with the coreboot toolchain and the project's
+vboot key (`VBOOT_SIGNING_KEY`: the slots are signed), `tools/build.sh
+--release --version vX.Y.Z roms` gives the `.rom` of the release byte for
+byte; without the key the slots are signed with vboot's test keys, and
+`config` in CBFS says so: the stages and the payload still compare, the
+ROM does not.
 
 `smoke` puts the EDK2 payload of each variant, as built, into a coreboot
 image for QEMU's q35 and boots it with `tools/qemu-smoke.py`: coreboot must
@@ -263,7 +274,7 @@ and finishes the update; the ESRT is checked at every boot
 | Workflow | When | What |
 |---|---|---|
 | [`check.yml`](.github/workflows/check.yml) | every push and pull request | `tools/ci-check.sh` (shellcheck, actionlint, blob checksums, patch series, defconfigs); the series applied to the pinned coreboot and EDK2, and both configurations checked |
-| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, their payloads booted in QEMU (`smoke`), the capsule update with vboot A/B in QEMU (`update-test`, in parallel), their capsules signed, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
+| [`build.yml`](.github/workflows/build.yml) | tag `vX.Y.Z`, *Run workflow*, push to `ci-test/**` | both ROMs with the coreboot toolchain (cached), verified, their payloads booted in QEMU (`smoke`), each built a second time and compared bit by bit (`repro`), the capsule update with vboot A/B in QEMU (`update-test`, in parallel), their capsules signed, published as `vX.Y.Z-mrc` and `vX.Y.Z-nri` |
 | [`upstream.yml`](.github/workflows/upstream.yml) | every Monday | opens an issue when the series no longer applies on coreboot `main`, a patch was merged upstream, a coreboot release is out, or MrChromebox's EDK2 branch moved |
 
 A release is made by pushing a version tag (`git tag v1.0.0 && git push origin
