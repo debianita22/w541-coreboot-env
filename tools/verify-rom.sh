@@ -47,7 +47,8 @@
 #      con il GUID del defconfig della variante e la versione X.Y.Z di
 #      CONFIG_LOCALVERSION, capsule su disco, il certificato di keys/)
 #   7. gli slot vanno con la parte RO gia' sui portatili, che una capsula non
-#      riscrive (configs/ro-interface.txt): coreboot dello stesso commit e,
+#      riscrive (configs/ro-interface.txt): coreboot dello stesso commit (o
+#      di un pin "rw-ok", i cui slot leggono ancora quella parte RO) e,
 #      se la build di --cbfstool e' quella della ROM, bootblock e romstage
 #      con le stesse regioni della cache-as-RAM
 set -uo pipefail
@@ -426,6 +427,8 @@ else
 			cv="$(sed -n 's/^#define COREBOOT_VERSION "\(.*\)"$/\1/p' "${TMP}/revision-${r}")"
 			if [ "${cv}" = "${ro_cb}" ]; then
 				ok "${r}: coreboot ${cv}, come la parte RO sui portatili"
+			elif awk -v d="${cv}" '$1 == "rw-ok" && $2 == d { f = 1 } END { exit !f }' "${IFACE}"; then
+				ok "${r}: coreboot ${cv}, rw-ok in configs/ro-interface.txt (la parte RO e' ${ro_cb})"
 			else
 				bad "${r}: coreboot ${cv}, la parte RO sui portatili e' ${ro_cb:-?} (configs/ro-interface.txt)"
 			fi
