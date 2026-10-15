@@ -163,7 +163,20 @@ variant, the version and the AC adapter, copies the capsule unchanged to
 `\EFI\UpdateCapsule\fwupd-<GUID>.cap` and sets the same `OsIndications`
 bit as `tools/update.py`: the firmware applies it in the same way, and after
 the reboot `fwupdmgr get-devices` shows the new version and `fwupdmgr
-get-history` the result.
+get-history` the result. The project certificate must be in `/etc/pki/fwupd`
+first, once:
+
+```sh
+sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem
+sudo systemctl restart fwupd
+sudo fwupdmgr install --allow-reinstall w541-coreboot-vX.Y.Z-mrc.cab
+```
+
+Without it fwupd does not trust the metadata of the package, so it does not
+take the version format from it, and the install stops at *Firmware version
+formats were different, device was 'number' and release is 'triplet'*
+(before any signature message: the ESRT gives fwupd a bare number, the
+package says how to read it). The same certificate serves the remote below.
 
 ### The fwupd remote
 
@@ -210,8 +223,9 @@ about once a day.
 - Until v1.3.4 is the latest release, `fwupdmgr refresh` finds no metadata
   (404).
 - Without the certificate the refresh fails (*signatures were required,
-  but none supplied*) and so does the update (*firmware signature missing
-  or not trusted*). Do not set `OnlyTrusted=false` instead.
+  but none supplied*) and a `.cab` by hand stops at *Firmware version
+  formats were different* (see above). Do not set `OnlyTrusted=false`
+  instead.
 - To remove it: delete the two files and restart fwupd.
 
 Tested here with fwupd 2.0.20, its daemon on a simulated ESRT (v1.3.3) and
