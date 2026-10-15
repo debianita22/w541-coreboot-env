@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 18:33:10 +0200
+Subject: [PATCH] mb/lenovo/haswell: _S3D and _RMV as the OEM firmware
+
+The OEM firmware declares D3 as the deepest state in S3 on its devices
+(_S3D), and the cards in the WWAN and ExpressCard slots as removable
+(_RMV). The OS assumes D3 without _S3D, so this only says what it does;
+_RMV lets it treat those slots as hot-pluggable, as the OEM firmware does.
+
+TEST=ThinkPad W541: the DSDT compiles.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/dsdt.asl | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 40e25d48..d959faad 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -58,6 +58,21 @@ DefinitionBlock(
+ 		}
+ 		Scope (RP02) { Name (_PRW, Package () { 0x09, 4 }) }
+ 		Scope (RP03) { Name (_PRW, Package () { 0x09, 4 }) }
++
++		/*
++		 * As the OEM firmware: the deepest D-state in S3 of the devices
++		 * (D3; the OS assumes it without _S3D, these say it), and the
++		 * cards in the WWAN and ExpressCard slots as removable.
++		 */
++		Name (_S3D, 2)
++		Scope (PEGP) { Name (_S3D, 3) }
++		Scope (PEGP.DEV0) { Name (_S3D, 3) }
++		Scope (HDEF) { Name (_S3D, 3) }
++		Scope (LPCB) { Name (_S3D, 3) }
++		Scope (SATA) { Name (_S3D, 3) }
++		Scope (SBUS) { Name (_S3D, 3) }
++		Scope (RP03.PXSX) { Method (_RMV) { Return (1) } }
++		Scope (RP05.PXSX) { Method (_RMV) { Return (1) } }
+ 	}
+ 
+ #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
+-- 
+2.43.0
+

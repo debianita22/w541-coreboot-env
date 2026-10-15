@@ -28,6 +28,8 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   it (`ethtool -s enp0s25 wol g`).
 - The battery trip point (`_BTP`, the `alarm` attribute of the battery in
   Linux), as on the OEM firmware (patch 0073).
+- `_S3D` on the devices and `_RMV` on the WWAN and ExpressCard slots, as
+  on the OEM firmware (patch 0074).
 
 ## v1.3.4
 
