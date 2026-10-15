@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:14:28 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Drop the GPIO ASL that no board uses
+
+pch.asl includes the common GPIO level methods (GRXS, GTXS, STXS, CTXS),
+with an OperationRegion over the whole GPIO I/O space, 0x480-0x4eb. No
+Lynx Point mainboard calls them. Linux, when lpc_ich claims the GPIO I/O
+ranges for gpio_ich, finds them inside that region and logs three
+
+  ACPI Warning: SystemIO range 0x4C0-0x4CF conflicts with OpRegion
+  0x480-0x4EB (\_SB.PCI0.GPLV)
+  ACPI: OSL: Resource conflict; ACPI support missing from driver?
+
+at every boot, and does not register gpio_ich. Drop the include; the
+Lynx Point-LP boards have their own gpio.asl in lpc.asl, untouched.
+
+TEST=ThinkPad W541: the DSDT compiles without the region.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/acpi/pch.asl | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/src/southbridge/intel/lynxpoint/acpi/pch.asl b/src/southbridge/intel/lynxpoint/acpi/pch.asl
+index 256147fa..c8492eaf 100644
+--- a/src/southbridge/intel/lynxpoint/acpi/pch.asl
++++ b/src/southbridge/intel/lynxpoint/acpi/pch.asl
+@@ -48,11 +48,6 @@ Scope (\)
+ #endif
+ }
+ 
+-#if !CONFIG(INTEL_LYNXPOINT_LP)
+-// General purpose GPIO access methods
+-#include <southbridge/intel/common/acpi/gpio.asl>
+-#endif
+-
+ // High Definition Audio (Azalia) 0:1b.0
+ #include "audio.asl"
+ 
+-- 
+2.43.0
+

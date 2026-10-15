@@ -11,6 +11,12 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   (and `\WGSV`) on the console at every shutdown and reboot: the two
   methods the driver calls to save the Bluetooth and WWAN state for S4/S5
   are in the DSDT now (patch 0067).
+- A clean kernel log: no more *ACPI Warning: SystemIO range ... conflicts
+  with OpRegion ... (\_SB.PCI0.GPLV)*, three times at every boot (the
+  GPIO methods of Lynx Point's ASL, which no board uses, are gone: patch
+  0068), and no more *ACPI: \: failed to evaluate _DSM ... (0x1001)* from
+  iwlwifi (the cards behind the root ports have a device node, as on the
+  OEM firmware: patch 0069).
 
 ## v1.3.4
 

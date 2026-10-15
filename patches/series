@@ -64,3 +64,5 @@
 0065-drivers-smmstore-Let-the-payload-boot-the-other-vboo.patch
 0066-mb-lenovo-haswell-Enable-ACPI-charge-behaviour-on-th.patch
 0067-ec-lenovo-h8-Add-BLTH-and-WGSV-for-thinkpad_acpi.patch
+0068-sb-intel-lynxpoint-Drop-the-GPIO-ASL-that-no-board-u.patch
+0069-mb-lenovo-haswell-Give-the-cards-behind-the-root-por.patch

@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:14:29 +0200
+Subject: [PATCH] mb/lenovo/haswell: Give the cards behind the root ports a
+ device node
+
+The OEM firmware has a PXSX device under each PCIe root port, so that
+the card behind it has an ACPI companion. Without one, iwlwifi evaluates
+its _DSM with a NULL handle, and Linux logs at every boot:
+
+  ACPI: \: failed to evaluate _DSM 2c176672-0b22-294b-814f-75e4dd26b5fd
+  rev:0 func:0 (0x1001)
+
+(AE_BAD_PARAMETER; three times, the second UUID is its RFI one). Add the
+node for the card reader, the Wi-Fi card, the WWAN slot and the
+ExpressCard slot: with a companion the _DSM is simply not found, and the
+driver goes on quietly, as on the OEM firmware.
+
+TEST=ThinkPad W541: the DSDT compiles with the nodes under the ports.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/dsdt.asl | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 70d13de9..50344f5a 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -29,6 +29,19 @@ DefinitionBlock(
+ 		#include <northbridge/intel/haswell/acpi/hostbridge.asl>
+ 		#include <drivers/intel/gma/acpi/default_brightness_levels.asl>
+ 		#include <southbridge/intel/lynxpoint/acpi/pch.asl>
++
++		/*
++		 * The cards behind the root ports: the card reader (RP01), the
++		 * Wi-Fi card (RP02) and, on the W541, the WWAN slot (RP03) and
++		 * the ExpressCard slot (RP05). A device node, as the OEM
++		 * firmware has, gives their drivers an ACPI companion: without one,
++		 * iwlwifi evaluates its _DSM on a NULL handle and Linux logs
++		 * "failed to evaluate _DSM ... (0x1001)" at every boot.
++		 */
++		Scope (RP01) { Device (PXSX) { Name (_ADR, 0) } }
++		Scope (RP02) { Device (PXSX) { Name (_ADR, 0) } }
++		Scope (RP03) { Device (PXSX) { Name (_ADR, 0) } }
++		Scope (RP05) { Device (PXSX) { Name (_ADR, 0) } }
+ 	}
+ 
+ #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
+-- 
+2.43.0
+
