@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:32:38 +0200
+Subject: [PATCH] mb/lenovo/haswell: Describe the USB ports of the W541
+
+_UPC and _PLD for the 21 xHCI ports of the W541, from the OEM firmware:
+the four USB connectors with their kind and side, the docking connector,
+the ExpressCard slot, the ports of the camera and of the fingerprint
+reader, and the ports with nothing. The OS reads them for the connect
+type of a port (hot-pluggable, wired inside, not used) and the position
+of a device. The devices wired inside are connectable and not visible,
+as the ACPI specification describes them, where the OEM firmware marks
+them not connectable.
+
+TEST=ThinkPad W541: the DSDT compiles; the camera and the fingerprint
+reader are on the ports the OEM firmware names (Linux: usb 2-12, 2-11).
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/dsdt.asl         |  4 +
+ .../lenovo/haswell/variants/w541/acpi/usb.asl | 77 +++++++++++++++++++
+ 2 files changed, 81 insertions(+)
+ create mode 100644 src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
+
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index 50344f5a..f7e6ecae 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -47,4 +47,8 @@ DefinitionBlock(
+ #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
+ 	#include "acpi/dgpu.asl"
+ #endif
++
++#if CONFIG(BOARD_LENOVO_THINKPAD_W541)
++	#include "variants/w541/acpi/usb.asl"
++#endif
+ }
+diff --git a/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl b/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
+new file mode 100644
+index 00000000..d6a71ca7
+--- /dev/null
++++ b/src/mainboard/lenovo/haswell/variants/w541/acpi/usb.asl
+@@ -0,0 +1,77 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++
++/*
++ * The USB ports of the W541 (xHCI, Lynx Point-H), as the OEM firmware
++ * describes them in _UPC and _PLD: which are connectors, of which kind and
++ * on which side, and which carry the devices inside. The OS reads them for
++ * the connect type of a port (an external port, a device wired inside, or
++ * nothing) and for the position of a device.
++ *
++ * The _PLD buffers are the OEM ones (ACPI 5.0 revision 2): byte 8 has
++ * UserVisible (bit 0), Dock (1), Lid (2), Panel (3-5: 0 top, 1 bottom,
++ * 2 left, 3 right, 4 front, 5 back) and VerticalPosition (6-7); byte 9 has
++ * HorizontalPosition (bits 0-1) and Shape (2-5).
++ *
++ *  xHCI port  USB 3.0  OEM     connector
++ *  1          16       UPC0    USB 3.0, right (the Always On one)
++ *  2          17       UPC1    USB 3.0, left
++ *  3          -        UPC2    USB 2.0, back
++ *  6          -        UPC9    USB 2.0, right
++ *  9          20       UPC4    the docking connector, bottom
++ *  10         -        UPC5    the ExpressCard slot
++ *  11         -        -       inside: the fingerprint reader / Bluetooth
++ *  12         -        -       inside: the camera
++ *  4, 5, 7, 8, 13, 14, 15, USB 3.0 18, 19, 21: nothing
++ *
++ * The OEM firmware marks the ports of the devices inside as not
++ * connectable (what _UPC means by "nothing can ever be plugged there");
++ * here they are connectable, with the OEM connector type, and not visible:
++ * what the ACPI specification and the OS mean by a device wired inside.
++ */
++
++#define USB_PORT(name, conn, type, pld) \
++	Scope (\_SB.PCI0.XHCI.HUB7.name) \
++	{ \
++		Name (_UPC, Package () { conn, type, 0, 0 }) \
++		Name (_PLD, Package () { Buffer (0x10) { pld } }) \
++	}
++
++/* Connectable */
++#define USB_YES		0xFF
++#define USB_NO		0x00
++/* Connector type */
++#define USB_2_A		0x00
++#define USB_EXPRESSCARD	0x02
++#define USB_3_A		0x03
++#define USB_OEM		0xFF
++
++/* The OEM _PLD buffers */
++#define PLD_USB3_RIGHT	0x81, 0, 0, 0, 0, 0, 0, 0, 0x99, 0x11, 0x80, 0x00, 0x03, 0, 0, 0
++#define PLD_USB3_LEFT	0x81, 0, 0, 0, 0, 0, 0, 0, 0x91, 0x12, 0x00, 0x01, 0x03, 0, 0, 0
++#define PLD_USB2_BACK	0x81, 0, 0, 0, 0, 0, 0, 0, 0x69, 0x0C, 0x00, 0x00, 0x03, 0, 0, 0
++#define PLD_USB2_RIGHT	0x81, 0, 0, 0, 0, 0, 0, 0, 0x59, 0x12, 0x00, 0x00, 0x03, 0, 0, 0
++#define PLD_DOCK	0x81, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x1C, 0x80, 0x01, 0x03, 0, 0, 0
++#define PLD_EXPRESSCARD	0x81, 0, 0, 0, 0, 0, 0, 0, 0x48, 0x1D, 0x00, 0x00, 0x00, 0, 0, 0
++#define PLD_INSIDE	0x81, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x1C, 0x00, 0x00, 0x00, 0, 0, 0
++
++USB_PORT(HS01, USB_YES, USB_3_A, PLD_USB3_RIGHT)
++USB_PORT(HS02, USB_YES, USB_3_A, PLD_USB3_LEFT)
++USB_PORT(HS03, USB_YES, USB_2_A, PLD_USB2_BACK)
++USB_PORT(HS04, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS05, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS06, USB_YES, USB_2_A, PLD_USB2_RIGHT)
++USB_PORT(HS07, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS08, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS09, USB_YES, USB_OEM, PLD_DOCK)
++USB_PORT(HS10, USB_YES, USB_EXPRESSCARD, PLD_EXPRESSCARD)
++USB_PORT(HS11, USB_YES, USB_OEM, PLD_INSIDE)
++USB_PORT(HS12, USB_YES, USB_OEM, PLD_INSIDE)
++USB_PORT(HS13, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS14, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(HS15, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(SS01, USB_YES, USB_3_A, PLD_USB3_RIGHT)
++USB_PORT(SS02, USB_YES, USB_3_A, PLD_USB3_LEFT)
++USB_PORT(SS03, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(SS04, USB_NO, USB_OEM, PLD_INSIDE)
++USB_PORT(SS05, USB_YES, USB_OEM, PLD_DOCK)
++USB_PORT(SS06, USB_NO, USB_OEM, PLD_INSIDE)
+-- 
+2.43.0
+

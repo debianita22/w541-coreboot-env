@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:32:39 +0200
+Subject: [PATCH] mb/lenovo/haswell: Let the network cards wake the laptop
+
+The OEM firmware lets the Gigabit Ethernet controller and the Wi-Fi and
+WWAN cards wake the laptop from S3 and S4: _PRW on the Ethernet device
+(PME, GPE 0x0d, as the USB controllers) and on their root ports (PCIe
+PME, GPE 0x09). The DSDT had no device for the Ethernet controller at
+all, so Wake-on-LAN could not be enabled, and no _PRW on the ports. Add
+them; the OS enables each wake source on request only.
+
+TEST=ThinkPad W541: the DSDT compiles with GLAN and the _PRW entries.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/dsdt.asl | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/dsdt.asl b/src/mainboard/lenovo/haswell/dsdt.asl
+index f7e6ecae..08af061a 100644
+--- a/src/mainboard/lenovo/haswell/dsdt.asl
++++ b/src/mainboard/lenovo/haswell/dsdt.asl
+@@ -42,6 +42,22 @@ DefinitionBlock(
+ 		Scope (RP02) { Device (PXSX) { Name (_ADR, 0) } }
+ 		Scope (RP03) { Device (PXSX) { Name (_ADR, 0) } }
+ 		Scope (RP05) { Device (PXSX) { Name (_ADR, 0) } }
++
++		/*
++		 * What can wake the laptop, as on the OEM firmware: the Gigabit
++		 * Ethernet controller (Wake-on-LAN, its PME on GPE 0x0d like the
++		 * USB controllers) and the Wi-Fi and WWAN cards (PCIe PME, GPE
++		 * 0x09), from S3 and S4. The OS enables each one on request
++		 * (ethtool -s ... wol g, /sys/.../power/wakeup).
++		 */
++		Device (GLAN)
++		{
++			Name (_ADR, 0x00190000)
++			Name (_S3D, 3)
++			Name (_PRW, Package () { 0x0d, 4 })
++		}
++		Scope (RP02) { Name (_PRW, Package () { 0x09, 4 }) }
++		Scope (RP03) { Name (_PRW, Package () { 0x09, 4 }) }
+ 	}
+ 
+ #if CONFIG(LENOVO_HASWELL_DGPU_RUNTIME_PM)
+-- 
+2.43.0
+

@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Thu, 15 Oct 2026 13:32:38 +0200
+Subject: [PATCH] sb/intel/lynxpoint: Describe the USB controllers of Lynx
+ Point-H
+
+The xHCI port devices of xhci.asl are those of Lynx Point-LP: 8 USB 2.0
+ports and the USB 3.0 ones at addresses 10 to 15. Lynx Point-H has 15
+USB 2.0 ports and 6 USB 3.0 ports, which the root hub of the OS numbers
+1 to 15 and 16 to 21 (Linux on a ThinkPad W541: "hub 2-0:1.0: 15 ports
+detected", "hub 4-0:1.0: 6 ports detected"), so on -H the SSPx devices
+describe USB 2.0 ports 10 to 15 instead of any USB 3.0 port, and a
+mainboard cannot attach _UPC and _PLD to the right ports. Give -H its own
+list, HS01 to HS15 and SS01 to SS06. Lynx Point-H also has a second EHCI
+controller, 0:1a.0, with no device in ehci.asl: add it, with the same
+wake and D-state methods as the first one.
+
+TEST=ThinkPad W541 (Lynx Point-H, QM87): the DSDT compiles; the port
+devices match the ports Linux reports.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/southbridge/intel/lynxpoint/acpi/ehci.asl | 33 +++++++++++++++++++
+ src/southbridge/intel/lynxpoint/acpi/xhci.asl | 29 ++++++++++++++++
+ 2 files changed, 62 insertions(+)
+
+diff --git a/src/southbridge/intel/lynxpoint/acpi/ehci.asl b/src/southbridge/intel/lynxpoint/acpi/ehci.asl
+index 2a54304a..a556d3e4 100644
+--- a/src/southbridge/intel/lynxpoint/acpi/ehci.asl
++++ b/src/southbridge/intel/lynxpoint/acpi/ehci.asl
+@@ -32,3 +32,36 @@ Device (EHCI)
+ 		Device (PRT6) { Name (_ADR, 6) } // USB Port 5
+ 	}
+ }
++
++#if !CONFIG(INTEL_LYNXPOINT_LP)
++// EHCI Controller 0:1a.0 (Lynx Point-H only)
++
++Device (EHC2)
++{
++	Name (_ADR, 0x001a0000)
++
++	Name (_PRW, Package () { DEFAULT_PRW_VALUE, 3 })
++
++	Method (_S3D, 0)	// Highest D State in S3 State
++	{
++		Return (2)
++	}
++
++	Method (_S4D, 0)	// Highest D State in S4 State
++	{
++		Return (2)
++	}
++
++	Device (HUB7)
++	{
++		Name (_ADR, 0)
++
++		Device (PRT1) { Name (_ADR, 1) } // USB Port 0
++		Device (PRT2) { Name (_ADR, 2) } // USB Port 1
++		Device (PRT3) { Name (_ADR, 3) } // USB Port 2
++		Device (PRT4) { Name (_ADR, 4) } // USB Port 3
++		Device (PRT5) { Name (_ADR, 5) } // USB Port 4
++		Device (PRT6) { Name (_ADR, 6) } // USB Port 5
++	}
++}
++#endif
+diff --git a/src/southbridge/intel/lynxpoint/acpi/xhci.asl b/src/southbridge/intel/lynxpoint/acpi/xhci.asl
+index c38a5923..5c5c6144 100644
+--- a/src/southbridge/intel/lynxpoint/acpi/xhci.asl
++++ b/src/southbridge/intel/lynxpoint/acpi/xhci.asl
+@@ -366,6 +366,7 @@ Device (XHCI)
+ 			Return (Local0)
+ 		}
+ 
++#if CONFIG(INTEL_LYNXPOINT_LP)
+ 		Device (PRT1) { Name (_ADR, 1) } // USB Port 0
+ 		Device (PRT2) { Name (_ADR, 2) } // USB Port 1
+ 		Device (PRT3) { Name (_ADR, 3) } // USB Port 2
+@@ -380,5 +381,33 @@ Device (XHCI)
+ 		Device (SSP4) { Name (_ADR, 13) } // USB Port 13
+ 		Device (SSP5) { Name (_ADR, 14) } // USB Port 14
+ 		Device (SSP6) { Name (_ADR, 15) } // USB Port 15
++#else
++		/*
++		 * Lynx Point-H: 15 USB 2.0 ports and 6 USB 3.0 ports, numbered
++		 * as the root hub of the OS sees them, the USB 3.0 ports after
++		 * the USB 2.0 ones.
++		 */
++		Device (HS01) { Name (_ADR, 1) } // USB 2.0 Port 1
++		Device (HS02) { Name (_ADR, 2) } // USB 2.0 Port 2
++		Device (HS03) { Name (_ADR, 3) } // USB 2.0 Port 3
++		Device (HS04) { Name (_ADR, 4) } // USB 2.0 Port 4
++		Device (HS05) { Name (_ADR, 5) } // USB 2.0 Port 5
++		Device (HS06) { Name (_ADR, 6) } // USB 2.0 Port 6
++		Device (HS07) { Name (_ADR, 7) } // USB 2.0 Port 7
++		Device (HS08) { Name (_ADR, 8) } // USB 2.0 Port 8
++		Device (HS09) { Name (_ADR, 9) } // USB 2.0 Port 9
++		Device (HS10) { Name (_ADR, 10) } // USB 2.0 Port 10
++		Device (HS11) { Name (_ADR, 11) } // USB 2.0 Port 11
++		Device (HS12) { Name (_ADR, 12) } // USB 2.0 Port 12
++		Device (HS13) { Name (_ADR, 13) } // USB 2.0 Port 13
++		Device (HS14) { Name (_ADR, 14) } // USB 2.0 Port 14
++		Device (HS15) { Name (_ADR, 15) } // USB 2.0 Port 15
++		Device (SS01) { Name (_ADR, 16) } // USB 3.0 Port 1
++		Device (SS02) { Name (_ADR, 17) } // USB 3.0 Port 2
++		Device (SS03) { Name (_ADR, 18) } // USB 3.0 Port 3
++		Device (SS04) { Name (_ADR, 19) } // USB 3.0 Port 4
++		Device (SS05) { Name (_ADR, 20) } // USB 3.0 Port 5
++		Device (SS06) { Name (_ADR, 21) } // USB 3.0 Port 6
++#endif
+ 	}
+ }
+-- 
+2.43.0
+

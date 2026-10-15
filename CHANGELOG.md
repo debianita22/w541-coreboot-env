@@ -17,6 +17,15 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   0068), and no more *ACPI: \: failed to evaluate _DSM ... (0x1001)* from
   iwlwifi (the cards behind the root ports have a device node, as on the
   OEM firmware: patch 0069).
+- The USB ports described as the OEM firmware does (`_UPC`, `_PLD`): the
+  OS knows which port is a connector and on which side, which carries the
+  camera or the fingerprint reader, and which has nothing; the port devices
+  of the Lynx Point-H xHCI were those of the -LP chipset (patches 0070,
+  0071).
+- Wake-on-LAN is possible: the Ethernet controller has its ACPI device
+  with `_PRW`, and the Wi-Fi and WWAN root ports theirs, as on the OEM
+  firmware (patch 0072). Nothing wakes the laptop unless the OS enables
+  it (`ethtool -s enp0s25 wol g`).
 
 ## v1.3.4
 
