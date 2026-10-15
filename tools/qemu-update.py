@@ -101,7 +101,7 @@ VAR_VALID = (0x3F, 0x3E)
 NV_UNKNOWN, NV_TRYING, NV_SUCCESS, NV_FAILURE = 0, 1, 2, 3
 SLOTS = "AB"
 ROMS = "ABCD"
-TAG_RE = r"ouroBIOS-v\d+\.\d+\.\d+-mrc\+update-test-[A-Z]"
+TAG_RE = r"ouroBIOS-v\d+\.\d+\.\d+(?:-rc\d+)?-mrc\+update-test-[A-Z]"
 
 ESP_OFFSET = 1 << 20            # la partizione a 1 MiB, come la fanno gli installer
 ESP_SECTORS = 65536             # 32 MiB: FAT16

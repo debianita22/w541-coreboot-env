@@ -25,7 +25,13 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `tools/update.py` show the tag (v1.3.7-rc2), `fwupdmgr` the four numbers;
   a W541 on v1.3.6-rc1 or older (X.Y.Z in the old layout, read as 1.3.0.6)
   updates to any of the new numbers as usual
-  ([docs/update.md](docs/update.md#versions-variants-downgrades)).
+  ([docs/update.md](docs/update.md#versions-variants-downgrades)). The
+  *Go back to* of the setup and coreboot's check behind it (patches
+  `edk2/0020` and 0065) read the version from the release name in the other
+  slot in the same layout, `-rcN` included: in the old one, once the lowest
+  supported version is raised, they would have refused a newer release
+  (v1.3.7 read as `0x01030007`, below v1.3.6). The update test in QEMU
+  numbers its ROMs so that a parser left on the old layout fails it.
 - A testing remote for fwupd, `configs/fwupd/ourobios-testing.conf`, off
   until turned on (`fwupdmgr enable-remote ourobios-testing`): the metadata
   of the latest release, candidates included, from the assets of the fixed

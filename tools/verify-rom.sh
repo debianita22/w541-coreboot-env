@@ -120,7 +120,7 @@ hex() { printf '0x%x' "$1"; }
 # R = N), 0x00000000 per le altre
 fw_version_of() {
 	local x y z r v
-	if [[ "$1" =~ ^ouroBIOS-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([0-9]{1,3}))?-${VARIANT}(\+.*)?$ ]]; then
+	if [[ "$1" =~ ^ouroBIOS-v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([1-9][0-9]{0,2}))?-${VARIANT}(\+.*)?$ ]]; then
 		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
 		r=$((10#${BASH_REMATCH[5]:-0}))
 		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 255 ] && [ "${r}" -le 255 ]; then

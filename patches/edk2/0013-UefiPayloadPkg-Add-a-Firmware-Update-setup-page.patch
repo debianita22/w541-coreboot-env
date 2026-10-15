@@ -42,7 +42,7 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 
 diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 new file mode 100644
-index 0000000000..89703514b4
+index 0000000000..3c412f68da
 --- /dev/null
 +++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 @@ -0,0 +1,867 @@

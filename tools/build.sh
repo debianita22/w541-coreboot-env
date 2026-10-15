@@ -131,8 +131,14 @@ FWUPD_METADATA=ourobios.xml.gz
 # grafica rallenta gli avvii, le altre non ce l'hanno); la patch per q35, che
 # va solo nel worktree della prova
 UPDATE_TEST_GUID="b195f75a-8f95-4282-950c-ee9dd1099ec9"
-UPDATE_TEST_ROMS=("A 0x01000000" "B 0x01010000" "C 0x01020000" "D 0x01030000")
-UPDATE_TEST_LSV=0x01000000
+# Le versioni nel formato delle release (fw_version): A v1.0.1, B v1.0.2-rc1,
+# C v1.0.2, D v1.1.0, la minima v1.0.1. B, la release a cui si torna dal
+# setup e con update.py rollback, e' una rc il cui X.Y.Z letto nel formato
+# di prima (X << 24 | Y << 16 | Z, 0x01000002) sta sotto la minima: un
+# parser dei nomi delle release rimasto a quel formato (coreboot, patch
+# 0065; il setup, edk2/0020) rifiuterebbe di tornarci
+UPDATE_TEST_ROMS=("A 0x01000100" "B 0x01000101" "C 0x01000200" "D 0x01010000")
+UPDATE_TEST_LSV=0x01000100
 UPDATE_TEST_SCREEN=D
 UPDATE_TEST_PATCH=patches/test/q35-update-test.patch
 # Le chiavi pubbliche di vboot (tools/vboot-keys.sh), in w541/vboot/
@@ -298,7 +304,7 @@ fw_quad() {
 }
 fw_version() {
 	local x y z r v
-	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([0-9]{1,3}))?$ ]]; then
+	if [[ "${VERSION}" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([1-9][0-9]{0,2}))?$ ]]; then
 		x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
 		r=$((10#${BASH_REMATCH[5]:-0}))
 		if [ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 255 ] && [ "${r}" -le 255 ]; then
@@ -313,6 +319,18 @@ fw_version() {
 		fi
 	fi
 	printf '0x%08x' 0
+}
+
+# Il tag di un numero dell'ESRT (l'inverso di fw_version, come version_str di
+# tools/update.py): 0x01030600 -> v1.3.6, 0x01030602 -> v1.3.7-rc2
+fw_tag() {
+	local v=$(( $1 )) r
+	if [ $(( v & 255 )) -eq 0 ]; then
+		printf 'v%d.%d.%d' $(( v >> 24 )) $(( (v >> 16) & 255 )) $(( (v >> 8) & 255 ))
+	else
+		r=$(( (v & ~255) + 256 ))
+		printf 'v%d.%d.%d-rc%d' $(( r >> 24 )) $(( (r >> 16) & 255 )) $(( (r >> 8) & 255 )) $(( v & 255 ))
+	fi
 }
 
 cmd_prepare() {
@@ -1169,8 +1187,7 @@ update_test_build() {
 			echo "CONFIG_PAYLOAD_ELF=y"
 			echo "CONFIG_PAYLOAD_FILE=\"${fd}\""
 			echo "CONFIG_DEBUG_SMI=y"
-			printf 'CONFIG_LOCALVERSION="ouroBIOS-v%d.%d.%d-mrc+update-test-%s"\n' \
-				$((ver >> 24)) $(((ver >> 16) & 0xff)) $((ver & 0xffff)) "${n}"
+			printf 'CONFIG_LOCALVERSION="ouroBIOS-%s-mrc+update-test-%s"\n' "$(fw_tag "${ver}")" "${n}"
 			if [ "${n}" = "${UPDATE_TEST_SCREEN}" ]; then
 				echo "CONFIG_GENERIC_LINEAR_FRAMEBUFFER=y"
 				echo "CONFIG_DRIVERS_EMULATION_QEMU_XRES=1920"

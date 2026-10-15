@@ -32,7 +32,7 @@ boot twice.
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- .../FirmwareUpdateDxe/FirmwareUpdate.c        | 582 +++++++++++++++++-
+ .../FirmwareUpdateDxe/FirmwareUpdate.c        | 606 +++++++++++++++++-
  .../FirmwareUpdateDxe/FirmwareUpdate.uni      |  13 +-
  .../FirmwareUpdateDxe/FirmwareUpdateDxe.inf   |   7 +-
  .../FirmwareUpdateDxe/FirmwareUpdateVfr.vfr   |  19 +-
@@ -43,10 +43,10 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  .../PlatformBootManagerLib/PlatformCapsule.c  |  58 +-
  UefiPayloadPkg/Library/SmmStoreLib/SmmStore.c |  50 ++
  UefiPayloadPkg/Library/SmmStoreLib/SmmStore.h |   7 +
- 11 files changed, 771 insertions(+), 7 deletions(-)
+ 11 files changed, 795 insertions(+), 7 deletions(-)
 
 diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
-index 89703514b..a102822ba 100644
+index 3c412f68d..e241a085d 100644
 --- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 +++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 @@ -13,10 +13,20 @@
@@ -152,7 +152,7 @@ index 89703514b..a102822ba 100644
  //
  // The files of the \EFI\UpdateCapsule folders that the next boot would read.
  //
-@@ -291,6 +352,376 @@ GetBiosVersion (
+@@ -303,6 +364,400 @@ GetBiosVersion (
    return String;
  }
  
@@ -391,8 +391,10 @@ index 89703514b..a102822ba 100644
 +}
 +
 +/**
-+  The version in the name of a release, "...-vX.Y.Z[-...]", numbered as the
-+  ESRT numbers the releases: (X << 24) | (Y << 16) | Z.
++  The version in the name of a release, "...-vX.Y.Z[-rcN][-...]", numbered
++  as the ESRT numbers the releases: X.Y.Z.R, one byte each. A release is
++  X.Y.Z.0, its candidate N the release before with R = N (v1.3.7-rc2 is
++  1.3.6.2), as tools/build.sh numbers them.
 +
 +  @retval TRUE   Found.
 +  @retval FALSE  The name has none.
@@ -407,6 +409,8 @@ index 89703514b..a102822ba 100644
 +  CONST CHAR16  *Text;
 +  CONST CHAR16  *Digit;
 +  UINT32        Part[3];
++  UINT32        Base;
++  UINT32        Candidate;
 +  UINTN         Index;
 +
 +  for (Text = Name; *Text != L'\0'; Text++) {
@@ -425,17 +429,37 @@ index 89703514b..a102822ba 100644
 +        break;
 +      }
 +
-+      for ( ; (*Digit >= L'0') && (*Digit <= L'9') && (Part[Index] <= MAX_UINT16); Digit++) {
++      for ( ; (*Digit >= L'0') && (*Digit <= L'9') && (Part[Index] <= MAX_UINT8); Digit++) {
 +        Part[Index] = Part[Index] * 10 + (*Digit - L'0');
 +      }
 +    }
 +
-+    if ((Index == ARRAY_SIZE (Part)) && ((*Digit == L'\0') || (*Digit == L'-') || (*Digit == L'+')) &&
-+        (Part[0] <= MAX_UINT8) && (Part[1] <= MAX_UINT8) && (Part[2] <= MAX_UINT16))
-+    {
-+      *Version = (Part[0] << 24) | (Part[1] << 16) | Part[2];
-+      return TRUE;
++    if ((Index != ARRAY_SIZE (Part)) || (Part[0] > MAX_UINT8) || (Part[1] > MAX_UINT8) || (Part[2] > MAX_UINT8)) {
++      continue;
 +    }
++
++    Base      = (Part[0] << 24) | (Part[1] << 16) | (Part[2] << 8);
++    Candidate = 0;
++    if ((Digit[0] == L'-') && (Digit[1] == L'r') && (Digit[2] == L'c') && (Digit[3] >= L'0') && (Digit[3] <= L'9')) {
++      if (Digit[3] == L'0') {
++        continue;                       // no -rc0, no -rc01: not a candidate
++      }
++
++      for (Digit += 3; (*Digit >= L'0') && (*Digit <= L'9') && (Candidate <= MAX_UINT8); Digit++) {
++        Candidate = Candidate * 10 + (*Digit - L'0');
++      }
++
++      if ((Candidate > MAX_UINT8) || (Base < 0x100)) {
++        continue;
++      }
++    }
++
++    if ((*Digit != L'\0') && (*Digit != L'-') && (*Digit != L'+')) {
++      continue;
++    }
++
++    *Version = (Candidate != 0) ? Base - 0x100 + Candidate : Base;
++    return TRUE;
 +  }
 +
 +  return FALSE;
@@ -529,7 +553,7 @@ index 89703514b..a102822ba 100644
  /**
    Fill in the values of the page.
  **/
-@@ -313,6 +744,7 @@ RefreshInfo (
+@@ -325,6 +780,7 @@ RefreshInfo (
    }
  
    GetSystemFirmwareInfo (&Info);
@@ -537,7 +561,7 @@ index 89703514b..a102822ba 100644
    if (!Info.Found) {
      return;
    }
-@@ -731,6 +1163,149 @@ UpdateFromDrive (
+@@ -743,6 +1199,149 @@ UpdateFromDrive (
    CpuDeadLoop ();
  }
  
@@ -687,7 +711,7 @@ index 89703514b..a102822ba 100644
  /**
    No varstore: nothing to extract.
  **/
-@@ -773,8 +1348,9 @@ FirmwareUpdateRouteConfig (
+@@ -785,8 +1384,9 @@ FirmwareUpdateRouteConfig (
  }
  
  /**
@@ -699,7 +723,7 @@ index 89703514b..a102822ba 100644
  **/
  STATIC
  EFI_STATUS
-@@ -804,6 +1380,8 @@ FirmwareUpdateCallback (
+@@ -816,6 +1416,8 @@ FirmwareUpdateCallback (
  
    if (QuestionId == FIRMWARE_UPDATE_INSTALL_QUESTION_ID) {
      UpdateFromDrive ();

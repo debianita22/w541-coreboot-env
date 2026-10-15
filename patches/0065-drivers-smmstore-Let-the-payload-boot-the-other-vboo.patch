@@ -48,11 +48,11 @@ Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
  src/drivers/smmstore/ramstage.c |  18 +++
- src/drivers/smmstore/smi.c      | 235 +++++++++++++++++++++++++++++++-
+ src/drivers/smmstore/smi.c      | 252 +++++++++++++++++++++++++++++++-
  src/include/smmstore.h          |  29 ++++
  src/security/vboot/vbnv.c       |  45 ++++++
  src/security/vboot/vbnv.h       |  14 ++
- 5 files changed, 340 insertions(+), 1 deletion(-)
+ 5 files changed, 357 insertions(+), 1 deletion(-)
 
 diff --git a/src/drivers/smmstore/ramstage.c b/src/drivers/smmstore/ramstage.c
 index 50767875..bff99df0 100644
@@ -87,7 +87,7 @@ index 50767875..bff99df0 100644
 +
 +BOOT_STATE_INIT_ENTRY(BS_OS_RESUME, BS_ON_ENTRY, lock_vboot_try_other, NULL);
 diff --git a/src/drivers/smmstore/smi.c b/src/drivers/smmstore/smi.c
-index 09ffbf5c..4976d121 100644
+index 09ffbf5c..bce7b9b6 100644
 --- a/src/drivers/smmstore/smi.c
 +++ b/src/drivers/smmstore/smi.c
 @@ -1,12 +1,18 @@
@@ -110,7 +110,7 @@ index 09ffbf5c..4976d121 100644
  
  /*
   * Check that the given range is legal.
-@@ -24,6 +30,222 @@ static int range_check(void *start, size_t size)
+@@ -24,6 +30,239 @@ static int range_check(void *start, size_t size)
  	return 0;
  }
  
@@ -209,11 +209,16 @@ index 09ffbf5c..4976d121 100644
 +	return found;
 +}
 +
-+/* The version in the name of a release, "...-vX.Y.Z[-...]", numbered as in the ESRT */
++/*
++ * The version in the name of a release, "...-vX.Y.Z[-rcN][-...]", numbered as
++ * in the ESRT: X.Y.Z.R, one byte each. A release is X.Y.Z.0, its candidate N
++ * the release before with R = N (v1.3.7-rc2 is 1.3.6.2), as tools/build.sh
++ * numbers them.
++ */
 +static bool release_version(const char *name, uint32_t *version)
 +{
 +	const char *p, *d;
-+	uint32_t part[3] = { 0 };
++	uint32_t part[3] = { 0 }, base, rc;
 +	int i;
 +
 +	for (p = name; *p; p++) {
@@ -225,14 +230,25 @@ index 09ffbf5c..4976d121 100644
 +				break;
 +			if (*d < '0' || *d > '9')
 +				break;
-+			for (part[i] = 0; *d >= '0' && *d <= '9' && part[i] <= 0xffff; d++)
++			for (part[i] = 0; *d >= '0' && *d <= '9' && part[i] <= 0xff; d++)
 +				part[i] = part[i] * 10 + (*d - '0');
 +		}
-+		if (i == 3 && (!*d || *d == '-' || *d == '+') &&
-+		    part[0] <= 0xff && part[1] <= 0xff && part[2] <= 0xffff) {
-+			*version = part[0] << 24 | part[1] << 16 | part[2];
-+			return true;
++		if (i != 3 || part[0] > 0xff || part[1] > 0xff || part[2] > 0xff)
++			continue;
++		base = part[0] << 24 | part[1] << 16 | part[2] << 8;
++		rc = 0;
++		if (d[0] == '-' && d[1] == 'r' && d[2] == 'c' && d[3] >= '0' && d[3] <= '9') {
++			if (d[3] == '0')	/* no -rc0, no -rc01: not a candidate */
++				continue;
++			for (d += 3; *d >= '0' && *d <= '9' && rc <= 0xff; d++)
++				rc = rc * 10 + (*d - '0');
++			if (rc > 0xff || base < 0x100)
++				continue;
 +		}
++		if (*d && *d != '-' && *d != '+')
++			continue;
++		*version = rc ? base - 0x100 + rc : base;
++		return true;
 +	}
 +	return false;
 +}
@@ -298,10 +314,11 @@ index 09ffbf5c..4976d121 100644
 +	}
 +#if CONFIG(DRIVERS_EFI_FW_INFO)
 +	if (version < CONFIG_DRIVERS_EFI_MAIN_FW_LSV) {
-+		printk(BIOS_WARNING, "SMMSTORE: %s, in slot %c, is older than the lowest supported version, %u.%u.%u\n",
++		printk(BIOS_WARNING, "SMMSTORE: %s, in slot %c, is older than the lowest supported version, %u.%u.%u.%u\n",
 +		       other, letter, (unsigned int)(CONFIG_DRIVERS_EFI_MAIN_FW_LSV >> 24),
 +		       (unsigned int)((CONFIG_DRIVERS_EFI_MAIN_FW_LSV >> 16) & 0xff),
-+		       (unsigned int)(CONFIG_DRIVERS_EFI_MAIN_FW_LSV & 0xffff));
++		       (unsigned int)((CONFIG_DRIVERS_EFI_MAIN_FW_LSV >> 8) & 0xff),
++		       (unsigned int)(CONFIG_DRIVERS_EFI_MAIN_FW_LSV & 0xff));
 +		return false;
 +	}
 +	return true;
@@ -333,7 +350,7 @@ index 09ffbf5c..4976d121 100644
  uint32_t smmstore_exec(uint8_t command, void *param)
  {
  	uint32_t ret = SMMSTORE_RET_FAILURE;
-@@ -32,6 +254,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+@@ -32,6 +271,14 @@ uint32_t smmstore_exec(uint8_t command, void *param)
  	if (smmstore_preprocess_cmd(&command, param))
  		return SMMSTORE_RET_SUCCESS;
  
@@ -348,7 +365,7 @@ index 09ffbf5c..4976d121 100644
  	if (!param)
  		return SMMSTORE_RET_FAILURE;
  
-@@ -89,6 +319,9 @@ uint32_t smmstore_exec(uint8_t command, void *param)
+@@ -89,6 +336,9 @@ uint32_t smmstore_exec(uint8_t command, void *param)
  		vbnv_mark_tried_slot_good();
  		ret = SMMSTORE_RET_SUCCESS;
  		break;
@@ -359,7 +376,7 @@ index 09ffbf5c..4976d121 100644
  		printk(BIOS_DEBUG, "Unknown SMM store command: 0x%02x\n", command);
  		ret = SMMSTORE_RET_UNSUPPORTED;
 diff --git a/src/include/smmstore.h b/src/include/smmstore.h
-index 2020fa32..b2739439 100644
+index 2020fa32..01f7c82d 100644
 --- a/src/include/smmstore.h
 +++ b/src/include/smmstore.h
 @@ -23,6 +23,35 @@
@@ -379,7 +396,7 @@ index 2020fa32..b2739439 100644
 + * option, an option ROM) cannot skip them: the name of the release in the
 + * other slot (COREBOOT_EXTRA_VERSION, in the "revision" file of its CBFS:
 + * "<name>-vX.Y.Z[-...]-<variant>[+...]") has the variant of the running one,
-+ * "mrc" or "nri", and a version, as (X << 24) | (Y << 16) | Z, not below
++ * "mrc" or "nri", and a version, numbered as in the ESRT (X.Y.Z.R), not below
 + * CONFIG_DRIVERS_EFI_MAIN_FW_LSV of the running firmware.
 + *
 + * For the setup of the payload: SMMSTORE_CMD_VBOOT_LOCK, which takes no

@@ -109,6 +109,18 @@ newer() {
 	[ "${a}" != "${b}" ] && [ "$(printf '%s\n' "${a}" "${b}" | sort -V | tail -n 1)" = "${a}" ]
 }
 
+# vX.Y.Z o vX.Y.Z-rcN (N da 1), numeri fino a 255: la versione dell'ESRT e
+# della capsula ne ha un byte ciascuno (fw_version di tools/build.sh, che per
+# le altre da' 0 e niente capsula). Una rc non di v0.0.0
+release_version_ok() {
+	local x y z r
+	[[ "$1" =~ ^v([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(-rc([1-9][0-9]{0,2}))?$ ]] || return 1
+	x=$((10#${BASH_REMATCH[1]})); y=$((10#${BASH_REMATCH[2]})); z=$((10#${BASH_REMATCH[3]}))
+	r=$((10#${BASH_REMATCH[5]:-0}))
+	[ "${x}" -le 255 ] && [ "${y}" -le 255 ] && [ "${z}" -le 255 ] && [ "${r}" -le 255 ] \
+		&& { [ "${r}" -eq 0 ] || [ $(( x + y + z )) -gt 0 ]; }
+}
+
 # Job setup: versione, se si pubblica, se e' una pre-release
 cmd_version() {
 	: "${GITHUB_EVENT_NAME:?}" "${GITHUB_REF_NAME:?}" "${GITHUB_RUN_NUMBER:?}" "${GITHUB_REPOSITORY:?}" "${DEFAULT_BRANCH:?}"
@@ -122,8 +134,8 @@ cmd_version() {
 		version="ci-${GITHUB_RUN_NUMBER}-$(git -C "${O}" rev-parse --short=7 HEAD)"
 	fi
 	if [ "${publish}" = true ]; then
-		[[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
-			|| fail "Versione" "versione '${version}': vX.Y.Z o vX.Y.Z-rcN"
+		release_version_ok "${version}" \
+			|| fail "Versione" "versione '${version}': vX.Y.Z o vX.Y.Z-rcN, numeri fino a 255 (la versione dell'ESRT ne ha un byte ciascuno)"
 		case "${version}" in
 			*-mrc|*-nri) fail "Versione" "${version}: la versione senza -mrc/-nri, i due tag li crea la release" ;;
 			*-*) prerelease=true ;;
