@@ -229,13 +229,14 @@ jobs:
       - uses: actions/checkout@v7
 
       # come il job build, senza jcat; mtools: l'ESP delle capsule su disco;
-      # clang e lld: l'applicazione UEFI che fa da sistema operativo
+      # clang e lld: l'applicazione UEFI che fa da sistema operativo; nasm e
+      # xxd: CSMWrap, che prepare compila anche qui
       - name: Pacchetti
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
             zlib1g-dev m4 curl git python3 uuid-dev imagemagick \
-            libssl-dev pkg-config qemu-system-x86 mtools clang lld >/dev/null
+            libssl-dev pkg-config qemu-system-x86 mtools clang lld nasm xxd >/dev/null
 
       - name: coreboot ed EDK2 pinnati, submodule, patch e blob
         run: ./tools/build.sh prepare
