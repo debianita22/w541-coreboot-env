@@ -1,0 +1,199 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 10:50:49 +0200
+Subject: [PATCH] UefiPayloadPkg: iPXE on its own, and a setup switch for it
+
+NETWORK_IPXE turned on NETWORK_ENABLE and NETWORK_DRIVER_ENABLE with it:
+the whole NetworkPkg, drivers, IP stack, RngDxe and Hash2Dxe, next to an
+application that has its own drivers and stack and uses none of it. For
+a payload that only wants iPXE that is a few hundred KiB for nothing,
+which matters in a fixed-size firmware slot. NETWORK_IPXE now puts the
+file in the volume and nothing else; NETWORK_PXE_BOOT and
+NETWORK_HTTP_BOOT_ENABLE still bring NetworkPkg.
+
+PlatformBootManagerLib registered the iPXE boot option whenever the
+file was there. Now it also reads the "ipxe_boot" switch of the coreboot
+setup menu, which CfrSetupMenuDxe keeps as a variable of
+gEficorebootNvDataGuid: off, the option is deleted instead; absent or
+on, as before.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../PlatformBootManager.c                     | 81 +++++++++++++++++--
+ .../PlatformBootManagerLib.inf                |  1 +
+ UefiPayloadPkg/UefiPayloadPkg.dsc             |  8 +-
+ UefiPayloadPkg/UefiPayloadPkg.fdf             | 18 +++--
+ 4 files changed, 90 insertions(+), 18 deletions(-)
+
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+index 58fc80bc7..6ec0d73b9 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManager.c
+@@ -225,6 +225,70 @@ PlatformRegisterFvBootOption (
+   }
+ }
+ 
++/**
++  Delete the boot options that start the file FileGuid of a firmware volume:
++  the ones PlatformRegisterFvBootOption made, whatever their description.
++
++  @param FileGuid   The GUID of the file in the firmware volume.
++**/
++STATIC
++VOID
++PlatformRemoveFvBootOption (
++  IN EFI_GUID  *FileGuid
++  )
++{
++  EFI_BOOT_MANAGER_LOAD_OPTION  *BootOptions;
++  UINTN                         BootOptionCount;
++  UINTN                         Index;
++  EFI_DEVICE_PATH_PROTOCOL      *Node;
++  EFI_GUID                      *NodeGuid;
++
++  BootOptions = EfiBootManagerGetLoadOptions (&BootOptionCount, LoadOptionTypeBoot);
++  for (Index = 0; Index < BootOptionCount; Index++) {
++    for (Node = BootOptions[Index].FilePath; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++      NodeGuid = EfiGetNameGuidFromFwVolDevicePathNode ((MEDIA_FW_VOL_FILEPATH_DEVICE_PATH *)Node);
++      if ((NodeGuid != NULL) && CompareGuid (NodeGuid, FileGuid)) {
++        EfiBootManagerDeleteLoadOptionVariable (BootOptions[Index].OptionNumber, LoadOptionTypeBoot);
++        break;
++      }
++    }
++  }
++
++  EfiBootManagerFreeLoadOptions (BootOptions, BootOptionCount);
++}
++
++/**
++  A switch of the firmware setup. CfrSetupMenuDxe keeps the options of the
++  coreboot setup menu (CFR) as variables of gEficorebootNvDataGuid, named
++  after the option, 0 or 1 for a switch: off only when the variable is there
++  and zero, so that an option the setup does not know, or has not written
++  yet, counts as on.
++
++  @param Name   The name of the option.
++
++  @retval TRUE   On, or not there.
++  @retval FALSE  Off.
++**/
++STATIC
++BOOLEAN
++PlatformSetupSwitch (
++  IN CONST CHAR16  *Name
++  )
++{
++  EFI_STATUS  Status;
++  UINT64      Value;
++  UINTN       Size;
++
++  Value  = 0;
++  Size   = sizeof (Value);
++  Status = gRT->GetVariable ((CHAR16 *)Name, &gEficorebootNvDataGuid, NULL, &Size, &Value);
++  if (EFI_ERROR (Status)) {
++    return TRUE;
++  }
++
++  return Value != 0;
++}
++
+ EFI_HANDLE BootManagerEntryNotifyHandle1;
+ EFI_HANDLE BootManagerEntryNotifyHandle2;
+ EFI_HANDLE BootManagerContinueNotifyHandle;
+@@ -494,14 +558,19 @@ PlatformBootManagerAfterConsole (
+   PlatformRegisterFvBootOption (&gUefiShellFileGuid, L"UEFI Shell", LOAD_OPTION_ACTIVE);
+ 
+   //
+-  // Register iPXE if the binary is present in the firmware volume.
++  // Register iPXE if the binary is present in the firmware volume and the
++  // setup has not turned it off (ipxe_boot); off, the option goes.
+   //
+   if ((PcdGetPtr (PcdiPXEFile) != NULL) && (PcdGetPtr (PcdiPXEOptionName) != NULL)) {
+-    PlatformRegisterFvBootOption (
+-      (EFI_GUID *)PcdGetPtr (PcdiPXEFile),
+-      (CHAR16 *)PcdGetPtr (PcdiPXEOptionName),
+-      LOAD_OPTION_ACTIVE
+-      );
++    if (PlatformSetupSwitch (L"ipxe_boot")) {
++      PlatformRegisterFvBootOption (
++        (EFI_GUID *)PcdGetPtr (PcdiPXEFile),
++        (CHAR16 *)PcdGetPtr (PcdiPXEOptionName),
++        LOAD_OPTION_ACTIVE
++        );
++    } else {
++      PlatformRemoveFvBootOption ((EFI_GUID *)PcdGetPtr (PcdiPXEFile));
++    }
+   }
+ 
+   if (FixedPcdGetBool (PcdBootManagerEscape)) {
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+index c4b5bdfe5..e322a95d4 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+@@ -66,6 +66,7 @@
+   gEfiCapsuleReportGuid           ## CONSUMES ## Variable:L"CapsuleLast"
+   gEfiFileInfoGuid                ## CONSUMES
+   gEfiPartTypeSystemPartGuid      ## CONSUMES
++  gEficorebootNvDataGuid          ## CONSUMES ## Variable:L"ipxe_boot"
+ 
+ [Protocols]
+   gEfiGenericMemTestProtocolGuid  ## CONSUMES
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 782b6c32b..999a0938d 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -218,10 +218,10 @@
+   DEFINE NETWORK_SNP_ENABLE             = TRUE
+ !endif
+ 
+-!if $(NETWORK_IPXE) == TRUE
+-  DEFINE NETWORK_ENABLE                 = TRUE
+-  DEFINE NETWORK_DRIVER_ENABLE          = TRUE
+-!endif
++#
++# iPXE brings its own network drivers and stack: NETWORK_IPXE alone adds
++# nothing of NetworkPkg. NETWORK_PXE_BOOT or NETWORK_HTTP_BOOT_ENABLE for that.
++#
+ 
+ !include NetworkPkg/NetworkDefines.dsc.inc
+ 
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.fdf b/UefiPayloadPkg/UefiPayloadPkg.fdf
+index 1c2fa620d..c1ce2cb8d 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.fdf
++++ b/UefiPayloadPkg/UefiPayloadPkg.fdf
+@@ -490,14 +490,6 @@ INF MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenuApp.inf
+ !if $(NETWORK_DRIVER_ENABLE) == TRUE
+   !include NetworkPkg/Network.fdf.inc
+   #
+-  # iPXE support
+-  #
+-  !if $(NETWORK_IPXE) == TRUE
+-    FILE FREEFORM = B68653C7-EEA1-4435-A199-A44F59E4476C {
+-      SECTION PE32 = UefiPayloadPkg/NetworkDrivers/ipxe.efi
+-    }
+-  !endif
+-  #
+   # Rng Protocol producer
+   #
+   INF  SecurityPkg/RandomNumberGenerator/RngDxe/RngDxe.inf
+@@ -509,6 +501,16 @@ INF MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenuApp.inf
+ !endif
+ !endif
+ 
++#
++# iPXE: an application with its own network drivers and stack, a boot
++# option of PlatformBootManagerLib (PcdiPXEFile)
++#
++!if $(NETWORK_IPXE) == TRUE
++  FILE FREEFORM = B68653C7-EEA1-4435-A199-A44F59E4476C {
++    SECTION PE32 = UefiPayloadPkg/NetworkDrivers/ipxe.efi
++  }
++!endif
++
+ #
+ # Network modules (only available on X64)
+ # Available at https://www.realtek.com and https://asix.com.tw
+-- 
+2.43.0
+

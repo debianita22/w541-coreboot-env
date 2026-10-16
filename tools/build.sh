@@ -111,6 +111,20 @@ SUBMODULES=(
 EDK2_REPO="https://github.com/mrchromebox/edk2"
 EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 
+# iPXE (patch 0075, CONFIG_EDK2_ENABLE_IPXE): il Makefile di coreboot lo
+# clona da git.ipxe.org al commit di IPXE_STABLE e lo compila; prepare lo
+# clona prima dal mirror GitHub, con i tag (git describe ne fa la versione),
+# allo stesso commit, letto dal Makefile. CSMWrap (patch 0076,
+# CONFIG_EDK2_ENABLE_CSMWRAP): un BIOS legacy come voce di boot, compilato
+# da prepare al commit pinnato con i suoi submodule e messo in w541/
+# dell'albero; la versione che scrive nel binario e' il commit, non la
+# data, e SeaBIOS non ci mette ora e host perche' l'albero e' pulito.
+IPXE_REPO="https://github.com/ipxe/ipxe.git"
+IPXE_SUBDIR="payloads/external/iPXE/ipxe"
+CSMWRAP_REPO="https://github.com/CSMWrap/CSMWrap.git"
+CSMWRAP_COMMIT="008f141f419db566f6f4ee23bfe394f6a4e638d7"
+CSMWRAP_TREE=w541/csmwrap.efi
+
 # I file di blobs/, assets/ e configs/ che vanno nell'albero (w541/<nome>): i
 # defconfig li cercano li'. mrc.bin lo usa solo la variante mrc.
 TREE_FILES=(blobs/ifd.bin blobs/gbe.bin blobs/me.bin blobs/mrc.bin
@@ -255,6 +269,7 @@ state() {
 		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
 		for p in "${TREE_FILES[@]}" "${VBOOT_KEYS[@]}"; do sha256sum "${p}"; done
 		sha256sum "${OPVK_FILE}"
+		echo "${CSMWRAP_COMMIT}"
 	) | sha256sum | cut -d' ' -f1
 }
 need_prepared() {
@@ -350,7 +365,7 @@ cmd_prepare() {
 	# il workspace di EDK2 (ignorati, o qui sotto in info/exclude).
 	git -C "${TREE}" am --abort >/dev/null 2>&1 || true
 	git -C "${TREE}" checkout -q --force --detach "${COREBOOT_COMMIT}"
-	printf '%s\n' '/build-*/' '/w541/' > "${TREE}/.git/info/exclude"
+	printf '%s\n' '/build-*/' '/w541/' "/${IPXE_SUBDIR}/" > "${TREE}/.git/info/exclude"
 	git -C "${TREE}" clean -q -fd
 
 	say "submodule"
@@ -403,7 +418,59 @@ cmd_prepare() {
 	echo "  ${OPVK_TREE}"
 
 	prepare_edk2
+	prepare_ipxe
+	prepare_csmwrap
 	state > "${STAMP}"
+}
+
+# iPXE al commit del Makefile di coreboot (IPXE_STABLE), dal mirror GitHub:
+# un clone intero, con i tag, nella cartella dove il Makefile lo cerca (lo
+# clonerebbe da git.ipxe.org); il ramo master che il suo checkout vuole
+prepare_ipxe() {
+	local d="${TREE}/${IPXE_SUBDIR}" commit
+	commit="$(sed -n 's/^STABLE_COMMIT_ID=\([0-9a-f]\{40\}\)$/\1/p' "${TREE}/payloads/external/iPXE/Makefile")"
+	[ -n "${commit}" ] || die "payloads/external/iPXE/Makefile: STABLE_COMMIT_ID non trovato"
+	say "iPXE ${commit:0:12}"
+	if [ ! -d "${d}/.git" ]; then
+		rm -rf "${d}"
+		git clone -q "${IPXE_REPO}" "${d}" || die "iPXE: clone da ${IPXE_REPO} fallito"
+	fi
+	if ! git -C "${d}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
+		git -C "${d}" fetch -q origin || die "iPXE: fetch da ${IPXE_REPO} fallito"
+	fi
+	git -C "${d}" checkout -q --force -B master "${commit}" || die "iPXE: ${commit} non c'e' in ${IPXE_REPO}"
+	git -C "${d}" clean -q -fdx
+	echo "  $(git -C "${d}" describe --tags --always --long --abbrev=1 --match 'v*')"
+}
+
+# CSMWrap al commit pinnato, i submodule ai loro, compilato con il
+# compilatore del sistema (il suo GNUmakefile vuole gcc e nasm, SeaBIOS
+# python3 e xxd) in WORK/csmwrap; il binario in w541/ dell'albero
+prepare_csmwrap() {
+	local d="${WORK}/csmwrap" t
+	say "CSMWrap ${CSMWRAP_COMMIT:0:12}"
+	for t in gcc nasm python3 xxd; do
+		command -v "${t}" > /dev/null || die "CSMWrap: serve ${t}"
+	done
+	if [ ! -d "${d}/.git" ]; then
+		rm -rf "${d}"
+		git clone -q --filter=blob:none --no-checkout "${CSMWRAP_REPO}" "${d}" \
+			|| die "CSMWrap: clone da ${CSMWRAP_REPO} fallito"
+	fi
+	if ! git -C "${d}" cat-file -e "${CSMWRAP_COMMIT}^{commit}" 2>/dev/null; then
+		git -C "${d}" fetch -q origin || die "CSMWrap: fetch da ${CSMWRAP_REPO} fallito"
+	fi
+	git -C "${d}" checkout -q --force --detach "${CSMWRAP_COMMIT}" || die "CSMWrap: ${CSMWRAP_COMMIT} non c'e'"
+	git -C "${d}" clean -q -fdx
+	git -C "${d}" submodule update -q --init --force --depth 1 || die "CSMWrap: submodule"
+	git -C "${d}" submodule foreach -q 'git clean -q -fdx'
+	if ! make -C "${d}" -j"${JOBS}" BUILD_VERSION="${CSMWRAP_COMMIT:0:7}" > "${d}/build.log" 2>&1; then
+		failure_report "CSMWrap" "${d}/build.log"
+		die "CSMWrap: build fallita (${d}/build.log)"
+	fi
+	[ -s "${d}/bin-x86_64/csmwrap.efi" ] || die "CSMWrap: bin-x86_64/csmwrap.efi non c'e'"
+	cp "${d}/bin-x86_64/csmwrap.efi" "${TREE}/${CSMWRAP_TREE}"
+	echo "  ${CSMWRAP_TREE} ($(stat -c%s "${TREE}/${CSMWRAP_TREE}") byte, SeaBIOS $(git -C "${d}/seabios" rev-parse --short=7 HEAD))"
 }
 
 # EDK2 al commit dei defconfig, i submodule ai loro commit, poi le patch
@@ -1143,7 +1210,9 @@ update_test_build() {
 		echo "CONFIG_DRIVERS_EFI_MAIN_FW_VERSION=${UPDATE_TEST_LSV}"
 		echo "CONFIG_OPTION_BACKEND_NONE=y"
 		echo "CONFIG_PAYLOAD_EDK2=y"
-		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig" || true
+		# le opzioni EDK2 del W541, senza iPXE e CSMWrap: la prova non li usa
+		# e la FD di una build DEBUG non li contiene
+		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig" | grep -Ev 'IPXE|CSMWRAP' || true
 		echo "CONFIG_EDK2_DEBUG=y"
 		# il setup grafico del W541 (LvglPkg): con la seriale sarebbe di testo
 		echo "CONFIG_EDK2_USE_LVGL_RENDERER=y"

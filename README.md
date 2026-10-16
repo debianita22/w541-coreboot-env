@@ -116,7 +116,7 @@ Inside coreboot:
 
   | Category | Settings |
   |---|---|
-  | *General* | model, machine type, serial number and UUID (from the VPD), processor, memory and firmware versions; beeps and volume; NMI |
+  | *General* | model, machine type, serial number and UUID (from the VPD), processor, memory and firmware versions; the iPXE and CSMWrap boot entries; beeps and volume; NMI |
   | *Energy Saver* | battery charge thresholds (OS controlled, 100%, 80%, 60%), Intel SpeedStep, Turbo Boost, C-states, CPU PL1/PL2 limits, cooling policy (active or passive), USB always on, power-on after power failure |
   | *Security* | BIOS Lock (flash writable only by the firmware, off by default), Firmware protection (the read-only part locked at every boot, on by default), memory cleared at power-on, Intel VT-x, VT-d, Intel ME, supervisor password (asked for before the setup menu opens) |
   | *Keyboard* | Fn/Ctrl swap, F1-F12 or special keys, sticky Fn, keyboard backlight, TrackPoint, touchpad |
@@ -151,6 +151,21 @@ Inside coreboot:
   of the setup installs the capsule from a USB drive and, from v1.3.4, goes
   back to the release in the other slot
   ([docs/update.md](docs/update.md));
+- network boot with iPXE (from v1.3.6): the *iPXE Network Boot* entry of
+  the boot menu drives the Intel I217 Ethernet controller itself (iPXE
+  with its Intel driver, no UEFI network stack), does PXE and HTTP and
+  runs iPXE scripts; Ctrl-B at its banner opens its shell. Last in the boot
+  order, so it runs when chosen or when nothing else boots; *General* →
+  *Boot* in the setup turns it off;
+- legacy BIOS boot with CSMWrap (from v1.3.6): the *CSMWrap Legacy Boot*
+  entry of the boot menu starts [CSMWrap](https://github.com/CSMWrap/CSMWrap),
+  which runs the CSM and the VGA BIOS of SeaBIOS as a UEFI application: INT
+  13h over the disks and USB drives the firmware sees, INT 10h on the
+  firmware's framebuffer (there is no Intel VBIOS in this firmware), E820,
+  ACPI and SMBIOS from the firmware, for the operating systems and tools
+  that do not boot from UEFI. A legacy BIOS runs unsigned code, so the
+  entry exists only while Secure Boot is off; *General* → *Boot* in the
+  setup turns it off;
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -204,7 +219,7 @@ Debian or Ubuntu:
 
 ```sh
 sudo apt install build-essential bison flex gnat libncurses-dev zlib1g-dev m4 \
-    curl git python3 uuid-dev imagemagick
+    curl git python3 uuid-dev imagemagick nasm xxd
 git clone https://github.com/debianita22/ourobios.git
 cd ourobios
 tools/build.sh                      # both variants, into dist/
@@ -213,9 +228,11 @@ tools/build.sh                      # both variants, into dist/
 `tools/build.sh` fetches coreboot at the pinned commit into `work/coreboot`,
 applies `patches/series`, copies the blobs (checked against their
 `SHA256SUMS`), fetches MrChromebox's EDK2 at the commit of the defconfigs and
-applies `patches/edk2` and `patches/lvglpkg`, builds the coreboot cross
-toolchain the first time (30-60 minutes, then reused), builds each variant
-and runs `tools/verify-rom.sh` on it. Useful options:
+applies `patches/edk2` and `patches/lvglpkg`, fetches iPXE at the commit
+coreboot pins and CSMWrap at the commit `tools/build.sh` pins and builds
+the latter with the system compiler (`nasm`, `xxd`), builds the coreboot
+cross toolchain the first time (30-60 minutes, then reused), builds each
+variant and runs `tools/verify-rom.sh` on it. Useful options:
 
 ```sh
 tools/build.sh --variant mrc                  # one variant
@@ -243,8 +260,14 @@ reach the payload, the payload must draw, Esc must open the setup, and the
 setup must open a page and go back, without a reset. Then, in two more
 boots, the UEFI Shell writes a test variable with `setvar`: it must be in
 the SMMSTORE store of the emulated flash, and after the reboot the second
-write must find and delete the first copy, leaving one. It needs
-`qemu-system-x86`; screenshots and the serial console go to
+write must find and delete the first copy, leaving one. Then the two boot
+entries of the firmware volume, each chosen with `BootNext` from the
+Shell: iPXE, with an e1000 on QEMU's user network, must get an address
+from its DHCP, download the script the DHCP names over TFTP and run it
+(the script chains a second one, whose TFTP request in the traffic dump
+is the proof); CSMWrap, with two CPUs and a SATA disk, must boot the
+disk's master boot record, which writes a line on the serial port. It
+needs `qemu-system-x86`; screenshots and the serial console go to
 `work/smoke-<variant>`. Nothing of the W541 itself runs there: it checks the
 payload and coreboot's common code, not the board.
 

@@ -19,7 +19,17 @@
 #      la variabile deve essere nello store del flash, con i suoi dati. Al
 #      secondo avvio la Shell la riscrive con un altro valore: il driver deve
 #      trovare la copia di prima nel flash e cancellarla, e ne deve restare
-#      una sola valida.
+#      una sola valida;
+#   7. iPXE: la voce "iPXE Network Boot" (il suo numero Boot#### letto dallo
+#      store) messa in BootNext dalla Shell, poi un avvio con una scheda
+#      e1000 sulla rete utente di QEMU, che fa da DHCP e TFTP: iPXE deve
+#      prendere l'indirizzo, scaricare lo script del DHCP (opzione 67) ed
+#      eseguirlo; lo script ne chiama un altro, e la richiesta TFTP di quel
+#      secondo file nel pcap del traffico (filter-dump) e' la prova;
+#   8. CSMWrap: la voce "CSMWrap Legacy Boot" in BootNext, poi un avvio con
+#      due CPU (CSMWrap tiene un core per i suoi servizi BIOS) e un disco
+#      SATA il cui MBR scrive una riga sulla porta seriale: il BIOS legacy
+#      deve avviarlo (INT 13h sui dischi del firmware).
 # Le schermate di ogni passo vanno in DIR (PNG), con la console seriale.
 #
 # Il W541 non si emula: qui girano il payload (UEFIPayloadPkg, LvglPkg, le
@@ -260,6 +270,75 @@ VAR_DATA = ("4F55524F", "424F4F5432")      # "OURO", "BOOT2"
 VAR_VALID = (0x3F, 0x3E)                   # VAR_ADDED, e in cancellazione
 
 
+def boot_option_number(flash, description):
+    """Il numero della voce Boot#### dello store con quella descrizione
+    (UCS-2 dopo gli 6 byte di attributi e lunghezza del device path)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import update                           # noqa: E402 (tools/update.py)
+    with open(flash, "rb") as f:
+        data = f.read()
+    areas = update.fmap_areas(data)
+    off, size = areas["SMMSTORE"]
+    region = data[off:off + size]
+    found, _ = update.var_store(region)
+    want = description.encode("utf-16-le") + b"\0\0"
+    for v in found:
+        if v["state"] == VAR_VALID[0] and len(v["name"]) == 8 and v["name"].startswith("Boot") \
+                and v["name"][4:].isalnum() and v["guid"] == GLOBAL_GUID:
+            if region[v["data"] + 6:v["data"] + 6 + len(want)] == want:
+                return int(v["name"][4:], 16)
+    return None
+
+
+# Lo script che il DHCP di QEMU indica a iPXE (bootfile), e il secondo che
+# questo chiama: la richiesta TFTP del secondo nel pcap prova che il primo
+# e' stato scaricato ed eseguito
+IPXE_SCRIPT = "smoke.ipxe"
+IPXE_SCRIPT_2 = "smoke-ok.ipxe"
+# Quello che l'MBR di prova scrive sulla seriale quando il BIOS legacy lo avvia
+CSM_MARK = b"OUROBIOS-CSM-SMOKE"
+GLOBAL_GUID = uuid.UUID("8be4df61-93ca-11d2-aa0d-00e098032b8c").bytes_le
+
+
+def mbr_image(path):
+    """Un disco di 1 MiB con un MBR che scrive CSM_MARK sulla porta seriale
+    COM1 (0x3f8, senza inizializzarla: QEMU la accetta cosi') e si ferma."""
+    code = bytearray()
+    code += b"\xfa"                                  # cli
+    code += b"\x31\xc0"                              # xor ax, ax
+    code += b"\x8e\xd8"                              # mov ds, ax
+    code += b"\xbe" + (0x7c00 + 0x20).to_bytes(2, "little")  # mov si, msg
+    code += b"\xba\xf8\x03"                          # mov dx, 0x3f8
+    # loop: lodsb; test al, al; jz halt; out dx, al; jmp loop
+    code += b"\xac\x84\xc0\x74\x03\xee\xeb\xf8"
+    code += b"\xf4\xeb\xfd"                          # halt: hlt; jmp halt
+    assert len(code) <= 0x20
+    code += b"\0" * (0x20 - len(code))
+    code += CSM_MARK + b"\r\n\0"
+    sector = bytes(code) + b"\0" * (510 - len(code)) + b"\x55\xaa"
+    with open(path, "wb") as f:
+        f.write(sector + b"\0" * (1024 * 1024 - 512))
+
+
+def tftp_requests(pcap):
+    """I file chiesti in TFTP (RRQ) nel pcap di filter-dump."""
+    with open(pcap, "rb") as f:
+        data = f.read()
+    names = []
+    off = 24                                        # il global header
+    while off + 16 <= len(data):
+        incl = int.from_bytes(data[off + 8:off + 12], "little")
+        pkt = data[off + 16:off + 16 + incl]
+        off += 16 + incl
+        # Ethernet, IPv4, UDP, poi TFTP: opcode 1 (RRQ), nome, 0, modo
+        if len(pkt) > 42 and pkt[12:14] == b"\x08\x00" and pkt[23] == 17:
+            ihl = (pkt[14] & 0xf) * 4
+            udp = pkt[14 + ihl:]
+            if len(udp) > 10 and udp[8:10] == b"\x00\x01":
+                names.append(udp[10:udp.index(b"\0", 10)].decode("ascii", "replace"))
+    return names
+
+
 def store_copies(flash):
     """Le copie della variabile di prova nello store di SMMSTORE della ROM:
     [(stato, attributi, dati)]."""
@@ -366,6 +445,56 @@ def run(rom, out, timeout):
                     raise Fail("la copia di prima di %s non c'e' piu' nello store" % VAR_NAME)
                 steps.append("%s  dopo un riavvio: riscritta, la copia di prima cancellata, una sola "
                              "valida" % at())
+
+        # 3. iPXE e CSMWrap: le voci della FV che il boot manager registra.
+        # Senza dischi il payload va alla Shell: da li' BootNext sceglie la
+        # voce per l'avvio dopo (setvar sul nome, letto dallo store)
+        def boot_next(tag, description):
+            n = boot_option_number(sm.flash, description)
+            if n is None:
+                raise Fail("nello store nessuna voce Boot#### \"%s\": il boot manager non l'ha registrata"
+                           % description)
+            sm.boot(tag)
+            to_payload()
+            shell = sm.stable("il payload non e' arrivato alla Shell UEFI", timeout)
+            if shell.colors() > 8:
+                raise Fail("senza dischi il payload non si e' fermato nella Shell (%d colori)" % shell.colors())
+            sm.type("setvar BootNext -guid %s -bs -rt -nv =%02X00\n" % (str(uuid.UUID(bytes_le=GLOBAL_GUID)), n))
+            sm.stable("dopo setvar la Shell non e' tornata al prompt", timeout)
+            sm.halt()
+            return n
+
+        n = boot_next("shell-ipxe", "iPXE Network Boot")
+        tftp = os.path.join(sm.tmp, "tftp")
+        os.makedirs(tftp, exist_ok=True)
+        with open(os.path.join(tftp, IPXE_SCRIPT), "w") as f:
+            f.write("#!ipxe\necho ouroBIOS smoke: ${net0/ip} from ${next-server}\nchain tftp://${next-server}/%s\n"
+                    % IPXE_SCRIPT_2)
+        with open(os.path.join(tftp, IPXE_SCRIPT_2), "w") as f:
+            f.write("#!ipxe\necho ouroBIOS smoke: second script\nexit\n")
+        pcap = os.path.join(out, "ipxe.pcap")
+        sm.boot("ipxe", ["-netdev", "user,id=n0,tftp=%s,bootfile=%s" % (tftp, IPXE_SCRIPT),
+                         "-device", "e1000,netdev=n0", "-object", "filter-dump,id=d0,netdev=n0,file=" + pcap])
+        to_payload()
+        got = sm.wait("iPXE non ha chiesto in TFTP %s, poi %s (pcap in %s)" % (IPXE_SCRIPT, IPXE_SCRIPT_2, pcap),
+                      lambda: (sm.alive(), IPXE_SCRIPT_2 in tftp_requests(pcap))[1], timeout)
+        sm.shot("ipxe")
+        sm.halt()
+        steps.append("%s  iPXE (Boot%04X): DHCP dalla rete di QEMU, %s scaricato in TFTP ed eseguito, "
+                     "che ha chiesto %s" % (at(), n, IPXE_SCRIPT, IPXE_SCRIPT_2))
+
+        n = boot_next("shell-csm", "CSMWrap Legacy Boot")
+        disk = os.path.join(sm.tmp, "legacy.img")
+        mbr_image(disk)
+        # due CPU: CSMWrap tiene un core per i suoi servizi BIOS (il "BIOS
+        # proxy": senza un AP si ferma, "BIOS proxy initialization failed")
+        sm.boot("csmwrap", ["-smp", "2", "-drive", "file=%s,format=raw,if=ide" % disk])
+        to_payload()
+        sm.wait("CSMWrap non ha avviato l'MBR del disco (niente %s sulla seriale)" % CSM_MARK.decode(),
+                lambda: (sm.alive(), CSM_MARK.decode() in sm.serial_text())[1], timeout)
+        sm.shot("csmwrap")
+        steps.append("%s  CSMWrap (Boot%04X): il BIOS legacy ha avviato l'MBR del disco SATA, che ha scritto "
+                     "sulla seriale" % (at(), n))
         return steps
     finally:
         sm.close()

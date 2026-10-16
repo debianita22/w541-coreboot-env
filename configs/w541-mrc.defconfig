@@ -141,3 +141,10 @@ CONFIG_EDK2_TAG_OR_REV="9c0cb3a58343786240c38b2d115c200351d2882b"
 CONFIG_EDK2_BOOTSPLASH_FILE="w541/bootsplash.bmp"
 CONFIG_EDK2_BOOT_MANAGER_ESCAPE=y
 CONFIG_EDK2_FOLLOW_BGRT_SPEC=y
+# iPXE (patch 0075: the Intel driver only, the I217 of the W541) and
+# CSMWrap, a legacy BIOS (patch 0076; the file is built by tools/build.sh
+# prepare), as boot options; the setup can turn each off (patch 0077)
+CONFIG_EDK2_ENABLE_IPXE=y
+CONFIG_IPXE_EFI_IMAGE="intel.efi"
+CONFIG_EDK2_ENABLE_CSMWRAP=y
+CONFIG_EDK2_CSMWRAP_FILE="w541/csmwrap.efi"

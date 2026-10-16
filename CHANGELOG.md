@@ -37,6 +37,22 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   of the latest release, candidates included, from the assets of the fixed
   `testing` entry of the releases page, which every release replaces when
   it is the highest so far ([docs/update.md](docs/update.md#the-fwupd-remote)).
+- Network boot: *iPXE Network Boot* in the boot menu (iPXE 2025.12 with its
+  Intel driver, for the I217 of the W541, and nothing of EDK2's network
+  stack: patches 0075 and `edk2/0022`), last in the boot order. PXE, HTTP
+  and iPXE scripts; Ctrl-B at the banner for its shell.
+- Legacy BIOS boot: *CSMWrap Legacy Boot* in the boot menu
+  ([CSMWrap](https://github.com/CSMWrap/CSMWrap), the CSM and VGA BIOS of
+  SeaBIOS as a UEFI application, built by `tools/build.sh prepare`:
+  patches 0076 and `edk2/0023`), for what does not boot from UEFI, from
+  the disks and USB drives the firmware sees. Only while Secure Boot is
+  off.
+- *General* → *Boot* in the setup turns each of the two off (patch 0077).
+  The smoke test in QEMU starts both from the boot manager: iPXE gets its
+  address from QEMU's DHCP, downloads a script over TFTP and runs it;
+  CSMWrap boots the master boot record of a SATA disk. The payload's
+  image in memory grows to 11 MiB (patch `edk2/0024`); in the flash slots
+  about 210 KiB stay free, 507 before.
 - Reproducible builds: the release build of each variant is built a second
   time from scratch in CI and compared bit by bit with the first
   (`tools/build.sh repro`). The build date was already the date of the

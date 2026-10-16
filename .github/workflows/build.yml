@@ -140,13 +140,13 @@ jobs:
       # gnat: Ada nel crossgcc (libgfxinit); imagemagick e uuid-dev: EDK2;
       # jcat: la firma del pacchetto fwupd; libssl-dev e pkg-config: futility
       # di vboot (libcrypto), che firma gli slot RW; qemu-system-x86: la prova
-      # di fumo del payload
+      # di fumo del payload; nasm e xxd: CSMWrap (prepare) e iPXE
       - name: Pacchetti
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential bison flex gnat libncurses-dev \
             zlib1g-dev m4 curl git python3 uuid-dev imagemagick jcat \
-            libssl-dev pkg-config qemu-system-x86 >/dev/null
+            libssl-dev pkg-config qemu-system-x86 nasm xxd >/dev/null
           gcc --version | head -1
           gnatmake --version | head -1
 

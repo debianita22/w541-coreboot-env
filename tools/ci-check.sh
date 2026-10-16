@@ -483,10 +483,11 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 	fi
 	# i file che i defconfig cercano in w541/ sono quelli che build.sh copia
 	# (TREE_FILES in w541/, VBOOT_KEYS in w541/vboot/) o vi scrive (la chiave
-	# privata degli slot)
+	# privata degli slot, il CSMWrap compilato)
 	tree_files="$(sed -n '/^TREE_FILES=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^.*/||p'
 		sed -n '/^VBOOT_KEYS=(/,/)/p' tools/build.sh | tr ' \t()' '\n\n\n\n' | sed -n 's|^keys/vboot/|vboot/|p'
-		sed -n 's|^VBOOT_PRIVKEY_TREE=w541/||p' tools/build.sh)"
+		sed -n 's|^VBOOT_PRIVKEY_TREE=w541/||p' tools/build.sh
+		sed -n 's|^CSMWRAP_TREE=w541/||p' tools/build.sh)"
 	for f in $(sed -n 's/^CONFIG_[A-Z0-9_]*="w541\/\([^"]*\)"$/\1/p' configs/*.defconfig | sort -u); do
 		grep -qxF "${f}" <<< "${tree_files}" || bad "w541/${f} nei defconfig ma non in TREE_FILES di tools/build.sh"
 	done

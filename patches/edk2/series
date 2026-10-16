@@ -19,3 +19,6 @@
 0019-SecurityPkg-TcgDxe-Log-into-the-bootloader-s-TCPA-ta.patch
 0020-UefiPayloadPkg-Go-back-to-the-other-vboot-slot-from-.patch
 0021-BaseTools-No-debug-directory-in-the-PE-images-of-a-r.patch
+0022-UefiPayloadPkg-iPXE-on-its-own-and-a-setup-switch-fo.patch
+0023-UefiPayloadPkg-CSMWrap-a-legacy-BIOS-as-a-boot-optio.patch
+0024-UefiPayloadPkg-An-11-MiB-FD-for-the-release-build-to.patch

@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 10:48:05 +0200
+Subject: [PATCH] mb/lenovo/haswell: Add the boot options of the payload to the
+ setup
+
+Two switches in a "Boot" form of the General category, for the boot
+options EDK2 registers from its firmware volume: "Network boot (iPXE)"
+(ipxe_boot) and "Legacy boot (CSMWrap)" (csmwrap_boot), each shown only
+when its payload option is built in (EDK2_ENABLE_IPXE,
+EDK2_ENABLE_CSMWRAP), both on by default. coreboot does not read them:
+the boot manager of the payload does, from the variables the setup keeps
+them in, and leaves the boot option out when one is off.
+
+TEST=Built for Lenovo ThinkPad W541; the form in the setup on QEMU q35.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ src/mainboard/lenovo/haswell/cfr.c | 37 ++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
+index 94aaed170..c27c612dd 100644
+--- a/src/mainboard/lenovo/haswell/cfr.c
++++ b/src/mainboard/lenovo/haswell/cfr.c
+@@ -203,6 +203,42 @@ static const struct sm_object general_about = SM_DECLARE_FORM({
+ 	},
+ });
+ 
++/*
++ * The boot options of the payload: its boot manager reads them (EDK2,
++ * PlatformBootManagerLib), coreboot does not.
++ */
++static const struct sm_object ipxe_boot = SM_DECLARE_BOOL({
++	.flags		= CONFIG(EDK2_ENABLE_IPXE) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "ipxe_boot",
++	.ui_name	= "Network boot (iPXE)",
++	.ui_helptext	= "The iPXE entry of the boot menu: PXE, HTTP and iPXE\n"
++			  "scripts over the Ethernet port. Last in the boot order:\n"
++			  "it runs when chosen, or when nothing else boots.",
++	.default_value	= true,
++});
++
++static const struct sm_object csmwrap_boot = SM_DECLARE_BOOL({
++	.flags		= CONFIG(EDK2_ENABLE_CSMWRAP) ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.opt_name	= "csmwrap_boot",
++	.ui_name	= "Legacy boot (CSMWrap)",
++	.ui_helptext	= "The CSMWrap entry of the boot menu: a legacy BIOS (the\n"
++			  "CSM of SeaBIOS) for the operating systems and tools that\n"
++			  "do not boot from UEFI, from the disks and USB drives.\n"
++			  "Needs Secure Boot off: hidden while it is on.",
++	.default_value	= true,
++});
++
++static const struct sm_object general_boot = SM_DECLARE_FORM({
++	.flags		= (CONFIG(EDK2_ENABLE_IPXE) || CONFIG(EDK2_ENABLE_CSMWRAP))
++			  ? 0 : CFR_OPTFLAG_SUPPRESS,
++	.ui_name	= "Boot",
++	.obj_list	= (const struct sm_object *[]) {
++		&ipxe_boot,
++		&csmwrap_boot,
++		NULL
++	},
++});
++
+ static const struct sm_object general_sound = SM_DECLARE_FORM({
+ 	.ui_name	= "Sound",
+ 	.obj_list	= (const struct sm_object *[]) {
+@@ -510,6 +546,7 @@ static struct sm_obj_form general = {
+ 	.ui_name = "General",
+ 	.obj_list = (const struct sm_object *[]) {
+ 		&general_about,
++		&general_boot,
+ 		&general_sound,
+ 		&general_advanced,
+ 		NULL
+-- 
+2.43.0
+

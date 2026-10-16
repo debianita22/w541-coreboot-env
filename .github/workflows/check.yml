@@ -46,6 +46,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # nasm e xxd: CSMWrap, che prepare compila con il gcc del sistema
+      - name: Pacchetti
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm xxd >/dev/null
+
       # solo Kconfig: gcc del sistema (--toolchain host), niente crossgcc
       - name: tools/build.sh prepare config
         run: ./tools/build.sh --toolchain host prepare config

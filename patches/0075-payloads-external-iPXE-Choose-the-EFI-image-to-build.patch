@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 10:46:40 +0200
+Subject: [PATCH] payloads/external/iPXE: Choose the EFI image to build
+
+With IPXE_BUILD_EFI the build is always bin-x86_64-efi-sb/ipxe.efi, with
+every network driver iPXE has: 700 KiB, 325 KiB compressed in the payload,
+for a board with one network chip. iPXE builds an image with one driver
+too, bin-x86_64-efi-sb/<driver>.efi, a third of the size (intel.efi:
+210 KiB, 104 KiB compressed). Add IPXE_EFI_IMAGE, the file name under
+bin-x86_64-efi-sb/, default ipxe.efi as before.
+
+TEST=Built for Lenovo ThinkPad W541 with IPXE_EFI_IMAGE="intel.efi":
+intel.efi in the payload; the same payload on QEMU q35 with an e1000,
+started from the boot manager: DHCP, an iPXE script over TFTP, executed.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ payloads/external/Makefile.mk   | 1 +
+ payloads/external/iPXE/Kconfig  | 9 +++++++++
+ payloads/external/iPXE/Makefile | 2 +-
+ 3 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/payloads/external/Makefile.mk b/payloads/external/Makefile.mk
+index 859e555e7..a3660bb1a 100644
+--- a/payloads/external/Makefile.mk
++++ b/payloads/external/Makefile.mk
+@@ -416,6 +416,7 @@ payloads/external/iPXE/ipxe/ipxe.rom ipxe: $(DOTCONFIG) $(IPXE_CONFIG_SCRIPT)
+ 	CONFIG_IPXE_TRUST_CMD=$(CONFIG_IPXE_TRUST_CMD) \
+ 	CFLAGS_x86_64="$(CFLAGS_x86_64)" \
+ 	CONFIG_IPXE_BUILD_EFI=$(CONFIG_EDK2_ENABLE_IPXE) \
++	CONFIG_IPXE_EFI_IMAGE=$(call strip_quotes,$(CONFIG_IPXE_EFI_IMAGE)) \
+ 
+ # LinuxBoot
+ LINUXBOOT_CROSS_COMPILE_ARCH-$(CONFIG_LINUXBOOT_X86)        = x86_32
+diff --git a/payloads/external/iPXE/Kconfig b/payloads/external/iPXE/Kconfig
+index 31686c891..cd90e0d93 100644
+--- a/payloads/external/iPXE/Kconfig
++++ b/payloads/external/iPXE/Kconfig
+@@ -127,6 +127,15 @@ config IPXE_BUILD_EFI
+ 	  Build iPXE for EFI target, enabling it to be executed from EDK2. If not
+ 	  selected, iPXE will be built for use with legacy BIOS.
+ 
++config IPXE_EFI_IMAGE
++	string "iPXE EFI image to build"
++	depends on IPXE_BUILD_EFI
++	default "ipxe.efi"
++	help
++	  The image of bin-x86_64-efi-sb/ to build: ipxe.efi has every network
++	  driver, <driver>.efi (intel.efi, realtek.efi...) only that driver, a
++	  third of the size. The drivers are listed in src/drivers/net/ of iPXE.
++
+ endif # BUILD_IPXE
+ 
+ endmenu
+diff --git a/payloads/external/iPXE/Makefile b/payloads/external/iPXE/Makefile
+index a9fb43f84..4844ab03b 100644
+--- a/payloads/external/iPXE/Makefile
++++ b/payloads/external/iPXE/Makefile
+@@ -12,7 +12,7 @@ project_dir=ipxe
+ project_git_repo=https://git.ipxe.org/ipxe.git
+ 
+ ifeq ($(CONFIG_IPXE_BUILD_EFI),y)
+-IPXE_BUILD_TARGET := bin-x86_64-efi-sb/ipxe.efi
++IPXE_BUILD_TARGET := bin-x86_64-efi-sb/$(CONFIG_IPXE_EFI_IMAGE)
+ # Workaround problems with unrecognized ipxe/util/elf2efi relocations
+ PXE_MAKE_OPTS += EXTRA_CFLAGS="$(CFLAGS_x86_64) -fno-pic"
+ else
+-- 
+2.43.0
+

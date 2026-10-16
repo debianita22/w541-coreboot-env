@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 10:48:04 +0200
+Subject: [PATCH] payloads/external/edk2: Include CSMWrap as a boot option
+
+CSMWrap (https://github.com/CSMWrap/CSMWrap) is a UEFI application that
+boots legacy BIOS software on a UEFI-only firmware with the CSM and the
+VGA BIOS of SeaBIOS: INT 10h, INT 13h and the other services, E820 from
+the UEFI memory map, ACPI and SMBIOS passed through. It is what a board
+without a CSM of its own can offer for the operating systems and tools
+that do not boot from UEFI.
+
+Add EDK2_ENABLE_CSMWRAP, which puts a csmwrap.efi built separately
+(EDK2_CSMWRAP_FILE) into the payload, as EDK2_ENABLE_IPXE does with
+iPXE, with -D CSMWRAP=TRUE and the name of the boot option in
+PcdCsmWrapOptionName for the edk2 tree, which registers it.
+
+TEST=Built for Lenovo ThinkPad W541: csmwrap.efi in the payload; the
+same payload on QEMU q35 with two CPUs and a SATA disk, the option
+started from the boot manager: SeaBIOS boots the MBR of the disk.
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ payloads/external/Makefile.mk   |  9 ++++++++-
+ payloads/external/edk2/Kconfig  | 26 ++++++++++++++++++++++++++
+ payloads/external/edk2/Makefile | 15 ++++++++++++++-
+ 3 files changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/payloads/external/Makefile.mk b/payloads/external/Makefile.mk
+index a3660bb1a..6f54e93da 100644
+--- a/payloads/external/Makefile.mk
++++ b/payloads/external/Makefile.mk
+@@ -262,9 +262,16 @@ EDK2_PAYLOAD_ARGS = \
+ 	MFLAGS= MAKEFLAGS= \
+ 	CONFIG_EDK2_IPXE=$(CONFIG_EDK2_ENABLE_IPXE) \
+ 	CONFIG_EDK2_IPXE_OPTION_NAME=$(CONFIG_EDK2_IPXE_OPTION_NAME) \
++	CONFIG_EDK2_CSMWRAP=$(CONFIG_EDK2_ENABLE_CSMWRAP) \
++	CONFIG_EDK2_CSMWRAP_FILE=$(abspath $(call strip_quotes,$(CONFIG_EDK2_CSMWRAP_FILE))) \
++	CONFIG_EDK2_CSMWRAP_OPTION_NAME=$(CONFIG_EDK2_CSMWRAP_OPTION_NAME) \
+ 	CONFIG_EDK2_USE_LVGL_RENDERER=$(CONFIG_EDK2_USE_LVGL_RENDERER)
+ 
+-$(obj)/UEFIPAYLOAD.fd: $(DOTCONFIG) $(IPXE_EFI)
++ifeq ($(CONFIG_EDK2_ENABLE_CSMWRAP),y)
++CSMWRAP_EFI := $(call strip_quotes,$(CONFIG_EDK2_CSMWRAP_FILE))
++endif
++
++$(obj)/UEFIPAYLOAD.fd: $(DOTCONFIG) $(IPXE_EFI) $(CSMWRAP_EFI)
+ 	$(MAKE) -C payloads/external/edk2 UefiPayloadPkg \
+ 		EDK2_UEFIPAYLOAD_OUT="$(abspath $@)" \
+ 		$(EDK2_PAYLOAD_ARGS)
+diff --git a/payloads/external/edk2/Kconfig b/payloads/external/edk2/Kconfig
+index 860627a5f..da0e5236a 100644
+--- a/payloads/external/edk2/Kconfig
++++ b/payloads/external/edk2/Kconfig
+@@ -365,4 +365,30 @@ config EDK2_IPXE_OPTION_NAME
+ 	  of EDK2 Payload. This name will be passed as PCD to the EDK2 build
+ 	  system.
+ 
++config EDK2_ENABLE_CSMWRAP
++	bool "Include CSMWrap in edk2 payload"
++	depends on !EDK2_REPO_OFFICIAL
++	default n
++	help
++	  Include CSMWrap, the UEFI application that boots legacy BIOS
++	  software with the CSM and the VGA BIOS of SeaBIOS, in the EDK2
++	  payload as a boot option. The application is built separately
++	  (https://github.com/CSMWrap/CSMWrap): EDK2_CSMWRAP_FILE names it.
++
++config EDK2_CSMWRAP_FILE
++	string "CSMWrap EFI application"
++	depends on EDK2_ENABLE_CSMWRAP
++	default "csmwrap.efi"
++	help
++	  The csmwrap.efi (x86_64) to include, built from the CSMWrap sources.
++
++config EDK2_CSMWRAP_OPTION_NAME
++	string "CSMWrap option name"
++	depends on EDK2_ENABLE_CSMWRAP
++	default "CSMWrap Legacy Boot"
++	help
++	  Configures how the CSMWrap boot option should be displayed in the
++	  boot menu of the EDK2 payload. This name will be passed as PCD to
++	  the EDK2 build system.
++
+ endif
+diff --git a/payloads/external/edk2/Makefile b/payloads/external/edk2/Makefile
+index 0c4816efb..3f42d93ed 100644
+--- a/payloads/external/edk2/Makefile
++++ b/payloads/external/edk2/Makefile
+@@ -223,6 +223,11 @@ ifeq ($(CONFIG_EDK2_IPXE),y)
+ BUILD_STR += -D NETWORK_IPXE=TRUE
+ BUILD_STR += --pcd gUefiPayloadPkgTokenSpaceGuid.PcdiPXEOptionName=L"$(CONFIG_EDK2_IPXE_OPTION_NAME)"
+ endif
++# CSMWRAP                       = FALSE
++ifeq ($(CONFIG_EDK2_CSMWRAP),y)
++BUILD_STR += -D CSMWRAP=TRUE
++BUILD_STR += --pcd gUefiPayloadPkgTokenSpaceGuid.PcdCsmWrapOptionName=L"$(CONFIG_EDK2_CSMWRAP_OPTION_NAME)"
++endif
+ # EDK2_USE_LVGL_RENDERER		= FALSE
+ ifeq ($(CONFIG_EDK2_USE_LVGL_RENDERER),y)
+ BUILD_STR += -D LVGL_ENABLE=TRUE
+@@ -319,6 +324,14 @@ ipxe_rom: $(EDK2_PATH)
+ 			$(EDK2_PATH)/UefiPayloadPkg/NetworkDrivers/ipxe.efi; \
+ 	fi \
+ 
++csmwrap_efi: $(EDK2_PATH)
++	if [ "$(CONFIG_EDK2_CSMWRAP)" == "y" ]; then \
++		echo "    Including externally built CSMWrap"; \
++		mkdir -p $(EDK2_PATH)/UefiPayloadPkg/LegacyBoot/; \
++		cp $(CONFIG_EDK2_CSMWRAP_FILE) \
++			$(EDK2_PATH)/UefiPayloadPkg/LegacyBoot/csmwrap.efi; \
++	fi \
++
+ checktools:
+ 	echo -n "EDK2: Checking uuid-dev:"
+ 	echo "#include <uuid/uuid.h>" > libtest.c
+@@ -377,7 +390,7 @@ print:
+ 		-e 's/s /Build:          Silent/' \
+ 		-e 's/t /Toolchain:      /'
+ 
+-prep: $(EDK2_PATH) $(EDK2_PLATFORMS_PATH) clean checktools logo ipxe_rom
++prep: $(EDK2_PATH) $(EDK2_PLATFORMS_PATH) clean checktools logo ipxe_rom csmwrap_efi
+ 	cd $(WORKSPACE); \
+ 		source $(EDK2_PATH)/edksetup.sh; \
+ 		unset CC; $(MAKE) -C $(EDK2_PATH)/BaseTools 2>&1; \
+-- 
+2.43.0
+

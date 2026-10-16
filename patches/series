@@ -71,3 +71,6 @@
 0072-mb-lenovo-haswell-Let-the-network-cards-wake-the-lap.patch
 0073-ec-lenovo-h8-Add-the-battery-trip-point.patch
 0074-mb-lenovo-haswell-_S3D-and-_RMV-as-the-OEM-firmware.patch
+0075-payloads-external-iPXE-Choose-the-EFI-image-to-build.patch
+0076-payloads-external-edk2-Include-CSMWrap-as-a-boot-opt.patch
+0077-mb-lenovo-haswell-Add-the-boot-options-of-the-payloa.patch

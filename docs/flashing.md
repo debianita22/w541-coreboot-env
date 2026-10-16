@@ -356,7 +356,23 @@ see [Testing on the laptop](vboot.md#testing-on-the-laptop).
     touchpad;
   - *General*: what the laptop is (model, machine type, serial number and
     UUID from the VPD, processor, memory, firmware and EC versions), beeps,
-    *Non-maskable Interrupts*;
+    *Non-maskable Interrupts*; and, from v1.3.6, *Boot*: *Network boot
+    (iPXE)* and *Legacy boot (CSMWrap)*, both on by default. On, each is
+    an entry of the boot menu (*iPXE Network Boot*, *CSMWrap Legacy
+    Boot*), last in the boot order after the disks and the UEFI
+    Shell; off, the entry is deleted at the next boot. iPXE drives the
+    Ethernet port itself (its Intel driver, for the I217), does PXE (DHCP
+    and TFTP), HTTP and iPXE scripts, and chainloads UEFI images, which
+    the firmware verifies with Secure Boot on; Ctrl-B at its banner opens
+    its shell (`dhcp`, `chain http://...`). CSMWrap is a legacy BIOS, the
+    CSM and VGA BIOS of SeaBIOS as a UEFI application: it boots the
+    master boot record of the disks and USB drives the firmware sees,
+    with INT 13h over the firmware's disk drivers and INT 10h over its
+    framebuffer, there being no Intel VBIOS here; what programs the VGA
+    registers directly (some DOS software) will not draw. It keeps one
+    CPU core for its BIOS services and hides it from the legacy OS, so
+    that one sees three of the four. It runs unsigned code, so its entry
+    exists only while Secure Boot is off;
   - *Boot Manager* (second row): boot order, boot entries, *Boot Device
     Priority* and *Auto Boot Time-out*, the seconds the firmware waits
     for Esc before it boots: 2 by default, 0 boots at once and leaves
