@@ -10,25 +10,87 @@
 # EDK2: i suoi lv_font_montserrat_<N>.c sono Montserrat Medium (SIL Open
 # Font License 1.1) con le icone di Font Awesome 5 Free (icone CC BY 4.0),
 # convertiti da lv_font_conv a 4 bit per pixel, senza compressione. Qui si
-# prendono, per ogni dimensione di SIZES, i glifi di CODEPOINTS: bitmap (4
-# bit per pixel, nibble alto prima, righe una dopo l'altra), avanzamento e
-# riquadro, e la crenatura per classi, ristretta alle classi di quei glifi;
-# i glifi in ordine di codice, per la ricerca binaria della schermata.
-# Prepare (tools/build.sh) scrive OUT.c nell'albero di EDK2 dopo le patch;
-# l'uscita dipende solo dai file di LVGL e da questo script.
+# prendono, per ogni dimensione, i glifi che la schermata disegna con quel
+# font (glyph_sets): bitmap (4 bit per pixel, nibble alto prima, righe una
+# dopo l'altra), avanzamento e riquadro, e la crenatura per classi, ristretta
+# alle classi di quei glifi; i glifi in ordine di codice, per la ricerca
+# binaria della schermata. OUT.c va accanto a UpdateScreenLib.c e
+# UpdateScreenDraw.c, da cui si leggono i titoli e si controllano la riga
+# delle versioni e l'uso dei font. Prepare (tools/build.sh) scrive OUT.c
+# nell'albero di EDK2 dopo le patch; l'uscita dipende solo dai file di LVGL,
+# dai sorgenti della schermata e da questo script.
+import os
 import re
 import sys
 
-SIZES = (16, 20, 32)
-# ASCII stampabile, il punto elenco e le icone di Font Awesome che la
-# schermata usa: avviso, spunta, croce, fulmine (alimentatore), freccia,
-# aggiorna, accensione, scheda (il flash)
-CODEPOINTS = sorted(list(range(0x20, 0x7F)) + [0x2022]
-                    + [0xF071, 0xF00C, 0xF00D, 0xF0E7, 0xF054, 0xF021, 0xF011, 0xF7C2])
+# Le icone di Font Awesome che la schermata usa (UpdateScreenFont.h):
+# avviso, spunta e croce nel piede, la freccia tra le versioni
+ICON_WARNING, ICON_CHECK, ICON_CLOSE, ICON_NEXT = 0xF071, 0xF00C, 0xF00D, 0xF054
+BULLET = 0x2022
+# Nella riga delle versioni ("v1.3.6-rc3 • slot B › v1.3.6 • slot A") le
+# etichette di FormatTag, il punto elenco, "slot", la lettera dello slot e
+# la freccia
+VERSIONS = "0123456789.-crv slotAB"
 
 
 class Error(Exception):
     pass
+
+
+def strings(text):
+    """Le stringhe L"..." di text."""
+    return re.findall(r'L"([^"\\]*)"', text)
+
+
+def literals(text):
+    """Il testo delle stringhe L"..." di text, senza le conversioni di
+    PrintLib (%s, %c, %u, %-8Lu...)."""
+    return [re.sub(r"%[-+ 0#,]*[0-9]*(?:\.[0-9]+)?[lL]*[a-zA-Z]", "", s) for s in strings(text)]
+
+
+def statements(src, pattern):
+    """Le istruzioni C di src (fino al ';') in cui c'e' pattern."""
+    return [s for s in src.split(";") if re.search(pattern, s)]
+
+
+def glyph_sets(screen_dir):
+    """I codici di ogni dimensione, '?' compreso (lo disegna per un glifo che
+    il font non ha): 16 px tutto il resto (stato, legenda, tempo, piede, le
+    righe del boot manager, anche il testo di uno stato EFI), 20 px la riga
+    delle versioni, 32 px i titoli. Controlla i sorgenti della schermata in
+    screen_dir: i font di 20 e 32 px disegnano solo quelle due righe, e le
+    stringhe che le compongono hanno solo i glifi che hanno."""
+    src = {}
+    for name in ("UpdateScreenLib.c", "UpdateScreenDraw.c"):
+        path = os.path.join(screen_dir, name)
+        try:
+            src[name] = open(path, encoding="utf-8").read()
+        except OSError as e:
+            raise Error("%s: %s (OUT.c va accanto ai sorgenti della schermata)" % (path, e.strerror))
+    for font, line in (("&gUpdateScreenFont32", "Model->Title"), ("&gUpdateScreenFont20", "Model->Versions")):
+        uses = statements(src["UpdateScreenDraw.c"], re.escape(font))
+        if not uses or any(line not in s for s in uses):
+            raise Error("UpdateScreenDraw.c: %s non disegna solo %s" % (font[1:], line))
+    lib = src["UpdateScreenLib.c"]
+    titles = [t for s in statements(lib, r"\bmModel\.Title\b") for t in strings(s)]
+    if not titles or any("%" in t for t in titles):
+        raise Error("UpdateScreenLib.c: titoli non trovati, o con conversioni %")
+    # la riga delle versioni: le sue stringhe e quelle di FormatTag non
+    # devono avere glifi fuori da VERSIONS
+    versions = [t for s in statements(lib, r"\bmModel\.Versions\b") for t in literals(s)]
+    tag = re.search(r"^FormatTag \((.*?)^\}", lib, re.M | re.S)
+    if not versions or not tag:
+        raise Error("UpdateScreenLib.c: riga delle versioni o FormatTag non trovati")
+    extra = set("".join(versions + literals(tag.group(1)))) - set(VERSIONS)
+    if extra:
+        raise Error("UpdateScreenLib.c: riga delle versioni con %s, che il font di 20 px non ha"
+                    % " ".join(sorted(repr(c) for c in extra)))
+    ascii_ = set(range(0x20, 0x7F))
+    return {
+        16: sorted(ascii_ | {ICON_WARNING, ICON_CHECK, ICON_CLOSE}),
+        20: sorted({ord(c) for c in "?" + VERSIONS} | {BULLET, ICON_NEXT}),
+        32: sorted({ord(c) for c in "?" + "".join(titles)}),
+    }
 
 
 def array(src, name, signed=False):
@@ -86,10 +148,10 @@ def load(path):
     }
 
 
-def subset(font, size):
+def subset(font, size, codepoints):
     glyphs, bitmap = [], []
     lmap, rmap = {}, {}
-    for cp in CODEPOINTS:
+    for cp in codepoints:
         gid = font["cmap"].get(cp)
         if gid is None:
             raise Error("Montserrat %d: manca U+%04X" % (size, cp))
@@ -126,23 +188,24 @@ def c_bytes(vals, fmt, per_line=16):
     return "\n".join(lines) if lines else "  0"
 
 
-def generate(font_dir):
+def generate(font_dir, sets):
     out = ["""/** @file
   Fonts of the firmware update screen: Montserrat Medium (Copyright 2011 The
   Montserrat Project Authors, SIL Open Font License 1.1) and icons of Font
   Awesome 5 Free (Fonticons, Inc., icons CC BY 4.0, font SIL OFL 1.1), the
-  glyphs the screen uses, as LVGL converted them for LvglPkg
+  glyphs the screen draws with each size, as LVGL converted them for LvglPkg
   (lvgl/src/font/lv_font_montserrat_<size>.c): 4 bits per pixel, high nibble
   first, rows one after the other; advances and kerning in 1/16 px.
 
-  Generated by tools/ui-font.py of ouroBIOS from those files: do not edit.
+  Generated by tools/ui-font.py of ouroBIOS from those files and the strings
+  of UpdateScreenLib.c: do not edit.
 **/
 
 #include "UpdateScreenFont.h"
 """]
-    for size in SIZES:
+    for size in sorted(sets):
         font = load("%s/lv_font_montserrat_%d.c" % (font_dir, size))
-        glyphs, bitmap, lcnt, rcnt, kern = subset(font, size)
+        glyphs, bitmap, lcnt, rcnt, kern = subset(font, size, sets[size])
         out.append("STATIC CONST UINT8  mBitmap%d[] = {\n%s\n};\n" % (size, c_bytes(bitmap, "0x%02x")))
         rows = ["  { 0x%04x, %4d, %6d, %3d, %3d, %3d, %3d, %3d, %3d }," % g for g in glyphs]
         out.append("STATIC CONST UPDATE_SCREEN_GLYPH  mGlyphs%d[] = {\n%s\n};\n" % (size, "\n".join(rows)))
@@ -164,12 +227,14 @@ def generate(font_dir):
 def main():
     if len(sys.argv) != 3:
         sys.exit("uso: ui-font.py LVGL_FONT_DIR OUT.c")
+    out = sys.argv[2]
     try:
-        text = generate(sys.argv[1])
+        sets = glyph_sets(os.path.dirname(os.path.abspath(out)))
+        text = generate(sys.argv[1], sets)
     except (Error, OSError) as e:
         sys.exit("ui-font.py: %s" % e)
     # i sorgenti di EDK2 sono CRLF
-    with open(sys.argv[2], "w", encoding="ascii", newline="\r\n") as f:
+    with open(out, "w", encoding="ascii", newline="\r\n") as f:
         f.write(text)
 
 

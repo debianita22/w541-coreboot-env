@@ -9,12 +9,12 @@ text at the bottom of the screen.  UpdateScreenLib, now the
 DisplayUpdateProgressLib of the payload, draws a screen of its own: the
 ouroboros of the ouroBIOS logo lights up from its head around to its tail
 as the update goes on, and the bar under it is a map of the flash region
-being written, one column per 4 KiB block: rewritten, already up to date,
-still to do, and the block being written.  Around them the versions and
-the vboot slots, what is being written, the percentage, how much was
-rewritten and how much was already there, the time left, and what not to
-do while it runs.  At the end the snake winks and the screen counts down
-to the reset.
+being written, one column per block of the flash (4 KiB on the W541):
+rewritten, already up to date, still to do, and the block being
+written.  Around them the versions and the vboot slots, what is being
+written, the percentage, how much was rewritten and how much was already
+there, the time left, and what not to do while it runs.  At the end the
+snake winks and the screen counts down to the reset.
 
 FmpDeviceSmmLib publishes what it writes, for the screen to read from the
 progress callbacks (Protocol/FirmwareUpdateStatus.h): the versions, the
@@ -25,7 +25,9 @@ instead of BootLogoUpdateProgress(), and the countdown before the reset.
 
 The text is Montserrat Medium, with a few icons of Font Awesome 5 Free,
 as LVGL converted them for LvglPkg: UpdateScreenFont.c is made from those
-files by tools/ui-font.py of ouroBIOS when the tree is prepared.
+files by tools/ui-font.py of ouroBIOS when the tree is prepared, with the
+glyphs each size draws (the titles at 32 px, the versions line at 20, the
+rest at 16), checked against the strings of UpdateScreenLib.c.
 
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
@@ -40,12 +42,12 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  .../PlatformBootManagerLib/PlatformCapsule.c  |  50 +-
  .../UpdateScreenLib/UpdateScreenDraw.c        | 927 ++++++++++++++++++
  .../UpdateScreenLib/UpdateScreenDraw.h        | 109 ++
- .../UpdateScreenLib/UpdateScreenFont.h        |  60 ++
+ .../UpdateScreenLib/UpdateScreenFont.h        |  68 ++
  .../Library/UpdateScreenLib/UpdateScreenLib.c | 676 +++++++++++++
  .../UpdateScreenLib/UpdateScreenLib.inf       |  46 +
  UefiPayloadPkg/UefiPayloadPkg.dec             |   5 +
  UefiPayloadPkg/UefiPayloadPkg.dsc             |   8 +-
- 15 files changed, 2333 insertions(+), 27 deletions(-)
+ 15 files changed, 2341 insertions(+), 27 deletions(-)
  create mode 100644 UefiPayloadPkg/Include/Library/UpdateScreenLib.h
  create mode 100644 UefiPayloadPkg/Include/Protocol/FirmwareUpdateStatus.h
  create mode 100644 UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.c
@@ -1929,10 +1931,10 @@ index 000000000..0d066e55b
 +#endif
 diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h
 new file mode 100644
-index 000000000..c1dfc6ffe
+index 000000000..dc9495e84
 --- /dev/null
 +++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,68 @@
 +/** @file
 +  Bitmap fonts of the firmware update screen (UpdateScreenFont.c, made by
 +  tools/ui-font.py of ouroBIOS from the Montserrat fonts of LvglPkg).
@@ -1975,21 +1977,29 @@ index 000000000..c1dfc6ffe
 +  CONST INT8                   *Kern;       ///< [LeftClass - 1][RightClass - 1]
 +} UPDATE_SCREEN_FONT;
 +
++//
++// Each font has the glyphs the screen draws with it, and '?', drawn for any
++// other (tools/ui-font.py checks the strings of UpdateScreenLib.c):
++//   gUpdateScreenFont16  printable ASCII and the icons of the footer: status
++//                        line, legend, time left, footer, and the lines of
++//                        the boot manager;
++//   gUpdateScreenFont20  the versions line, as "v1.3.6-rc3 * slot B > v1.3.6
++//                        * slot A": digits, '.', '-', the letters of "v",
++//                        "rc" and "slot", A and B, the bullet and the arrow;
++//   gUpdateScreenFont32  the letters of the titles.
++//
 +extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont16;
 +extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont20;
 +extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont32;
 +
 +//
-+// Icons of the fonts (Font Awesome 5 Free)
++// Icons of Font Awesome 5 Free: those of the footer in gUpdateScreenFont16,
++// the arrow and the bullet in gUpdateScreenFont20
 +//
 +#define UPDATE_SCREEN_ICON_WARNING  0xF071
 +#define UPDATE_SCREEN_ICON_CHECK    0xF00C
 +#define UPDATE_SCREEN_ICON_CLOSE    0xF00D
-+#define UPDATE_SCREEN_ICON_BOLT     0xF0E7
 +#define UPDATE_SCREEN_ICON_NEXT     0xF054
-+#define UPDATE_SCREEN_ICON_REFRESH  0xF021
-+#define UPDATE_SCREEN_ICON_POWER    0xF011
-+#define UPDATE_SCREEN_ICON_CHIP     0xF7C2
 +#define UPDATE_SCREEN_BULLET        0x2022
 +
 +#endif
