@@ -113,6 +113,10 @@ SUBMODULES=(
 # lo lascia com'e' ("Working directory not clean; will not overwrite").
 EDK2_REPO="https://github.com/mrchromebox/edk2"
 EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
+# I font della schermata di aggiornamento del firmware (patches/edk2/0026):
+# tools/ui-font.py li fa da quelli di LVGL nell'albero di EDK2, dopo le patch
+UI_FONT_LVGL="LvglPkg/Library/LvglLib/lvgl/src/font"
+UI_FONT_OUT="UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.c"
 
 # iPXE (patch 0075, CONFIG_EDK2_ENABLE_IPXE): il Makefile di coreboot lo
 # clona da git.ipxe.org al commit di IPXE_STABLE (STABLE_COMMIT_ID) e lo
@@ -273,6 +277,7 @@ state() {
 		edk2_rev
 		while read -r p; do sha256sum "patches/edk2/${p}"; done < <(series edk2)
 		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
+		sha256sum tools/ui-font.py
 		for p in "${TREE_FILES[@]}" "${VBOOT_KEYS[@]}"; do sha256sum "${p}"; done
 		sha256sum "${OPVK_FILE}"
 		echo "${IPXE_COMMIT}"
@@ -554,6 +559,12 @@ prepare_edk2() {
 		n=$((n + 1))
 	done < <(series lvglpkg)
 	echo "  ${n} patch di patches/lvglpkg/series (LvglPkg $(git -C "${EDK2_DIR}/LvglPkg" rev-parse --short=12 HEAD))"
+
+	# I font della schermata di aggiornamento (edk2/0026): i Montserrat di
+	# LvglPkg, solo i glifi che usa (tools/ui-font.py)
+	python3 "${O}/tools/ui-font.py" "${EDK2_DIR}/${UI_FONT_LVGL}" "${EDK2_DIR}/${UI_FONT_OUT}" \
+		|| die "tools/ui-font.py: i font della schermata di aggiornamento non si fanno"
+	echo "  ${UI_FONT_OUT} da ${UI_FONT_LVGL}"
 }
 
 # I sorgenti del crossgcc in util/crossgcc/tarballs/ prima di buildgcc, che
@@ -1263,7 +1274,8 @@ update_test_build() {
 		echo "CONFIG_OPTION_BACKEND_NONE=y"
 		echo "CONFIG_PAYLOAD_EDK2=y"
 		# le opzioni EDK2 del W541, senza iPXE e CSMWrap: la prova non li usa
-		# e la FD di una build DEBUG non li contiene
+		# e la FD di una build DEBUG (12 MiB, patch edk2/0024) tiene cosi'
+		# circa 1 MiB di margine
 		grep -E '^CONFIG_EDK2_' "${O}/configs/w541-mrc.defconfig" | grep -Ev 'IPXE|CSMWRAP' || true
 		echo "CONFIG_EDK2_DEBUG=y"
 		# il setup grafico del W541 (LvglPkg): con la seriale sarebbe di testo

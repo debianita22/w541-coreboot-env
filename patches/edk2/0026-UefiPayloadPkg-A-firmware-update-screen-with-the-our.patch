@@ -1,0 +1,2781 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 17:45:00 +0200
+Subject: [PATCH] UefiPayloadPkg: A firmware update screen with the ouroboros
+ and a flash map
+
+A capsule update showed a white bar under the boot logo and one line of
+text at the bottom of the screen.  UpdateScreenLib, now the
+DisplayUpdateProgressLib of the payload, draws a screen of its own: the
+ouroboros of the ouroBIOS logo lights up from its head around to its tail
+as the update goes on, and the bar under it is a map of the flash region
+being written, one column per 4 KiB block: rewritten, already up to date,
+still to do, and the block being written.  Around them the versions and
+the vboot slots, what is being written, the percentage, how much was
+rewritten and how much was already there, the time left, and what not to
+do while it runs.  At the end the snake winks and the screen counts down
+to the reset.
+
+FmpDeviceSmmLib publishes what it writes, for the screen to read from the
+progress callbacks (Protocol/FirmwareUpdateStatus.h): the versions, the
+slots, the region, the state of each of its blocks, and why an update
+failed.  PlatformBootManagerLib puts its lines (looking for the update,
+checking its signature, the battery, the result) on the same screen
+instead of BootLogoUpdateProgress(), and the countdown before the reset.
+
+The text is Montserrat Medium, with a few icons of Font Awesome 5 Free,
+as LVGL converted them for LvglPkg: UpdateScreenFont.c is made from those
+files by tools/ui-font.py of ouroBIOS when the tree is prepared.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../Include/Library/UpdateScreenLib.h         |  54 +
+ .../Include/Protocol/FirmwareUpdateStatus.h   |  77 ++
+ .../Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c |  94 +-
+ .../FmpDeviceSmmLib/FmpDeviceSmmLib.inf       |   5 +
+ .../FmpDeviceSmmLib/FmpDeviceSmmStatus.c      | 161 +++
+ .../FmpDeviceSmmLib/FmpDeviceSmmStatus.h      |  87 ++
+ .../PlatformBootManagerLib.inf                |   1 +
+ .../PlatformBootManagerLib/PlatformCapsule.c  |  50 +-
+ .../UpdateScreenLib/UpdateScreenDraw.c        | 927 ++++++++++++++++++
+ .../UpdateScreenLib/UpdateScreenDraw.h        | 109 ++
+ .../UpdateScreenLib/UpdateScreenFont.h        |  60 ++
+ .../Library/UpdateScreenLib/UpdateScreenLib.c | 676 +++++++++++++
+ .../UpdateScreenLib/UpdateScreenLib.inf       |  46 +
+ UefiPayloadPkg/UefiPayloadPkg.dec             |   5 +
+ UefiPayloadPkg/UefiPayloadPkg.dsc             |   8 +-
+ 15 files changed, 2333 insertions(+), 27 deletions(-)
+ create mode 100644 UefiPayloadPkg/Include/Library/UpdateScreenLib.h
+ create mode 100644 UefiPayloadPkg/Include/Protocol/FirmwareUpdateStatus.h
+ create mode 100644 UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.c
+ create mode 100644 UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.h
+ create mode 100644 UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.c
+ create mode 100644 UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.h
+ create mode 100644 UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h
+ create mode 100644 UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.c
+ create mode 100644 UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf
+
+diff --git a/UefiPayloadPkg/Include/Library/UpdateScreenLib.h b/UefiPayloadPkg/Include/Library/UpdateScreenLib.h
+new file mode 100644
+index 000000000..ed0e5a4ff
+--- /dev/null
++++ b/UefiPayloadPkg/Include/Library/UpdateScreenLib.h
+@@ -0,0 +1,54 @@
++/** @file
++  The firmware update screen of ouroBIOS.  The library is also the
++  DisplayUpdateProgressLib of the payload: FmpDxe reports the progress of a
++  capsule through DisplayUpdateProgress(), FmpDeviceSmmLib publishes what it
++  writes (Protocol/FirmwareUpdateStatus.h), and the boot manager, before and
++  after the capsule, sets the status line and the countdown below.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef UPDATE_SCREEN_LIB_H_
++#define UPDATE_SCREEN_LIB_H_
++
++typedef enum {
++  UpdateScreenToneNormal,
++  UpdateScreenToneSuccess,
++  UpdateScreenToneWarning,
++  UpdateScreenToneError
++} UPDATE_SCREEN_TONE;
++
++/**
++  Show what the update is doing in the status line, drawing the screen if it
++  is not there yet.  Without a graphics console the line goes to the text
++  console.  The line stays until the next one, or until the progress of a
++  capsule replaces it.
++
++  @param[in] Tone    Its color.
++  @param[in] Format  A format string, then its arguments.
++**/
++VOID
++EFIAPI
++UpdateScreenStatus (
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN CONST CHAR16        *Format,
++  ...
++  );
++
++/**
++  Count down to the reset after the capsules, Seconds seconds, on the
++  screen if there is one; after an update that succeeded the snake winks
++  first.  Returns when the time is up.
++
++  @param[in] Tone     Success or error, for the countdown.
++  @param[in] Seconds  How long.
++**/
++VOID
++EFIAPI
++UpdateScreenRestart (
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN UINTN               Seconds
++  );
++
++#endif
+diff --git a/UefiPayloadPkg/Include/Protocol/FirmwareUpdateStatus.h b/UefiPayloadPkg/Include/Protocol/FirmwareUpdateStatus.h
+new file mode 100644
+index 000000000..bfde30352
+--- /dev/null
++++ b/UefiPayloadPkg/Include/Protocol/FirmwareUpdateStatus.h
+@@ -0,0 +1,77 @@
++/** @file
++  The state of the firmware update that FmpDeviceSmmLib writes, for the
++  update screen (UpdateScreenLib): phase, versions, vboot slots, the region
++  being written and what happened to each of its flash blocks.
++
++  FmpDxe, with FmpDeviceSmmLib, owns the structure and changes it between
++  its progress callbacks; the screen only reads it, from those callbacks
++  (DisplayUpdateProgress()), so nothing runs concurrently.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef FIRMWARE_UPDATE_STATUS_H_
++#define FIRMWARE_UPDATE_STATUS_H_
++
++#define FIRMWARE_UPDATE_STATUS_PROTOCOL_GUID \
++  { 0xe769a170, 0xb26e, 0x4763, { 0x9b, 0xbd, 0x42, 0xb7, 0xf6, 0x68, 0xdd, 0xa5 } }
++
++#define FIRMWARE_UPDATE_STATUS_REVISION  1
++
++//
++// Phase
++//
++#define FIRMWARE_UPDATE_PHASE_IDLE       0
++#define FIRMWARE_UPDATE_PHASE_PREPARING  1    ///< reading the flash map and the vboot nvdata
++#define FIRMWARE_UPDATE_PHASE_WRITING    2    ///< the blocks of Region
++#define FIRMWARE_UPDATE_PHASE_FINISHING  3    ///< asking vboot to try TargetSlot
++#define FIRMWARE_UPDATE_PHASE_DONE       4
++#define FIRMWARE_UPDATE_PHASE_FAILED     5
++
++//
++// A flash block of the region being written
++//
++#define FIRMWARE_UPDATE_BLOCK_TO_DO    0
++#define FIRMWARE_UPDATE_BLOCK_CURRENT  1      ///< being erased, programmed and verified
++#define FIRMWARE_UPDATE_BLOCK_WRITTEN  2      ///< rewritten and verified
++#define FIRMWARE_UPDATE_BLOCK_SAME     3      ///< already as in the capsule: not written
++#define FIRMWARE_UPDATE_BLOCK_FAILED   4
++
++//
++// Why an update failed, in phase FAILED
++//
++#define FIRMWARE_UPDATE_REASON_NONE     0
++#define FIRMWARE_UPDATE_REASON_INVALID  1     ///< not an image for this flash
++#define FIRMWARE_UPDATE_REASON_LAYOUT   2     ///< another flash map: flashrom only
++#define FIRMWARE_UPDATE_REASON_FLASH    3     ///< reading, erasing or writing the flash failed
++#define FIRMWARE_UPDATE_REASON_OTHER    4
++
++//
++// Map entries: a region of more blocks shares them out
++//
++#define FIRMWARE_UPDATE_STATUS_MAP_SIZE  1024
++
++typedef struct {
++  UINT32    Revision;
++  UINT32    Phase;
++  UINT32    FromVersion;                        ///< ESRT version of the firmware running
++  UINT32    ToVersion;                          ///< version of the capsule
++  CHAR8     RunningSlot;                        ///< 'A' or 'B', 0 without vboot slots
++  CHAR8     TargetSlot;                         ///< the slot written, 0 without vboot slots
++  CHAR8     Region[34];                         ///< FMAP name of the region being written
++  UINT32    RegionIndex;                        ///< among the regions written, from 0
++  UINT32    RegionCount;
++  UINT32    BlockSize;
++  UINT32    RegionBlocks;                       ///< blocks of Region
++  UINT32    TotalBlocks;                        ///< blocks of all the regions written
++  UINT32    DoneBlocks;
++  UINT32    WrittenBlocks;
++  UINT32    SameBlocks;
++  UINT32    Reason;                             ///< FIRMWARE_UPDATE_REASON_*
++  UINT8     Map[FIRMWARE_UPDATE_STATUS_MAP_SIZE];  ///< FIRMWARE_UPDATE_BLOCK_*, per block of Region
++} FIRMWARE_UPDATE_STATUS;
++
++extern EFI_GUID  gFirmwareUpdateStatusProtocolGuid;
++
++#endif
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+index 4fe7bb37f..901e21345 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.c
+@@ -42,6 +42,7 @@
+ 
+ #include "FmpDeviceSmmFlashRetry.h"
+ #include "FmpDeviceSmmManifest.h"
++#include "FmpDeviceSmmStatus.h"
+ #include "FmpDeviceSmmUpdatePolicy.h"
+ #include "FmpDeviceSmmVboot.h"
+ 
+@@ -1346,6 +1347,7 @@ UpdateFlashRangeFromImage (
+   EFI_STATUS  Status;
+   UINTN       Offset;
+   UINTN       RangeEnd;
++  UINTN       Segment;
+ 
+   if ((Image == NULL) || (BlockBuffer == NULL) || (VerifyBuffer == NULL) || (Step == NULL) || (ShouldReportProgress == NULL) || (BlockSize == 0)) {
+     return EFI_INVALID_PARAMETER;
+@@ -1360,8 +1362,9 @@ UpdateFlashRangeFromImage (
+   }
+ 
+   RangeEnd = RangeOffset + RangeSize;
++  Segment  = 0;
+ 
+-  for (Offset = RangeOffset; Offset < RangeEnd; ) {
++  for (Offset = RangeOffset; Offset < RangeEnd; Segment++) {
+     UINTN  Lba;
+     UINTN  BlockBase;
+     UINTN  StartInBlock;
+@@ -1387,6 +1390,7 @@ UpdateFlashRangeFromImage (
+       Status   = ReadAnyBlockWithRetry (Lba, 0, &NumBytes, FlashBlock);
+       if (!EFI_ERROR (Status) && (NumBytes == BlockSize)) {
+         if (CompareMem (FlashBlock, Image + BlockBase, BlockSize) == 0) {
++          FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_SAME);
+           IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+           IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+           Offset += SegmentLen;
+@@ -1396,9 +1400,11 @@ UpdateFlashRangeFromImage (
+ 
+       Status = ProgramAnyBlockWithRetry (Lba, Image + BlockBase, VerifyBuffer, BlockSize);
+       if (EFI_ERROR (Status)) {
++        FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_FAILED);
+         return EFI_DEVICE_ERROR;
+       }
+ 
++      FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_WRITTEN);
+       IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+ 
+       IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+@@ -1412,10 +1418,12 @@ UpdateFlashRangeFromImage (
+     NumBytes = BlockSize;
+     Status   = ReadAnyBlockWithRetry (Lba, 0, &NumBytes, FlashBlock);
+     if (EFI_ERROR (Status) || (NumBytes != BlockSize)) {
++      FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_FAILED);
+       return EFI_DEVICE_ERROR;
+     }
+ 
+     if (CompareMem (FlashBlock + StartInBlock, Image + BlockBase + StartInBlock, SegmentLen) == 0) {
++      FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_SAME);
+       IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+       IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+       Offset += SegmentLen;
+@@ -1426,9 +1434,11 @@ UpdateFlashRangeFromImage (
+ 
+     Status = ProgramAnyBlockWithRetry (Lba, FlashBlock, VerifyBuffer, BlockSize);
+     if (EFI_ERROR (Status)) {
++      FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_FAILED);
+       return EFI_DEVICE_ERROR;
+     }
+ 
++    FmpStatusBlock (Segment, FIRMWARE_UPDATE_BLOCK_WRITTEN);
+     IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+ 
+     IncrementProgress (Progress, TotalSteps, Step, ShouldReportProgress);
+@@ -1689,9 +1699,9 @@ QueryVariableInfoHook (
+   @retval EFI_INVALID_PARAMETER  The Image was NULL.
+   @retval EFI_UNSUPPORTED        The operation is not supported.
+ **/
++STATIC
+ EFI_STATUS
+-EFIAPI
+-FmpDeviceSetImageWithStatus (
++WriteImage (
+   IN  CONST VOID                                     *Image,
+   IN  UINTN                                          ImageSize,
+   IN  CONST VOID                                     *VendorCode        OPTIONAL,
+@@ -1735,6 +1745,8 @@ FmpDeviceSetImageWithStatus (
+   BOOLEAN                      AbUpdate;
+   UINTN                        AbIndex[2];
+   UINTN                        TargetSlot;
++  UINTN                        RegionNumber;
++  UINTN                        RegionCount;
+   UINTN                        NvOffset;
+   UINTN                        NvSize;
+   UINTN                        NvNext;
+@@ -2079,6 +2091,7 @@ FmpDeviceSetImageWithStatus (
+     }
+ 
+     TargetSlot = 1 - FmpVbootNvTriedSlot (NvRecord);
++    FmpStatusSlots (TargetSlot);
+     DEBUG ((
+       DEBUG_INFO,
+       "%a(): vboot runs slot %c, updating slot %c\n",
+@@ -2117,6 +2130,9 @@ FmpDeviceSetImageWithStatus (
+   ShouldReportProgress = TRUE;
+   Step                 = 0;
+   *LastAttemptStatus   = LAST_ATTEMPT_STATUS_SMMSTORE_FLASH_FAILED;
++  RegionNumber         = 0;
++  RegionCount          = AbUpdate ? ManifestEntryCount - 1 : ManifestEntryCount;
++  FmpStatusTotal (TotalSteps / 2, BlockSize);
+ 
+   DEBUG ((DEBUG_INFO, "%a(): manifest-guided update over %u region(s)\n", __func__, (UINT32)ManifestEntryCount));
+ 
+@@ -2137,11 +2153,19 @@ FmpDeviceSetImageWithStatus (
+                &RegionSize
+                );
+     if (EFI_ERROR (Status) || (RegionOffset > BaseImageSize) ||
+-        (RegionSize > (BaseImageSize - RegionOffset)))
++        (RegionSize > (BaseImageSize - RegionOffset)) ||
++        EFI_ERROR (FmpDeviceGetFlashRangeStepCount (RegionOffset, RegionSize, BlockSize, &RangeSteps)))
+     {
+       goto InvalidImage;
+     }
+ 
++    FmpStatusRegion (
++      ManifestEntries[EntryIndex].RegionName,
++      REGION_MANIFEST_NAME_LEN,
++      RegionNumber++,
++      RegionCount,
++      RangeSteps / 2
++      );
+     Status = UpdateFlashRangeFromImage (
+                BlockSize,
+                (CONST UINT8 *)Image,
+@@ -2164,6 +2188,7 @@ FmpDeviceSetImageWithStatus (
+     //
+     // The slot is written and verified: try it on the next boots.
+     //
++    FmpStatusPhase (FIRMWARE_UPDATE_PHASE_FINISHING);
+     FmpVbootNvSetTryNext (NvRecord, TargetSlot, VBOOT_AB_TRY_COUNT);
+     Status = VbootWriteNvRecord (BlockSize, NvOffset, NvSize, NvNext, NvRecord);
+     if (EFI_ERROR (Status)) {
+@@ -2261,6 +2286,66 @@ IoError:
+   return EFI_DEVICE_ERROR;
+ }
+ 
++/**
++  Updates a firmware device with a new firmware image, and publishes what
++  is written for the update screen: WriteImage(), from the version running
++  to CapsuleFwVersion, then the result.
++
++  @param[in]  Image             Points to the new firmware image.
++  @param[in]  ImageSize         Size, in bytes, of the new firmware image.
++  @param[in]  VendorCode        Vendor-specific update policy, or NULL.
++  @param[in]  Progress          A function used to report the progress of
++                                updating the firmware device with the new
++                                firmware image.
++  @param[in]  CapsuleFwVersion  The version of the new firmware image from the
++                                update capsule that provided the new firmware
++                                image.
++  @param[out] AbortReason       Details on an aborted operation.
++  @param[out] LastAttemptStatus The last attempt status to report in the ESRT
++                                when this function returns an error.
++
++  @return What WriteImage() returns.
++**/
++EFI_STATUS
++EFIAPI
++FmpDeviceSetImageWithStatus (
++  IN  CONST VOID                                     *Image,
++  IN  UINTN                                          ImageSize,
++  IN  CONST VOID                                     *VendorCode        OPTIONAL,
++  IN  EFI_FIRMWARE_MANAGEMENT_UPDATE_IMAGE_PROGRESS  Progress           OPTIONAL,
++  IN  UINT32                                         CapsuleFwVersion,
++  OUT CHAR16                                         **AbortReason,
++  OUT UINT32                                         *LastAttemptStatus
++  )
++{
++  EFI_STATUS  Status;
++  UINT32      Version;
++
++  if (EFI_ERROR (FmpDeviceGetVersion (&Version))) {
++    Version = 0;
++  }
++
++  FmpStatusBegin (Version, CapsuleFwVersion);
++  Status = WriteImage (Image, ImageSize, VendorCode, Progress, CapsuleFwVersion, AbortReason, LastAttemptStatus);
++  if (!EFI_ERROR (Status)) {
++    FmpStatusPhase (FIRMWARE_UPDATE_PHASE_DONE);
++  } else if (Status == EFI_OUT_OF_RESOURCES) {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_OTHER);
++  } else if (Status == EFI_DEVICE_ERROR) {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_FLASH);
++  } else if (*LastAttemptStatus == LAST_ATTEMPT_STATUS_SMMSTORE_INVALID_IMAGE) {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_INVALID);
++  } else if (*LastAttemptStatus == LAST_ATTEMPT_STATUS_SMMSTORE_LAYOUT_MISMATCH) {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_LAYOUT);
++  } else if (*LastAttemptStatus == LAST_ATTEMPT_STATUS_SMMSTORE_FLASH_FAILED) {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_FLASH);
++  } else {
++    FmpStatusFailed (FIRMWARE_UPDATE_REASON_OTHER);
++  }
++
++  return Status;
++}
++
+ /**
+   Lock the firmware device that contains a firmware image.  Once a firmware
+   device is locked, any attempts to modify the firmware image contents in the
+@@ -2300,5 +2385,6 @@ FmpDeviceSmmLibConstructor (
+   )
+ {
+   SmmStoreLibInitialize ();
++  FmpStatusInstall ();
+   return EFI_SUCCESS;
+ }
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
+index e3131facd..b39342d21 100644
+--- a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmLib.inf
+@@ -25,6 +25,8 @@
+   FmpDeviceSmmFlashRetry.h
+   FmpDeviceSmmManifest.c
+   FmpDeviceSmmManifest.h
++  FmpDeviceSmmStatus.c
++  FmpDeviceSmmStatus.h
+   FmpDeviceSmmUpdatePolicy.c
+   FmpDeviceSmmVboot.c
+   FmpDeviceSmmVboot.h
+@@ -47,3 +49,6 @@
+ 
+ [Guids]
+   gEfiFirmwareInfoHobGuid
++
++[Protocols]
++  gFirmwareUpdateStatusProtocolGuid    ## PRODUCES
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.c b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.c
+new file mode 100644
+index 000000000..515c976b5
+--- /dev/null
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.c
+@@ -0,0 +1,161 @@
++/** @file
++  The state of the update being written, published for the update screen:
++  FmpDxe calls the progress callback of the capsule library after each
++  block, and the screen reads this state from there.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include "FmpDeviceSmmStatus.h"
++
++STATIC FIRMWARE_UPDATE_STATUS  mFmpStatus;
++
++/**
++  The entry of Map for Block: a region of more blocks than entries shares
++  them out.
++**/
++STATIC
++UINTN
++MapIndex (
++  IN UINTN  Block
++  )
++{
++  if (mFmpStatus.RegionBlocks <= FIRMWARE_UPDATE_STATUS_MAP_SIZE) {
++    return Block;
++  }
++
++  return (Block * FIRMWARE_UPDATE_STATUS_MAP_SIZE) / mFmpStatus.RegionBlocks;
++}
++
++VOID
++FmpStatusInstall (
++  VOID
++  )
++{
++  EFI_STATUS  Status;
++  EFI_HANDLE  Handle;
++
++  mFmpStatus.Revision = FIRMWARE_UPDATE_STATUS_REVISION;
++  mFmpStatus.Phase    = FIRMWARE_UPDATE_PHASE_IDLE;
++  Handle              = NULL;
++  Status              = gBS->InstallMultipleProtocolInterfaces (
++                               &Handle,
++                               &gFirmwareUpdateStatusProtocolGuid,
++                               &mFmpStatus,
++                               NULL
++                               );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_WARN, "%a(): the update screen will not see the blocks: %r\n", __func__, Status));
++  }
++}
++
++VOID
++FmpStatusBegin (
++  IN UINT32  FromVersion,
++  IN UINT32  ToVersion
++  )
++{
++  ZeroMem (&mFmpStatus, sizeof (mFmpStatus));
++  mFmpStatus.Revision    = FIRMWARE_UPDATE_STATUS_REVISION;
++  mFmpStatus.Phase       = FIRMWARE_UPDATE_PHASE_PREPARING;
++  mFmpStatus.FromVersion = FromVersion;
++  mFmpStatus.ToVersion   = ToVersion;
++}
++
++VOID
++FmpStatusSlots (
++  IN UINTN  TargetSlot
++  )
++{
++  mFmpStatus.TargetSlot  = (TargetSlot == 0) ? 'A' : 'B';
++  mFmpStatus.RunningSlot = (TargetSlot == 0) ? 'B' : 'A';
++}
++
++VOID
++FmpStatusTotal (
++  IN UINTN  Blocks,
++  IN UINTN  BlockSize
++  )
++{
++  mFmpStatus.TotalBlocks   = (UINT32)MIN (Blocks, MAX_UINT32);
++  mFmpStatus.BlockSize     = (UINT32)MIN (BlockSize, MAX_UINT32);
++  mFmpStatus.DoneBlocks    = 0;
++  mFmpStatus.WrittenBlocks = 0;
++  mFmpStatus.SameBlocks    = 0;
++}
++
++VOID
++FmpStatusRegion (
++  IN CONST CHAR8  *Name,
++  IN UINTN        Length,
++  IN UINTN        Index,
++  IN UINTN        Count,
++  IN UINTN        Blocks
++  )
++{
++  UINTN  Char;
++
++  ZeroMem (mFmpStatus.Region, sizeof (mFmpStatus.Region));
++  for (Char = 0; (Char < Length) && (Char < sizeof (mFmpStatus.Region) - 1) && (Name[Char] != '\0'); Char++) {
++    mFmpStatus.Region[Char] = Name[Char];
++  }
++
++  mFmpStatus.Phase        = FIRMWARE_UPDATE_PHASE_WRITING;
++  mFmpStatus.RegionIndex  = (UINT32)Index;
++  mFmpStatus.RegionCount  = (UINT32)Count;
++  mFmpStatus.RegionBlocks = (UINT32)MIN (Blocks, MAX_UINT32);
++  SetMem (mFmpStatus.Map, sizeof (mFmpStatus.Map), FIRMWARE_UPDATE_BLOCK_TO_DO);
++  if (Blocks != 0) {
++    mFmpStatus.Map[0] = FIRMWARE_UPDATE_BLOCK_CURRENT;
++  }
++}
++
++VOID
++FmpStatusBlock (
++  IN UINTN  Block,
++  IN UINT8  State
++  )
++{
++  if (Block >= mFmpStatus.RegionBlocks) {
++    return;
++  }
++
++  mFmpStatus.Map[MapIndex (Block)] = State;
++  if (State == FIRMWARE_UPDATE_BLOCK_FAILED) {
++    return;
++  }
++
++  mFmpStatus.DoneBlocks++;
++  if (State == FIRMWARE_UPDATE_BLOCK_SAME) {
++    mFmpStatus.SameBlocks++;
++  } else {
++    mFmpStatus.WrittenBlocks++;
++  }
++
++  if ((Block + 1 < mFmpStatus.RegionBlocks) && (MapIndex (Block + 1) != MapIndex (Block))) {
++    mFmpStatus.Map[MapIndex (Block + 1)] = FIRMWARE_UPDATE_BLOCK_CURRENT;
++  }
++}
++
++VOID
++FmpStatusPhase (
++  IN UINT32  Phase
++  )
++{
++  mFmpStatus.Phase = Phase;
++}
++
++VOID
++FmpStatusFailed (
++  IN UINT32  Reason
++  )
++{
++  mFmpStatus.Phase  = FIRMWARE_UPDATE_PHASE_FAILED;
++  mFmpStatus.Reason = Reason;
++}
+diff --git a/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.h b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.h
+new file mode 100644
+index 000000000..4bd9a8c02
+--- /dev/null
++++ b/UefiPayloadPkg/Library/FmpDeviceSmmLib/FmpDeviceSmmStatus.h
+@@ -0,0 +1,87 @@
++/** @file
++  The state of the update being written, published for the update screen
++  (Protocol/FirmwareUpdateStatus.h).
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef FMP_DEVICE_SMM_STATUS_H_
++#define FMP_DEVICE_SMM_STATUS_H_
++
++#include <Protocol/FirmwareUpdateStatus.h>
++
++/**
++  Publish the state, idle, for the screen to find.  From the constructor.
++**/
++VOID
++FmpStatusInstall (
++  VOID
++  );
++
++/**
++  A capsule starts: from FromVersion, running, to ToVersion.
++**/
++VOID
++FmpStatusBegin (
++  IN UINT32  FromVersion,
++  IN UINT32  ToVersion
++  );
++
++/**
++  The vboot slot written, 0 for A or 1 for B; the other one runs.
++**/
++VOID
++FmpStatusSlots (
++  IN UINTN  TargetSlot
++  );
++
++/**
++  How many flash blocks of BlockSize bytes the regions written have.
++**/
++VOID
++FmpStatusTotal (
++  IN UINTN  Blocks,
++  IN UINTN  BlockSize
++  );
++
++/**
++  The region Name (a manifest name, up to Length characters) starts: the
++  Index-th of Count, Blocks blocks.  Its first block is current.
++**/
++VOID
++FmpStatusRegion (
++  IN CONST CHAR8  *Name,
++  IN UINTN        Length,
++  IN UINTN        Index,
++  IN UINTN        Count,
++  IN UINTN        Blocks
++  );
++
++/**
++  Block of the region is done (FIRMWARE_UPDATE_BLOCK_WRITTEN or _SAME), and
++  the next one becomes current, or it failed (FIRMWARE_UPDATE_BLOCK_FAILED).
++**/
++VOID
++FmpStatusBlock (
++  IN UINTN  Block,
++  IN UINT8  State
++  );
++
++/**
++  The update moves to Phase (FIRMWARE_UPDATE_PHASE_*).
++**/
++VOID
++FmpStatusPhase (
++  IN UINT32  Phase
++  );
++
++/**
++  The update failed, for Reason (FIRMWARE_UPDATE_REASON_*).
++**/
++VOID
++FmpStatusFailed (
++  IN UINT32  Reason
++  );
++
++#endif
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+index d350c1aaf..671d3204f 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+@@ -56,6 +56,7 @@
+   SmmStoreLib
+   TcgPhysicalPresenceLib
+   Tcg2PhysicalPresenceLib
++  UpdateScreenLib
+ 
+ [Guids]
+   gEfiEndOfDxeEventGroupGuid
+diff --git a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+index e7911b824..21fb4f357 100644
+--- a/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
++++ b/UefiPayloadPkg/Library/PlatformBootManagerLib/PlatformCapsule.c
+@@ -22,6 +22,7 @@
+ 
+ #include "PlatformBootManager.h"
+ #include "PlatformConsole.h"
++#include <Library/UpdateScreenLib.h>
+ #include <Guid/CapsuleReport.h>
+ #include <Guid/FileInfo.h>
+ #include <Guid/Gpt.h>
+@@ -36,34 +37,33 @@
+ #define CAPSULE_MIN_BATTERY       25          // percent, when not charging
+ #define CAPSULE_POWER_WAIT        60          // seconds to plug the AC adapter
+ #define CAPSULE_MESSAGE_DELAY     3000000     // microseconds a message stays
++#define CAPSULE_RESTART_SECONDS   3           // countdown to the reset after a capsule
+ 
+ /**
+-  Show a line of text at the bottom of the screen, and in the debug log.
++  Show a line about the update on the update screen (UpdateScreenLib), and
++  in the debug log.
+ 
++  @param[in] Tone    Its color.
+   @param[in] Format  Format string, then its arguments.
+ **/
+ STATIC
+ VOID
+ EFIAPI
+ CapsuleMessage (
+-  IN CONST CHAR16  *Format,
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN CONST CHAR16        *Format,
+   ...
+   )
+ {
+-  VA_LIST                        Marker;
+-  CHAR16                         Message[128];
+-  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  Black;
+-  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  White;
++  VA_LIST  Marker;
++  CHAR16   Message[128];
+ 
+   VA_START (Marker, Format);
+   UnicodeVSPrint (Message, sizeof (Message), Format, Marker);
+   VA_END (Marker);
+ 
+   DEBUG ((DEBUG_INFO, "Capsules: %s\n", Message));
+-
+-  ZeroMem (&Black, sizeof (Black));
+-  SetMem (&White, sizeof (White), 0xFF);
+-  BootLogoUpdateProgress (White, Black, Message, White, 0, 0);
++  UpdateScreenStatus (Tone, L"%s", Message);
+ }
+ 
+ /**
+@@ -140,6 +140,7 @@ CapsuleWaitForPower (
+     }
+ 
+     CapsuleMessage (
++      UpdateScreenToneWarning,
+       L"Battery at %d%%: connect the AC adapter to update the firmware (%d)",
+       Percentage,
+       (UINT32)(CAPSULE_POWER_WAIT - Second)
+@@ -432,9 +433,11 @@ CapsuleLastStatus (
+ 
+   @param[in] Capsules  The capsules.
+   @param[in] Count     How many.
++
++  @return EFI_SUCCESS, or the error of the last capsule that failed.
+ **/
+ STATIC
+-VOID
++EFI_STATUS
+ CapsuleApply (
+   IN EFI_CAPSULE_HEADER  **Capsules,
+   IN UINTN               Count
+@@ -448,7 +451,7 @@ CapsuleApply (
+ 
+   Failure = EFI_SUCCESS;
+   for (Index = 0; Index < Count; Index++) {
+-    CapsuleMessage (L"Updating the firmware: do not turn off the computer");
++    CapsuleMessage (UpdateScreenToneNormal, L"Checking the signature of the update");
+     if (EFI_ERROR (GetVariable2 (L"CapsuleLast", &gEfiCapsuleReportGuid, &Before, &BeforeSize))) {
+       Before     = NULL;
+       BeforeSize = 0;
+@@ -472,10 +475,12 @@ CapsuleApply (
+   }
+ 
+   if (EFI_ERROR (Failure)) {
+-    CapsuleMessage (L"Firmware update failed (%r), restarting", Failure);
++    CapsuleMessage (UpdateScreenToneError, L"The update failed (%r)", Failure);
+   } else {
+-    CapsuleMessage (L"Firmware updated, restarting");
++    CapsuleMessage (UpdateScreenToneSuccess, L"Firmware updated");
+   }
++
++  return Failure;
+ }
+ 
+ STATIC BOOLEAN  mFirmwareSlotsLocked;
+@@ -577,6 +582,7 @@ PlatformProcessCapsules (
+   BOOLEAN             Writable;
+   BOOLEAN             Applied;
+   BOOLEAN             Console;
++  EFI_STATUS          Result;
+   EFI_CAPSULE_HEADER  *Capsules[CAPSULE_ON_DISK_MAX];
+   UINTN               Count;
+ 
+@@ -585,6 +591,7 @@ PlatformProcessCapsules (
+   Writable = !EFI_ERROR (SmmStoreLibInitialize ()) && CapsuleFlashIsWritable ();
+   Applied  = FALSE;
+   Console  = FALSE;
++  Result   = EFI_SUCCESS;
+ 
+   if (OnDisk) {
+     //
+@@ -601,7 +608,7 @@ PlatformProcessCapsules (
+     PlatformConsoleInit ();
+     BootSplashApply ();
+     Console = TRUE;
+-    CapsuleMessage (L"Firmware update requested, but the flash is not writable in this boot");
++    CapsuleMessage (UpdateScreenToneError, L"Firmware update requested, but the flash is not writable in this boot");
+     gBS->Stall (CAPSULE_MESSAGE_DELAY);
+   } else if (InMemory || OnDisk) {
+     PlatformConsoleInit ();
+@@ -609,7 +616,7 @@ PlatformProcessCapsules (
+     Console = TRUE;
+ 
+     if (!CapsuleWaitForPower ()) {
+-      CapsuleMessage (L"Battery too low, firmware update postponed");
++      CapsuleMessage (UpdateScreenToneWarning, L"Battery too low, firmware update postponed");
+       gBS->Stall (CAPSULE_MESSAGE_DELAY);
+     } else {
+       if (InMemory) {
+@@ -617,18 +624,23 @@ PlatformProcessCapsules (
+         Status  = ProcessCapsules ();
+         if (EFI_ERROR (Status)) {
+           DEBUG ((DEBUG_ERROR, "%a(): ProcessCapsules() failed with: %r\n", __func__, Status));
++          Result = Status;
+         }
+       }
+ 
+       if (OnDisk) {
++        CapsuleMessage (UpdateScreenToneNormal, L"Looking for the update on the disks");
+         EfiBootManagerConnectAll ();
+         Count = CapsuleLoadFromDisk (Capsules, ARRAY_SIZE (Capsules));
+         if (Count == 0) {
+-          CapsuleMessage (L"No firmware update found in %s of the EFI partitions and USB drives", CAPSULE_ON_DISK_DIR);
++          CapsuleMessage (UpdateScreenToneWarning, L"No firmware update found in %s of the EFI partitions and USB drives", CAPSULE_ON_DISK_DIR);
+           gBS->Stall (CAPSULE_MESSAGE_DELAY);
+         } else {
+           Applied = TRUE;
+-          CapsuleApply (Capsules, Count);
++          Status  = CapsuleApply (Capsules, Count);
++          if (EFI_ERROR (Status)) {
++            Result = Status;
++          }
+         }
+       }
+     }
+@@ -638,7 +650,7 @@ PlatformProcessCapsules (
+     //
+     // The flash may have changed: start again from it.
+     //
+-    gBS->Stall (CAPSULE_MESSAGE_DELAY);
++    UpdateScreenRestart (EFI_ERROR (Result) ? UpdateScreenToneError : UpdateScreenToneSuccess, CAPSULE_RESTART_SECONDS);
+     gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
+     CpuDeadLoop ();
+   }
+diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.c b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.c
+new file mode 100644
+index 000000000..dde438ed6
+--- /dev/null
++++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.c
+@@ -0,0 +1,927 @@
++/** @file
++  Drawing of the firmware update screen.
++
++  On black, the ouroboros of the ouroBIOS logo (assets/ourobios.svg, 16 x 16
++  cells) is the progress: its body lights up from the head, clockwise, until
++  it reaches the tail at 100%.  Below it the title, the versions, the status
++  line with the percentage, and the bar, which is a map of the flash region
++  being written: one column per 4 KiB block, rewritten, already up to date
++  or still to do, the block being written in white.  At the bottom, what not
++  to do while it runs.
++
++  The first call draws everything, the next ones only what changed: a few
++  cells of the ring, the columns of the blocks just written, the lines whose
++  text changed.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "UpdateScreenDraw.h"
++#include "UpdateScreenFont.h"
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Protocol/FirmwareUpdateStatus.h>
++
++//
++// Colors, 0xRRGGBB: those of the setup UI (LvglTheme.h) and of the logo
++//
++#define COLOR_BACKGROUND    0x000000
++#define COLOR_TEXT          0xF5F5F7
++#define COLOR_SECONDARY     0xA1A1A6
++#define COLOR_TERTIARY      0x8E8E93
++#define COLOR_RING          0x007AFF
++#define COLOR_RING_EDGE     0x64D2FF
++#define COLOR_RING_DIM      0x16202C
++#define COLOR_EYE           0xF5F5F7
++#define COLOR_INFINITY      0xA1A1A6
++#define COLOR_INFINITY_LOW  0x3A3A3C
++#define COLOR_TRACK         0x2C2C2E
++#define COLOR_CURRENT       0xFFFFFF
++#define COLOR_WRITTEN       0x0A84FF
++#define COLOR_SAME          0x2E7D5B
++#define COLOR_SUCCESS       0x30D158
++#define COLOR_WARNING       0xFF9F0A
++#define COLOR_ERROR         0xFF453A
++
++#define RING_CELLS   16
++#define RING_LENGTH  94
++#define RING_EDGE    4
++#define BAR_WIDTH    720
++#define LINE_MAX     40
++
++//
++// The logo: R the body, E the eye, I the infinity inside
++//
++STATIC CONST CHAR8  mOuroboros[RING_CELLS][RING_CELLS + 1] = {
++  "................",
++  "....RRRR........",
++  "...RR.RRREERR...",
++  "..RRRRR...RRRR..",
++  ".RRRR......RRRR.",
++  ".RRR........RRR.",
++  ".RR..II..II..RR.",
++  "RRR.I..II..I.RRR",
++  "RRR.I..II..I.RRR",
++  ".RR..II..II..RR.",
++  ".RRR........RRR.",
++  ".RRRR......RRRR.",
++  "..RRRR....RRRR..",
++  "...RRRRRRRRRR...",
++  "....RRRRRRRR....",
++  "................"
++};
++
++//
++// The body cells (y * 16 + x) clockwise from the head, by the angle of
++// their center around the center of the ring
++//
++STATIC CONST UINT8  mRingOrder[RING_LENGTH] = {
++  58,  43,  59,  44,  75,  60,  61,  76,  77,  92,  78,  93,  94,  109, 110, 125,
++  126, 127, 143, 142, 141, 158, 157, 174, 173, 190, 172, 189, 188, 205, 187, 204,
++  220, 203, 219, 202, 235, 218, 234, 217, 233, 216, 232, 231, 215, 230, 214, 229,
++  213, 228, 197, 212, 196, 211, 180, 195, 194, 179, 178, 163, 177, 162, 161, 146,
++  145, 130, 129, 128, 112, 113, 114, 97,  98,  81,  82,  65,  83,  66,  67,  50,
++  68,  51,  35,  52,  36,  53,  20,  21,  54,  38,  22,  39,  23,  40
++};
++
++//
++// What a column of the bar shows
++//
++#define COLUMN_NONE       0xFF
++#define COLUMN_SEPARATOR  0xFE
++
++struct _UPDATE_SCREEN_DRAW {
++  BOOLEAN                          Drawn;
++  UINTN                            Cell;
++  UINTN                            RingX;
++  UINTN                            RingY;
++  UINTN                            TitleY;
++  UINTN                            VersionsY;
++  UINTN                            StatusY;
++  UINTN                            BarX;
++  UINTN                            BarY;
++  UINTN                            BarW;
++  UINTN                            BarH;
++  UINTN                            LegendY;
++  UINTN                            FooterY;
++  UINTN                            Lit;                  ///< body cells lit
++  UINTN                            Breath;               ///< shade of the infinity, 0-7
++  UINT8                            *Columns;             ///< BarW: what each column shows
++  UINT8                            *Insets;              ///< BarW: the rounded ends
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL    *Line;                ///< a line of text, canvas width x LINE_MAX
++  UPDATE_SCREEN_MODEL              Last;
++};
++
++/**
++  Integer square root.
++**/
++STATIC
++UINTN
++ISqrt (
++  IN UINTN  Value
++  )
++{
++  UINTN  Root;
++  UINTN  Bit;
++
++  Root = 0;
++  Bit  = (UINTN)1 << (sizeof (UINTN) * 8 - 2);
++  while (Bit > Value) {
++    Bit >>= 2;
++  }
++
++  while (Bit != 0) {
++    if (Value >= Root + Bit) {
++      Value -= Root + Bit;
++      Root   = (Root >> 1) + Bit;
++    } else {
++      Root >>= 1;
++    }
++
++    Bit >>= 2;
++  }
++
++  return Root;
++}
++
++STATIC
++UINT32
++ToneColor (
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN UINT32              Normal
++  )
++{
++  switch (Tone) {
++    case UpdateScreenToneSuccess:
++      return COLOR_SUCCESS;
++    case UpdateScreenToneWarning:
++      return COLOR_WARNING;
++    case UpdateScreenToneError:
++      return COLOR_ERROR;
++    default:
++      return Normal;
++  }
++}
++
++/**
++  The color between Low and High, Level of 7.
++**/
++STATIC
++UINT32
++Mix (
++  IN UINT32  Low,
++  IN UINT32  High,
++  IN UINTN   Level
++  )
++{
++  UINT32  Result;
++  UINTN   Shift;
++  INT32   L;
++  INT32   H;
++
++  Result = 0;
++  for (Shift = 0; Shift < 24; Shift += 8) {
++    L       = (INT32)((Low >> Shift) & 0xFF);
++    H       = (INT32)((High >> Shift) & 0xFF);
++    Result |= (UINT32)(L + ((H - L) * (INT32)Level) / 7) << Shift;
++  }
++
++  return Result;
++}
++
++//
++// Text
++//
++
++STATIC
++CONST UPDATE_SCREEN_GLYPH *
++FindGlyph (
++  IN CONST UPDATE_SCREEN_FONT  *Font,
++  IN CHAR16                    CodePoint
++  )
++{
++  UINTN  Low;
++  UINTN  High;
++  UINTN  Middle;
++
++  Low  = 0;
++  High = Font->GlyphCount;
++  while (Low < High) {
++    Middle = (Low + High) / 2;
++    if (Font->Glyphs[Middle].CodePoint == CodePoint) {
++      return &Font->Glyphs[Middle];
++    }
++
++    if (Font->Glyphs[Middle].CodePoint < CodePoint) {
++      Low = Middle + 1;
++    } else {
++      High = Middle;
++    }
++  }
++
++  return (CodePoint == L'?') ? NULL : FindGlyph (Font, L'?');
++}
++
++/**
++  The advance of Glyph after Previous, in whole pixels as LVGL counts it.
++**/
++STATIC
++UINTN
++GlyphAdvance (
++  IN CONST UPDATE_SCREEN_FONT   *Font,
++  IN CONST UPDATE_SCREEN_GLYPH  *Glyph,
++  IN CONST UPDATE_SCREEN_GLYPH  *Next      OPTIONAL
++  )
++{
++  INTN  Advance;
++
++  Advance = Glyph->Advance;
++  if ((Next != NULL) && (Glyph->LeftClass != 0) && (Next->RightClass != 0) &&
++      (Glyph->LeftClass <= Font->LeftClasses) && (Next->RightClass <= Font->RightClasses))
++  {
++    Advance += Font->Kern[(Glyph->LeftClass - 1) * Font->RightClasses + (Next->RightClass - 1)];
++  }
++
++  if (Advance < 0) {
++    return 0;
++  }
++
++  return (UINTN)((Advance + 8) >> 4);
++}
++
++STATIC
++UINTN
++TextWidth (
++  IN CONST UPDATE_SCREEN_FONT  *Font,
++  IN CONST CHAR16              *Text
++  )
++{
++  UINTN                      Width;
++  CONST UPDATE_SCREEN_GLYPH  *Glyph;
++
++  Width = 0;
++  for ( ; *Text != L'\0'; Text++) {
++    Glyph = FindGlyph (Font, *Text);
++    if (Glyph != NULL) {
++      Width += GlyphAdvance (Font, Glyph, (Text[1] != L'\0') ? FindGlyph (Font, Text[1]) : NULL);
++    }
++  }
++
++  return Width;
++}
++
++/**
++  Start a line of text: Width x the height of Font in Draw->Line, background.
++**/
++STATIC
++VOID
++LineClear (
++  IN UPDATE_SCREEN_DRAW        *Draw,
++  IN UINTN                     Width,
++  IN CONST UPDATE_SCREEN_FONT  *Font
++  )
++{
++  ZeroMem (Draw->Line, Width * Font->LineHeight * sizeof (EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
++}
++
++/**
++  Draw Text at X of the line, in Color, blended on what is there.
++
++  @return The X after the text.
++**/
++STATIC
++UINTN
++LineText (
++  IN UPDATE_SCREEN_DRAW        *Draw,
++  IN UINTN                     Width,
++  IN CONST UPDATE_SCREEN_FONT  *Font,
++  IN UINTN                     X,
++  IN CONST CHAR16              *Text,
++  IN UINT32                    Color
++  )
++{
++  CONST UPDATE_SCREEN_GLYPH      *Glyph;
++  CONST UINT8                    *Bits;
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Pixel;
++  UINTN                          Row;
++  UINTN                          Column;
++  UINTN                          Index;
++  INTN                           Left;
++  INTN                           Top;
++  INTN                           PixelX;
++  INTN                           PixelY;
++  UINT32                         Alpha;
++  UINT8                          Red;
++  UINT8                          Green;
++  UINT8                          Blue;
++
++  Red   = (UINT8)(Color >> 16);
++  Green = (UINT8)(Color >> 8);
++  Blue  = (UINT8)Color;
++  for ( ; *Text != L'\0'; Text++) {
++    Glyph = FindGlyph (Font, *Text);
++    if (Glyph == NULL) {
++      continue;
++    }
++
++    Bits  = Font->Bitmap + Glyph->Offset;
++    Left  = (INTN)X + Glyph->OffsetX;
++    Top   = (INTN)(Font->LineHeight - Font->BaseLine) - Glyph->OffsetY - Glyph->Height;
++    Index = 0;
++    for (Row = 0; Row < Glyph->Height; Row++) {
++      for (Column = 0; Column < Glyph->Width; Column++, Index++) {
++        Alpha = (Bits[Index / 2] >> ((Index % 2 == 0) ? 4 : 0)) & 0x0F;
++        if (Alpha == 0) {
++          continue;
++        }
++
++        PixelX = Left + (INTN)Column;
++        PixelY = Top + (INTN)Row;
++        if ((PixelX < 0) || (PixelY < 0) || ((UINTN)PixelX >= Width) || ((UINTN)PixelY >= Font->LineHeight)) {
++          continue;
++        }
++
++        Alpha        *= 17;
++        Pixel         = &Draw->Line[(UINTN)PixelY * Width + (UINTN)PixelX];
++        Pixel->Red    = (UINT8)(Pixel->Red + (((INT32)Red - Pixel->Red) * (INT32)Alpha) / 255);
++        Pixel->Green  = (UINT8)(Pixel->Green + (((INT32)Green - Pixel->Green) * (INT32)Alpha) / 255);
++        Pixel->Blue   = (UINT8)(Pixel->Blue + (((INT32)Blue - Pixel->Blue) * (INT32)Alpha) / 255);
++      }
++    }
++
++    X += GlyphAdvance (Font, Glyph, (Text[1] != L'\0') ? FindGlyph (Font, Text[1]) : NULL);
++  }
++
++  return X;
++}
++
++/**
++  A square of Size pixels at X, centered on the lower-case letters of Font.
++**/
++STATIC
++VOID
++LineSquare (
++  IN UPDATE_SCREEN_DRAW        *Draw,
++  IN UINTN                     Width,
++  IN CONST UPDATE_SCREEN_FONT  *Font,
++  IN UINTN                     X,
++  IN UINTN                     Size,
++  IN UINT32                    Color
++  )
++{
++  UINTN                          Row;
++  UINTN                          Column;
++  UINTN                          Top;
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Pixel;
++
++  Top = Font->LineHeight - Font->BaseLine;
++  Top = (Top > Size + Size / 3) ? Top - Size - Size / 3 : 0;
++  for (Row = Top; (Row < Top + Size) && (Row < Font->LineHeight); Row++) {
++    for (Column = X; (Column < X + Size) && (Column < Width); Column++) {
++      Pixel           = &Draw->Line[Row * Width + Column];
++      Pixel->Red      = (UINT8)(Color >> 16);
++      Pixel->Green    = (UINT8)(Color >> 8);
++      Pixel->Blue     = (UINT8)Color;
++      Pixel->Reserved = 0;
++    }
++  }
++}
++
++STATIC
++VOID
++LineShow (
++  IN UPDATE_SCREEN_DRAW        *Draw,
++  IN UPDATE_SCREEN_CANVAS      *Canvas,
++  IN UINTN                     X,
++  IN UINTN                     Y,
++  IN UINTN                     Width,
++  IN CONST UPDATE_SCREEN_FONT  *Font
++  )
++{
++  if ((X + Width > Canvas->Width) || (Y + Font->LineHeight > Canvas->Height)) {
++    return;
++  }
++
++  Canvas->Blit (Canvas, Draw->Line, X, Y, Width, Font->LineHeight);
++}
++
++/**
++  A line of text centered on the screen, the whole width cleared.  Icon, if
++  not 0, goes before the text in IconColor.
++**/
++STATIC
++VOID
++DrawCentered (
++  IN UPDATE_SCREEN_DRAW        *Draw,
++  IN UPDATE_SCREEN_CANVAS      *Canvas,
++  IN UINTN                     Y,
++  IN CONST UPDATE_SCREEN_FONT  *Font,
++  IN CONST CHAR16              *Text,
++  IN UINT32                    Color,
++  IN CHAR16                    Icon,
++  IN UINT32                    IconColor
++  )
++{
++  CHAR16  IconText[2];
++  UINTN   Width;
++  UINTN   IconWidth;
++  UINTN   X;
++
++  IconText[0] = Icon;
++  IconText[1] = L'\0';
++  IconWidth   = (Icon != 0) ? TextWidth (Font, IconText) + Font->LineHeight / 2 : 0;
++  Width       = IconWidth + TextWidth (Font, Text);
++  X           = (Width < Canvas->Width) ? (Canvas->Width - Width) / 2 : 0;
++
++  LineClear (Draw, Canvas->Width, Font);
++  if (Icon != 0) {
++    LineText (Draw, Canvas->Width, Font, X, IconText, IconColor);
++  }
++
++  LineText (Draw, Canvas->Width, Font, X + IconWidth, Text, Color);
++  LineShow (Draw, Canvas, 0, Y, Canvas->Width, Font);
++}
++
++//
++// The ring
++//
++
++STATIC
++VOID
++FillCell (
++  IN UPDATE_SCREEN_DRAW    *Draw,
++  IN UPDATE_SCREEN_CANVAS  *Canvas,
++  IN UINTN                 Index,
++  IN UINT32                Color
++  )
++{
++  Canvas->Fill (
++            Canvas,
++            Draw->RingX + (Index % RING_CELLS) * Draw->Cell,
++            Draw->RingY + (Index / RING_CELLS) * Draw->Cell,
++            Draw->Cell,
++            Draw->Cell,
++            Color
++            );
++}
++
++STATIC
++UINT32
++RingColor (
++  IN UINTN  Rank,
++  IN UINTN  Lit
++  )
++{
++  if (Rank >= Lit) {
++    return COLOR_RING_DIM;
++  }
++
++  if ((Lit < RING_LENGTH) && (Rank + RING_EDGE >= Lit)) {
++    return COLOR_RING_EDGE;
++  }
++
++  return COLOR_RING;
++}
++
++STATIC
++VOID
++DrawInfinity (
++  IN UPDATE_SCREEN_DRAW    *Draw,
++  IN UPDATE_SCREEN_CANVAS  *Canvas,
++  IN UINTN                 Breath
++  )
++{
++  UINTN   Index;
++  UINT32  Color;
++
++  Color = Mix (COLOR_INFINITY_LOW, COLOR_INFINITY, Breath);
++  for (Index = 0; Index < RING_CELLS * RING_CELLS; Index++) {
++    if (mOuroboros[Index / RING_CELLS][Index % RING_CELLS] == 'I') {
++      FillCell (Draw, Canvas, Index, Color);
++    }
++  }
++}
++
++STATIC
++VOID
++DrawRing (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model,
++  IN BOOLEAN                    All
++  )
++{
++  UINTN  Lit;
++  UINTN  From;
++  UINTN  To;
++  UINTN  Rank;
++  UINTN  Index;
++  UINTN  Breath;
++  UINTN  Phase;
++
++  Lit = (MIN (Model->Ring, 1000) * RING_LENGTH) / 1000;
++  if (All || (Model->EyeClosed != Draw->Last.EyeClosed)) {
++    for (Index = 0; Index < RING_CELLS * RING_CELLS; Index++) {
++      if (mOuroboros[Index / RING_CELLS][Index % RING_CELLS] == 'E') {
++        FillCell (Draw, Canvas, Index, Model->EyeClosed ? COLOR_RING : COLOR_EYE);
++      }
++    }
++  }
++
++  if (All) {
++    From = 0;
++    To   = RING_LENGTH;
++  } else {
++    From = MIN (Lit, Draw->Lit);
++    From = (From > RING_EDGE) ? From - RING_EDGE : 0;
++    To   = MAX (Lit, Draw->Lit);
++  }
++
++  for (Rank = From; Rank < To; Rank++) {
++    if (All || (RingColor (Rank, Lit) != RingColor (Rank, Draw->Lit))) {
++      FillCell (Draw, Canvas, mRingOrder[Rank], RingColor (Rank, Lit));
++    }
++  }
++
++  Draw->Lit = Lit;
++
++  //
++  // The infinity breathes, 0 to 6 and back, while blocks are written
++  //
++  if (Model->Breathing) {
++    Phase  = (Model->Tick / 2) % 14;
++    Breath = (Phase < 7) ? Phase : 13 - Phase;
++  } else {
++    Breath = 7;
++  }
++
++  if (All || (Breath != Draw->Breath)) {
++    DrawInfinity (Draw, Canvas, Breath);
++    Draw->Breath = Breath;
++  }
++}
++
++//
++// The bar
++//
++
++/**
++  What column Column shows: the block under it, or with more blocks than
++  columns the least advanced of them.
++**/
++STATIC
++UINT8
++ColumnState (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN CONST UPDATE_SCREEN_MODEL  *Model,
++  IN UINTN                      Column
++  )
++{
++  UINTN  Blocks;
++  UINTN  First;
++  UINTN  Last;
++  UINTN  Block;
++  UINT8  State;
++  UINT8  Result;
++
++  Blocks = MIN (Model->MapBlocks, FIRMWARE_UPDATE_STATUS_MAP_SIZE);
++  if ((Model->Map == NULL) || (Blocks == 0)) {
++    return (Column < (MIN (Model->Ring, 1000) * Draw->BarW) / 1000) ? FIRMWARE_UPDATE_BLOCK_WRITTEN : FIRMWARE_UPDATE_BLOCK_TO_DO;
++  }
++
++  //
++  // A failed block narrower than a column shows over three
++  //
++  if ((Blocks * 3 > Draw->BarW) &&
++      (((Column > 0) && (Model->Map[((Column - 1) * Blocks) / Draw->BarW] == FIRMWARE_UPDATE_BLOCK_FAILED)) ||
++       ((Column + 1 < Draw->BarW) && (Model->Map[((Column + 1) * Blocks) / Draw->BarW] == FIRMWARE_UPDATE_BLOCK_FAILED))))
++  {
++    return FIRMWARE_UPDATE_BLOCK_FAILED;
++  }
++
++  First = (Column * Blocks) / Draw->BarW;
++  Last  = ((Column + 1) * Blocks) / Draw->BarW;
++  if (Last <= First) {
++    //
++    // A block over several columns: a gap of one column between blocks of
++    // 4 columns or more
++    //
++    if ((Blocks * 4 <= Draw->BarW) && (Column > 0) && ((((Column - 1) * Blocks) / Draw->BarW) != First)) {
++      return COLUMN_SEPARATOR;
++    }
++
++    return Model->Map[First];
++  }
++
++  Result = FIRMWARE_UPDATE_BLOCK_SAME;
++  for (Block = First; Block < Last; Block++) {
++    State = Model->Map[Block];
++    if ((State == FIRMWARE_UPDATE_BLOCK_FAILED) || (State == FIRMWARE_UPDATE_BLOCK_CURRENT)) {
++      return State;
++    }
++
++    if ((State == FIRMWARE_UPDATE_BLOCK_TO_DO) ||
++        ((State == FIRMWARE_UPDATE_BLOCK_WRITTEN) && (Result == FIRMWARE_UPDATE_BLOCK_SAME)))
++    {
++      Result = State;
++    }
++  }
++
++  return Result;
++}
++
++STATIC
++UINT32
++ColumnColor (
++  IN UINT8  State
++  )
++{
++  switch (State) {
++    case FIRMWARE_UPDATE_BLOCK_CURRENT:
++      return COLOR_CURRENT;
++    case FIRMWARE_UPDATE_BLOCK_WRITTEN:
++      return COLOR_WRITTEN;
++    case FIRMWARE_UPDATE_BLOCK_SAME:
++      return COLOR_SAME;
++    case FIRMWARE_UPDATE_BLOCK_FAILED:
++      return COLOR_ERROR;
++    case COLUMN_SEPARATOR:
++      return COLOR_BACKGROUND;
++    default:
++      return COLOR_TRACK;
++  }
++}
++
++STATIC
++VOID
++DrawBar (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  )
++{
++  UINTN  Column;
++  UINT8  State;
++
++  for (Column = 0; Column < Draw->BarW; Column++) {
++    State = ColumnState (Draw, Model, Column);
++    if (State == Draw->Columns[Column]) {
++      continue;
++    }
++
++    Canvas->Fill (
++              Canvas,
++              Draw->BarX + Column,
++              Draw->BarY + Draw->Insets[Column],
++              1,
++              Draw->BarH - 2 * Draw->Insets[Column],
++              ColumnColor (State)
++              );
++    Draw->Columns[Column] = State;
++  }
++}
++
++//
++// The lines
++//
++
++STATIC
++VOID
++DrawStatus (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  )
++{
++  CONST UPDATE_SCREEN_FONT  *Font;
++  UINTN                     Width;
++
++  Font = &gUpdateScreenFont16;
++  LineClear (Draw, Draw->BarW, Font);
++  LineText (Draw, Draw->BarW, Font, 0, Model->Status, ToneColor (Model->StatusTone, COLOR_TEXT));
++  Width = TextWidth (Font, Model->Percent);
++  if (Width < Draw->BarW) {
++    LineText (Draw, Draw->BarW, Font, Draw->BarW - Width, Model->Percent, COLOR_TEXT);
++  }
++
++  LineShow (Draw, Canvas, Draw->BarX, Draw->StatusY, Draw->BarW, Font);
++}
++
++STATIC
++VOID
++DrawLegend (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  )
++{
++  CONST UPDATE_SCREEN_FONT  *Font;
++  UINTN                     X;
++  UINTN                     Size;
++  UINTN                     Gap;
++  UINTN                     Width;
++
++  Font = &gUpdateScreenFont16;
++  Size = Font->LineHeight / 2;
++  Gap  = Font->LineHeight;
++  LineClear (Draw, Draw->BarW, Font);
++  if (Model->Legend) {
++    X = 0;
++    if (Model->Written[0] != L'\0') {
++      LineSquare (Draw, Draw->BarW, Font, X, Size, COLOR_WRITTEN);
++      X = LineText (Draw, Draw->BarW, Font, X + Size + Size / 2, Model->Written, COLOR_TERTIARY) + Gap;
++    }
++
++    if (Model->Same[0] != L'\0') {
++      LineSquare (Draw, Draw->BarW, Font, X, Size, COLOR_SAME);
++      X = LineText (Draw, Draw->BarW, Font, X + Size + Size / 2, Model->Same, COLOR_TERTIARY) + Gap;
++    }
++
++    if (Model->ToDo[0] != L'\0') {
++      LineSquare (Draw, Draw->BarW, Font, X, Size, COLOR_TRACK);
++      LineText (Draw, Draw->BarW, Font, X + Size + Size / 2, Model->ToDo, COLOR_TERTIARY);
++    }
++  }
++
++  Width = TextWidth (Font, Model->Eta);
++  if (Width < Draw->BarW) {
++    LineText (Draw, Draw->BarW, Font, Draw->BarW - Width, Model->Eta, COLOR_TERTIARY);
++  }
++
++  LineShow (Draw, Canvas, Draw->BarX, Draw->LegendY, Draw->BarW, Font);
++}
++
++STATIC
++VOID
++DrawFooter (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  )
++{
++  CHAR16  Icon;
++  UINT32  Color;
++
++  switch (Model->FooterTone) {
++    case UpdateScreenToneWarning:
++      Icon = UPDATE_SCREEN_ICON_WARNING;
++      break;
++    case UpdateScreenToneSuccess:
++      Icon = UPDATE_SCREEN_ICON_CHECK;
++      break;
++    case UpdateScreenToneError:
++      Icon = UPDATE_SCREEN_ICON_CLOSE;
++      break;
++    default:
++      Icon = 0;
++      break;
++  }
++
++  Color = ToneColor (Model->FooterTone, COLOR_TERTIARY);
++  DrawCentered (Draw, Canvas, Draw->FooterY, &gUpdateScreenFont16, Model->Footer, Color, Icon, Color);
++}
++
++UPDATE_SCREEN_DRAW *
++UpdateScreenDrawCreate (
++  IN UPDATE_SCREEN_CANVAS  *Canvas
++  )
++{
++  UPDATE_SCREEN_DRAW  *Draw;
++  UINTN               Scale;
++  UINTN               Block;
++  UINTN               Top;
++  UINTN               Radius;
++  UINTN               Column;
++  UINTN               Distance;
++  UINTN               Half;
++  UINTN               Gap;
++
++  if ((Canvas->Width < 640) || (Canvas->Height < 480)) {
++    return NULL;
++  }
++
++  Draw = AllocateZeroPool (sizeof (*Draw));
++  if (Draw == NULL) {
++    return NULL;
++  }
++
++  //
++  // Sizes for 1920 x 1080, scaled (in 1/1000) to the screen
++  //
++  Scale = MIN ((Canvas->Width * 1000) / 1920, (Canvas->Height * 1000) / 1080);
++  if (Scale > 1000) {
++    Scale = 1000 + (Scale - 1000) / 2;
++  }
++
++  Draw->Cell = MAX (8, (18 * Scale + 500) / 1000);
++  Draw->BarW = MIN (BAR_WIDTH, Canvas->Width - 96);
++  Draw->BarH = MAX (8, ((12 * Scale + 500) / 1000) & ~(UINTN)1);
++  Gap        = MAX (24, (48 * Scale) / 1000);
++
++  //
++  // The block from the ring to the legend, 42% down the free height
++  //
++  Block = Draw->Cell * RING_CELLS + Gap + gUpdateScreenFont32.LineHeight + 10 + gUpdateScreenFont20.LineHeight +
++          Gap + gUpdateScreenFont16.LineHeight + 12 + Draw->BarH + 12 + gUpdateScreenFont16.LineHeight;
++  if (Block + 2 * gUpdateScreenFont16.LineHeight + 48 > Canvas->Height) {
++    FreePool (Draw);
++    return NULL;
++  }
++
++  Top             = ((Canvas->Height - Block) * 42) / 100;
++  Draw->RingX     = (Canvas->Width - Draw->Cell * RING_CELLS) / 2;
++  Draw->RingY     = Top;
++  Draw->TitleY    = Draw->RingY + Draw->Cell * RING_CELLS + Gap;
++  Draw->VersionsY = Draw->TitleY + gUpdateScreenFont32.LineHeight + 10;
++  Draw->StatusY   = Draw->VersionsY + gUpdateScreenFont20.LineHeight + Gap;
++  Draw->BarX      = (Canvas->Width - Draw->BarW) / 2;
++  Draw->BarY      = Draw->StatusY + gUpdateScreenFont16.LineHeight + 12;
++  Draw->LegendY   = Draw->BarY + Draw->BarH + 12;
++  Draw->FooterY   = Canvas->Height - MAX (48, (96 * Scale) / 1000) - gUpdateScreenFont16.LineHeight;
++  if (Draw->FooterY < Draw->LegendY + gUpdateScreenFont16.LineHeight + 16) {
++    Draw->FooterY = Draw->LegendY + gUpdateScreenFont16.LineHeight + 16;
++  }
++
++  Draw->Columns = AllocatePool (Draw->BarW);
++  Draw->Insets  = AllocateZeroPool (Draw->BarW);
++  Draw->Line    = AllocatePool (Canvas->Width * LINE_MAX * sizeof (EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
++  if ((Draw->Columns == NULL) || (Draw->Insets == NULL) || (Draw->Line == NULL)) {
++    if (Draw->Columns != NULL) {
++      FreePool (Draw->Columns);
++    }
++
++    if (Draw->Insets != NULL) {
++      FreePool (Draw->Insets);
++    }
++
++    if (Draw->Line != NULL) {
++      FreePool (Draw->Line);
++    }
++
++    FreePool (Draw);
++    return NULL;
++  }
++
++  //
++  // Rounded ends: the half height of a circle of the bar's height at the
++  // center of each end column, rounded
++  //
++  Radius = Draw->BarH / 2;
++  for (Column = 0; Column < Radius; Column++) {
++    Distance = 2 * Radius - 2 * Column - 1;
++    Half     = ISqrt (4 * Radius * Radius - Distance * Distance);
++    Draw->Insets[Column]                  = (UINT8)(Radius - MIN (Radius, (Half + 1) / 2));
++    Draw->Insets[Draw->BarW - 1 - Column] = Draw->Insets[Column];
++  }
++
++  SetMem (Draw->Columns, Draw->BarW, COLUMN_NONE);
++  return Draw;
++}
++
++VOID
++UpdateScreenDrawRender (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  )
++{
++  BOOLEAN  All;
++
++  All = !Draw->Drawn;
++  if (All) {
++    Canvas->Fill (Canvas, 0, 0, Canvas->Width, Canvas->Height, COLOR_BACKGROUND);
++  }
++
++  DrawRing (Draw, Canvas, Model, All);
++  DrawBar (Draw, Canvas, Model);
++
++  if (All || (Model->TitleTone != Draw->Last.TitleTone) || (StrCmp (Model->Title, Draw->Last.Title) != 0)) {
++    DrawCentered (Draw, Canvas, Draw->TitleY, &gUpdateScreenFont32, Model->Title, ToneColor (Model->TitleTone, COLOR_TEXT), 0, 0);
++  }
++
++  if (All || (StrCmp (Model->Versions, Draw->Last.Versions) != 0)) {
++    DrawCentered (Draw, Canvas, Draw->VersionsY, &gUpdateScreenFont20, Model->Versions, COLOR_SECONDARY, 0, 0);
++  }
++
++  if (All || (Model->StatusTone != Draw->Last.StatusTone) || (StrCmp (Model->Status, Draw->Last.Status) != 0) ||
++      (StrCmp (Model->Percent, Draw->Last.Percent) != 0))
++  {
++    DrawStatus (Draw, Canvas, Model);
++  }
++
++  if (All || (Model->Legend != Draw->Last.Legend) || (StrCmp (Model->Written, Draw->Last.Written) != 0) ||
++      (StrCmp (Model->Same, Draw->Last.Same) != 0) || (StrCmp (Model->ToDo, Draw->Last.ToDo) != 0) ||
++      (StrCmp (Model->Eta, Draw->Last.Eta) != 0))
++  {
++    DrawLegend (Draw, Canvas, Model);
++  }
++
++  if (All || (Model->FooterTone != Draw->Last.FooterTone) || (StrCmp (Model->Footer, Draw->Last.Footer) != 0)) {
++    DrawFooter (Draw, Canvas, Model);
++  }
++
++  CopyMem (&Draw->Last, Model, sizeof (Draw->Last));
++  Draw->Drawn = TRUE;
++}
+diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.h b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.h
+new file mode 100644
+index 000000000..0d066e55b
+--- /dev/null
++++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenDraw.h
+@@ -0,0 +1,109 @@
++/** @file
++  Drawing of the firmware update screen, on any surface that can fill a
++  rectangle and copy a block of pixels (UpdateScreenDraw.c): the GOP in the
++  firmware, a file in the host tool that renders it.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef UPDATE_SCREEN_DRAW_H_
++#define UPDATE_SCREEN_DRAW_H_
++
++#include <Uefi.h>
++#include <Protocol/GraphicsOutput.h>
++#include <Library/UpdateScreenLib.h>
++
++#define UPDATE_SCREEN_TEXT  128
++
++typedef struct _UPDATE_SCREEN_CANVAS UPDATE_SCREEN_CANVAS;
++
++/**
++  Fill a rectangle of the surface; the caller keeps it inside.
++
++  @param[in] Color  0xRRGGBB.
++**/
++typedef
++VOID
++(EFIAPI *UPDATE_SCREEN_FILL)(
++  IN UPDATE_SCREEN_CANVAS  *Canvas,
++  IN UINTN                 X,
++  IN UINTN                 Y,
++  IN UINTN                 Width,
++  IN UINTN                 Height,
++  IN UINT32                Color
++  );
++
++/**
++  Copy Width x Height pixels to the surface; the caller keeps them inside.
++**/
++typedef
++VOID
++(EFIAPI *UPDATE_SCREEN_BLIT)(
++  IN UPDATE_SCREEN_CANVAS           *Canvas,
++  IN EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Pixels,
++  IN UINTN                          X,
++  IN UINTN                          Y,
++  IN UINTN                          Width,
++  IN UINTN                          Height
++  );
++
++struct _UPDATE_SCREEN_CANVAS {
++  UINTN                 Width;
++  UINTN                 Height;
++  UPDATE_SCREEN_FILL    Fill;
++  UPDATE_SCREEN_BLIT    Blit;
++  VOID                  *Context;
++};
++
++//
++// What the screen shows.  Ring and Map are the progress: Ring, from 0 to
++// 1000, lights the ouroboros from its head around to its tail; Map, when
++// there is one, is the bar, one entry (FIRMWARE_UPDATE_BLOCK_*) per flash
++// block of the region being written, else the bar follows Ring.
++//
++typedef struct {
++  UPDATE_SCREEN_TONE    TitleTone;
++  CHAR16                Title[UPDATE_SCREEN_TEXT];
++  CHAR16                Versions[UPDATE_SCREEN_TEXT];
++  UPDATE_SCREEN_TONE    StatusTone;
++  CHAR16                Status[UPDATE_SCREEN_TEXT];
++  CHAR16                Percent[16];
++  BOOLEAN               Legend;               ///< the three counters under the bar
++  CHAR16                Written[32];
++  CHAR16                Same[32];
++  CHAR16                ToDo[32];
++  CHAR16                Eta[48];
++  UPDATE_SCREEN_TONE    FooterTone;
++  CHAR16                Footer[UPDATE_SCREEN_TEXT];
++  UINT32                Ring;
++  BOOLEAN               EyeClosed;            ///< the wink at the end
++  BOOLEAN               Breathing;            ///< the infinity breathes while blocks are written
++  UINT32                Tick;
++  UINT32                MapBlocks;
++  CONST UINT8           *Map;
++} UPDATE_SCREEN_MODEL;
++
++typedef struct _UPDATE_SCREEN_DRAW UPDATE_SCREEN_DRAW;
++
++/**
++  The layout of the screen for the size of the canvas.
++
++  @return The drawing state, or NULL without memory or room.
++**/
++UPDATE_SCREEN_DRAW *
++UpdateScreenDrawCreate (
++  IN UPDATE_SCREEN_CANVAS  *Canvas
++  );
++
++/**
++  Draw the model: everything the first time, then what changed.
++**/
++VOID
++UpdateScreenDrawRender (
++  IN UPDATE_SCREEN_DRAW         *Draw,
++  IN UPDATE_SCREEN_CANVAS       *Canvas,
++  IN CONST UPDATE_SCREEN_MODEL  *Model
++  );
++
++#endif
+diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h
+new file mode 100644
+index 000000000..c1dfc6ffe
+--- /dev/null
++++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenFont.h
+@@ -0,0 +1,60 @@
++/** @file
++  Bitmap fonts of the firmware update screen (UpdateScreenFont.c, made by
++  tools/ui-font.py of ouroBIOS from the Montserrat fonts of LvglPkg).
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#ifndef UPDATE_SCREEN_FONT_H_
++#define UPDATE_SCREEN_FONT_H_
++
++#include <Uefi.h>
++
++//
++// A glyph: its bitmap is Width x Height pixels of 4 bits (alpha 0-15), high
++// nibble first, rows one after the other.  Its box sits OffsetX pixels right
++// of the pen and OffsetY above the baseline; Advance and the kerning are in
++// 1/16 px.
++//
++typedef struct {
++  UINT16    CodePoint;
++  UINT16    Advance;
++  UINT32    Offset;
++  UINT8     Width;
++  UINT8     Height;
++  INT8      OffsetX;
++  INT8      OffsetY;
++  UINT8     LeftClass;                  ///< kerning, 0: none
++  UINT8     RightClass;
++} UPDATE_SCREEN_GLYPH;
++
++typedef struct {
++  UINT8                        LineHeight;
++  UINT8                        BaseLine;    ///< from the bottom of the line
++  UINT16                       GlyphCount;
++  CONST UPDATE_SCREEN_GLYPH    *Glyphs;     ///< by CodePoint
++  CONST UINT8                  *Bitmap;
++  UINT8                        LeftClasses;
++  UINT8                        RightClasses;
++  CONST INT8                   *Kern;       ///< [LeftClass - 1][RightClass - 1]
++} UPDATE_SCREEN_FONT;
++
++extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont16;
++extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont20;
++extern CONST UPDATE_SCREEN_FONT  gUpdateScreenFont32;
++
++//
++// Icons of the fonts (Font Awesome 5 Free)
++//
++#define UPDATE_SCREEN_ICON_WARNING  0xF071
++#define UPDATE_SCREEN_ICON_CHECK    0xF00C
++#define UPDATE_SCREEN_ICON_CLOSE    0xF00D
++#define UPDATE_SCREEN_ICON_BOLT     0xF0E7
++#define UPDATE_SCREEN_ICON_NEXT     0xF054
++#define UPDATE_SCREEN_ICON_REFRESH  0xF021
++#define UPDATE_SCREEN_ICON_POWER    0xF011
++#define UPDATE_SCREEN_ICON_CHIP     0xF7C2
++#define UPDATE_SCREEN_BULLET        0x2022
++
++#endif
+diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.c b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.c
+new file mode 100644
+index 000000000..a807350b7
+--- /dev/null
++++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.c
+@@ -0,0 +1,676 @@
++/** @file
++  The firmware update screen of ouroBIOS, as the DisplayUpdateProgressLib of
++  the payload.
++
++  FmpDxe reports the progress of a capsule (DisplayUpdateProgress(), 0 to
++  100), FmpDeviceSmmLib publishes what it writes (the region, each flash
++  block, the vboot slots, the versions: Protocol/FirmwareUpdateStatus.h),
++  and the boot manager sets the status line before and around the capsule
++  and counts down to the reset (UpdateScreenStatus(), UpdateScreenRestart()).
++  This file turns that into the model of the screen; UpdateScreenDraw.c
++  draws it on the GOP.  Without a GOP, or on a screen too small, nothing is
++  drawn: the progress is in the debug log (DxeCapsuleLibFmp) and the lines
++  go to the text console.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <PiDxe.h>
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/DisplayUpdateProgressLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Library/PrintLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiLib.h>
++#include <Library/UefiRuntimeServicesTableLib.h>
++#include <Library/UpdateScreenLib.h>
++#include <Protocol/FirmwareUpdateStatus.h>
++#include <Protocol/GraphicsOutput.h>
++#include "UpdateScreenDraw.h"
++#include "UpdateScreenFont.h"
++
++//
++// The last ESRT number of the release format before X.Y.Z.R: v1.3.6-rc1
++//
++#define LAST_OLD_LAYOUT_VERSION  0x01030006
++
++//
++// The estimate of the time left: the RTC read every ETA_EVERY redraws,
++// shown after ETA_MIN_SECONDS and 1/ETA_MIN_SHARE of the blocks
++//
++#define ETA_EVERY        16
++#define ETA_MIN_SECONDS  3
++#define ETA_MIN_SHARE    20
++#define SECONDS_PER_DAY  86400
++
++//
++// The wink, in microseconds
++//
++#define WINK_CLOSED  140000
++#define WINK_OPEN    360000
++
++STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mGop;
++STATIC BOOLEAN                       mGopTried;
++STATIC UPDATE_SCREEN_CANVAS          mCanvas;
++STATIC UPDATE_SCREEN_DRAW            *mDraw;
++STATIC UPDATE_SCREEN_MODEL           mModel;
++STATIC FIRMWARE_UPDATE_STATUS        *mStatus;
++
++STATIC UINTN               mCompletion;
++STATIC BOOLEAN             mProgress;               ///< a capsule has reported progress
++STATIC CHAR16              mMessage[UPDATE_SCREEN_TEXT];
++STATIC UPDATE_SCREEN_TONE  mMessageTone;
++STATIC BOOLEAN             mMessageFresh;           ///< newer than the progress
++STATIC UINTN               mCountdown;              ///< seconds to the reset, 0: none
++
++STATIC UINT32   mEtaCalls;
++STATIC BOOLEAN  mEtaStarted;
++STATIC UINT32   mEtaSecond;
++STATIC UINT32   mEtaBlocks;
++
++STATIC
++VOID
++EFIAPI
++GopFill (
++  IN UPDATE_SCREEN_CANVAS  *Canvas,
++  IN UINTN                 X,
++  IN UINTN                 Y,
++  IN UINTN                 Width,
++  IN UINTN                 Height,
++  IN UINT32                Color
++  )
++{
++  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  Pixel;
++
++  Pixel.Blue     = (UINT8)Color;
++  Pixel.Green    = (UINT8)(Color >> 8);
++  Pixel.Red      = (UINT8)(Color >> 16);
++  Pixel.Reserved = 0;
++  mGop->Blt (mGop, &Pixel, EfiBltVideoFill, 0, 0, X, Y, Width, Height, 0);
++}
++
++STATIC
++VOID
++EFIAPI
++GopBlit (
++  IN UPDATE_SCREEN_CANVAS           *Canvas,
++  IN EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *Pixels,
++  IN UINTN                          X,
++  IN UINTN                          Y,
++  IN UINTN                          Width,
++  IN UINTN                          Height
++  )
++{
++  mGop->Blt (mGop, Pixels, EfiBltBufferToVideo, 0, 0, X, Y, Width, Height, Width * sizeof (EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
++}
++
++/**
++  The GOP of the console and the layout for it, once.
++
++  @retval TRUE   The screen can be drawn.
++**/
++STATIC
++BOOLEAN
++ScreenReady (
++  VOID
++  )
++{
++  EFI_STATUS  Status;
++
++  if (mDraw != NULL) {
++    return TRUE;
++  }
++
++  if (mGopTried) {
++    return FALSE;
++  }
++
++  mGopTried = TRUE;
++  Status    = EFI_NOT_FOUND;
++  if (gST->ConsoleOutHandle != NULL) {
++    Status = gBS->HandleProtocol (gST->ConsoleOutHandle, &gEfiGraphicsOutputProtocolGuid, (VOID **)&mGop);
++  }
++
++  if (EFI_ERROR (Status)) {
++    Status = gBS->LocateProtocol (&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&mGop);
++  }
++
++  if (EFI_ERROR (Status) || (mGop == NULL) || (mGop->Mode == NULL) || (mGop->Mode->Info == NULL)) {
++    DEBUG ((DEBUG_INFO, "UpdateScreen: no graphics console (%r)\n", Status));
++    mGop = NULL;
++    return FALSE;
++  }
++
++  mCanvas.Width   = mGop->Mode->Info->HorizontalResolution;
++  mCanvas.Height  = mGop->Mode->Info->VerticalResolution;
++  mCanvas.Fill    = GopFill;
++  mCanvas.Blit    = GopBlit;
++  mCanvas.Context = NULL;
++  mDraw           = UpdateScreenDrawCreate (&mCanvas);
++  if (mDraw == NULL) {
++    DEBUG ((DEBUG_INFO, "UpdateScreen: no layout for %ux%u\n", (UINT32)mCanvas.Width, (UINT32)mCanvas.Height));
++    return FALSE;
++  }
++
++  return TRUE;
++}
++
++/**
++  An ESRT version as the tag of its release, as the setup and
++  tools/update.py print it: X.Y.Z.R, a release X.Y.Z.0, its candidate N the
++  release before with R = N; up to v1.3.6-rc1 X.Y.Z, Z in 16 bits.
++**/
++STATIC
++VOID
++FormatTag (
++  OUT CHAR16  *Buffer,
++  IN  UINTN   BufferSize,
++  IN  UINT32  Version
++  )
++{
++  UINT32  Release;
++
++  if ((Version <= LAST_OLD_LAYOUT_VERSION) && ((Version & 0xFF00) == 0)) {
++    if (Version == LAST_OLD_LAYOUT_VERSION) {
++      UnicodeSPrint (Buffer, BufferSize, L"v1.3.6-rc1");
++    } else {
++      UnicodeSPrint (Buffer, BufferSize, L"v%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, Version & 0xFFFF);
++    }
++
++    return;
++  }
++
++  if ((Version & 0xFF) == 0) {
++    UnicodeSPrint (Buffer, BufferSize, L"v%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, (Version >> 8) & 0xFF);
++    return;
++  }
++
++  Release = (Version & ~0xFFu) + 0x100;
++  UnicodeSPrint (
++    Buffer,
++    BufferSize,
++    L"v%u.%u.%u-rc%u",
++    Release >> 24,
++    (Release >> 16) & 0xFF,
++    (Release >> 8) & 0xFF,
++    Version & 0xFF
++    );
++}
++
++/**
++  Label and Blocks of BlockSize bytes, in KiB or in MiB with one decimal.
++**/
++STATIC
++VOID
++FormatSize (
++  OUT CHAR16        *Buffer,
++  IN  UINTN         BufferSize,
++  IN  CONST CHAR16  *Label,
++  IN  UINT32        Blocks,
++  IN  UINT32        BlockSize
++  )
++{
++  UINT64  KiB;
++  UINT64  Tenths;
++
++  KiB = MultU64x32 (Blocks, BlockSize) / 1024;
++  if (KiB < 1024) {
++    UnicodeSPrint (Buffer, BufferSize, L"%s %Lu KiB", Label, KiB);
++  } else {
++    Tenths = (KiB * 10 + 512) / 1024;
++    UnicodeSPrint (Buffer, BufferSize, L"%s %Lu.%Lu MiB", Label, Tenths / 10, Tenths % 10);
++  }
++}
++
++/**
++  The seconds of the day by the RTC, or MAX_UINT32.
++**/
++STATIC
++UINT32
++SecondOfDay (
++  VOID
++  )
++{
++  EFI_TIME  Time;
++
++  if (EFI_ERROR (gRT->GetTime (&Time, NULL))) {
++    return MAX_UINT32;
++  }
++
++  return (UINT32)Time.Hour * 3600 + (UINT32)Time.Minute * 60 + Time.Second;
++}
++
++/**
++  The time left, from the blocks done since the first estimate.
++**/
++STATIC
++VOID
++UpdateEta (
++  IN FIRMWARE_UPDATE_STATUS  *Status
++  )
++{
++  UINT32  Now;
++  UINT32  Elapsed;
++  UINT32  Done;
++  UINT32  Left;
++
++  if ((Status == NULL) || (Status->Phase != FIRMWARE_UPDATE_PHASE_WRITING) ||
++      (Status->TotalBlocks == 0) || (Status->DoneBlocks >= Status->TotalBlocks))
++  {
++    mModel.Eta[0] = L'\0';
++    return;
++  }
++
++  if ((mEtaCalls++ % ETA_EVERY) != 0) {
++    return;
++  }
++
++  Now = SecondOfDay ();
++  if (Now == MAX_UINT32) {
++    return;
++  }
++
++  if (!mEtaStarted) {
++    mEtaStarted = TRUE;
++    mEtaSecond  = Now;
++    mEtaBlocks  = Status->DoneBlocks;
++    return;
++  }
++
++  Elapsed = (Now + SECONDS_PER_DAY - mEtaSecond) % SECONDS_PER_DAY;
++  Done    = Status->DoneBlocks - mEtaBlocks;
++  if ((Elapsed < ETA_MIN_SECONDS) || (Done == 0) || ((UINT64)Status->DoneBlocks * ETA_MIN_SHARE < Status->TotalBlocks)) {
++    return;
++  }
++
++  Left = (UINT32)DivU64x32 (MultU64x32 (Elapsed, Status->TotalBlocks - Status->DoneBlocks) + Done - 1, Done);
++  if (Left < 10) {
++    UnicodeSPrint (mModel.Eta, sizeof (mModel.Eta), L"Almost done");
++  } else if (Left < 60) {
++    UnicodeSPrint (mModel.Eta, sizeof (mModel.Eta), L"About %u s left", ((Left + 4) / 5) * 5);
++  } else {
++    UnicodeSPrint (mModel.Eta, sizeof (mModel.Eta), L"About %u min left", (Left + 30) / 60);
++  }
++}
++
++/**
++  The block of the region that failed, from 1, or 0.
++**/
++STATIC
++UINT32
++FailedBlock (
++  IN FIRMWARE_UPDATE_STATUS  *Status
++  )
++{
++  UINT32  Index;
++  UINT32  Entries;
++
++  Entries = MIN (Status->RegionBlocks, FIRMWARE_UPDATE_STATUS_MAP_SIZE);
++  for (Index = 0; Index < Entries; Index++) {
++    if (Status->Map[Index] == FIRMWARE_UPDATE_BLOCK_FAILED) {
++      if (Status->RegionBlocks > FIRMWARE_UPDATE_STATUS_MAP_SIZE) {
++        return (UINT32)DivU64x32 (MultU64x32 (Status->RegionBlocks, Index), FIRMWARE_UPDATE_STATUS_MAP_SIZE) + 1;
++      }
++
++      return Index + 1;
++    }
++  }
++
++  return 0;
++}
++
++/**
++  Verb and the region being written, for the status line.
++**/
++STATIC
++VOID
++RegionText (
++  OUT CHAR16                  *Buffer,
++  IN  UINTN                   BufferSize,
++  IN  FIRMWARE_UPDATE_STATUS  *Status,
++  IN  CONST CHAR16            *Verb
++  )
++{
++  if (AsciiStrCmp (Status->Region, "RW_MRC_CACHE") == 0) {
++    UnicodeSPrint (Buffer, BufferSize, L"%s the memory training data", Verb);
++  } else if ((AsciiStrCmp (Status->Region, "RW_SECTION_A") == 0) || (AsciiStrCmp (Status->Region, "RW_SECTION_B") == 0)) {
++    UnicodeSPrint (Buffer, BufferSize, L"%s slot %c", Verb, (CHAR16)Status->Region[11]);
++  } else {
++    UnicodeSPrint (Buffer, BufferSize, L"%s %a", Verb, Status->Region);
++  }
++}
++
++/**
++  The status line from the published state.
++**/
++STATIC
++VOID
++StatusText (
++  IN FIRMWARE_UPDATE_STATUS  *Status
++  )
++{
++  UINT32  Failed;
++  UINTN   Length;
++
++  switch (Status->Phase) {
++    case FIRMWARE_UPDATE_PHASE_PREPARING:
++      UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"Preparing the flash");
++      break;
++    case FIRMWARE_UPDATE_PHASE_WRITING:
++      RegionText (
++        mModel.Status,
++        sizeof (mModel.Status),
++        Status,
++        (AsciiStrCmp (Status->Region, "RW_MRC_CACHE") == 0) ? L"Clearing" : L"Writing"
++        );
++      break;
++    case FIRMWARE_UPDATE_PHASE_FINISHING:
++      UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"Asking vboot to try slot %c", (CHAR16)Status->TargetSlot);
++      break;
++    case FIRMWARE_UPDATE_PHASE_DONE:
++      if (Status->TargetSlot != 0) {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"Slot %c is ready: the laptop starts from it next", (CHAR16)Status->TargetSlot);
++      } else {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"The new firmware is written");
++      }
++
++      mModel.StatusTone = UpdateScreenToneSuccess;
++      break;
++    case FIRMWARE_UPDATE_PHASE_FAILED:
++      Failed = FailedBlock (Status);
++      if (Failed != 0) {
++        RegionText (mModel.Status, sizeof (mModel.Status), Status, L"Writing failed in");
++        Length = StrLen (mModel.Status);
++        UnicodeSPrint (
++          mModel.Status + Length,
++          sizeof (mModel.Status) - Length * sizeof (CHAR16),
++          L", block %u of %u",
++          Failed,
++          Status->RegionBlocks
++          );
++      } else if (Status->Reason == FIRMWARE_UPDATE_REASON_INVALID) {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"The capsule is not for this flash: nothing was written");
++      } else if (Status->Reason == FIRMWARE_UPDATE_REASON_LAYOUT) {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"The capsule has another flash map: update with flashrom");
++      } else if (Status->Reason == FIRMWARE_UPDATE_REASON_FLASH) {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"Reading the flash failed: nothing was written");
++      } else {
++        UnicodeSPrint (mModel.Status, sizeof (mModel.Status), L"The capsule was not written");
++      }
++
++      mModel.StatusTone = UpdateScreenToneError;
++      break;
++    default:
++      mModel.Status[0] = L'\0';
++      break;
++  }
++}
++
++/**
++  The model of the screen from the progress, the published state and the
++  lines of the boot manager.
++**/
++STATIC
++VOID
++UpdateModel (
++  VOID
++  )
++{
++  FIRMWARE_UPDATE_STATUS  *Status;
++  CHAR16                  From[24];
++  CHAR16                  To[24];
++  UINT32                  Phase;
++  BOOLEAN                 Final;
++
++  if (mStatus == NULL) {
++    if (EFI_ERROR (gBS->LocateProtocol (&gFirmwareUpdateStatusProtocolGuid, NULL, (VOID **)&mStatus)) ||
++        (mStatus->Revision != FIRMWARE_UPDATE_STATUS_REVISION))
++    {
++      mStatus = NULL;
++    }
++  }
++
++  //
++  // The state of the writer counts once a capsule reports progress
++  //
++  Status = (mProgress && (mStatus != NULL) && (mStatus->Phase != FIRMWARE_UPDATE_PHASE_IDLE)) ? mStatus : NULL;
++  Phase  = (Status != NULL) ? Status->Phase : FIRMWARE_UPDATE_PHASE_IDLE;
++  Final  = (Phase == FIRMWARE_UPDATE_PHASE_DONE) || (Phase == FIRMWARE_UPDATE_PHASE_FAILED);
++
++  //
++  // Title and versions
++  //
++  mModel.TitleTone = UpdateScreenToneNormal;
++  if (Phase == FIRMWARE_UPDATE_PHASE_DONE) {
++    UnicodeSPrint (mModel.Title, sizeof (mModel.Title), L"ouroBIOS updated");
++  } else if (Phase == FIRMWARE_UPDATE_PHASE_FAILED) {
++    UnicodeSPrint (mModel.Title, sizeof (mModel.Title), L"The update did not complete");
++    mModel.TitleTone = UpdateScreenToneError;
++  } else if (mProgress) {
++    UnicodeSPrint (mModel.Title, sizeof (mModel.Title), L"Updating ouroBIOS");
++  } else {
++    UnicodeSPrint (mModel.Title, sizeof (mModel.Title), L"Firmware update");
++  }
++
++  if ((Status != NULL) && (Status->ToVersion != 0)) {
++    FormatTag (From, sizeof (From), Status->FromVersion);
++    FormatTag (To, sizeof (To), Status->ToVersion);
++    if (Status->TargetSlot != 0) {
++      UnicodeSPrint (
++        mModel.Versions,
++        sizeof (mModel.Versions),
++        L"%s %c slot %c   %c   %s %c slot %c",
++        From,
++        UPDATE_SCREEN_BULLET,
++        (CHAR16)Status->RunningSlot,
++        UPDATE_SCREEN_ICON_NEXT,
++        To,
++        UPDATE_SCREEN_BULLET,
++        (CHAR16)Status->TargetSlot
++        );
++    } else {
++      UnicodeSPrint (mModel.Versions, sizeof (mModel.Versions), L"%s   %c   %s", From, UPDATE_SCREEN_ICON_NEXT, To);
++    }
++  }
++
++  //
++  // The status line: the result of the writer, else the newest of the
++  // boot manager's line and what is being written
++  //
++  mModel.StatusTone = UpdateScreenToneNormal;
++  if ((Status != NULL) && (Final || !mMessageFresh)) {
++    StatusText (Status);
++  } else {
++    StrCpyS (mModel.Status, ARRAY_SIZE (mModel.Status), mMessage);
++    mModel.StatusTone = mMessageTone;
++  }
++
++  if (mProgress) {
++    UnicodeSPrint (mModel.Percent, sizeof (mModel.Percent), L"%u%%", (UINT32)mCompletion);
++  } else {
++    mModel.Percent[0] = L'\0';
++  }
++
++  //
++  // The ring and the bar
++  //
++  mModel.Ring      = mProgress ? (UINT32)mCompletion * 10 : 0;
++  mModel.Breathing = (Phase == FIRMWARE_UPDATE_PHASE_WRITING);
++  mModel.Tick++;
++  if ((Status != NULL) && (Phase >= FIRMWARE_UPDATE_PHASE_WRITING) && (Status->RegionBlocks != 0)) {
++    mModel.Map       = Status->Map;
++    mModel.MapBlocks = Status->RegionBlocks;
++  } else {
++    mModel.Map       = NULL;
++    mModel.MapBlocks = 0;
++  }
++
++  mModel.Legend = (Status != NULL) && (Status->TotalBlocks != 0) && (Phase >= FIRMWARE_UPDATE_PHASE_WRITING) &&
++                  (Status->DoneBlocks != 0);
++  if (mModel.Legend) {
++    FormatSize (mModel.Written, sizeof (mModel.Written), L"Rewritten", Status->WrittenBlocks, Status->BlockSize);
++    FormatSize (mModel.Same, sizeof (mModel.Same), L"Unchanged", Status->SameBlocks, Status->BlockSize);
++    if (Status->DoneBlocks < Status->TotalBlocks) {
++      FormatSize (mModel.ToDo, sizeof (mModel.ToDo), L"To do", Status->TotalBlocks - Status->DoneBlocks, Status->BlockSize);
++    } else {
++      mModel.ToDo[0] = L'\0';
++    }
++  }
++
++  //
++  // Right of the legend: the time left, or the countdown to the reset
++  //
++  if (mCountdown != 0) {
++    UnicodeSPrint (mModel.Eta, sizeof (mModel.Eta), L"Restarting in %u s", (UINT32)mCountdown);
++  } else {
++    UpdateEta (Status);
++  }
++
++  //
++  // The footer: what to do, or what the result means
++  //
++  if (Phase == FIRMWARE_UPDATE_PHASE_DONE) {
++    mModel.FooterTone = UpdateScreenToneSuccess;
++    if (Status->RunningSlot != 0) {
++      FormatTag (From, sizeof (From), Status->FromVersion);
++      UnicodeSPrint (
++        mModel.Footer,
++        sizeof (mModel.Footer),
++        L"If slot %c does not start, the laptop goes back to %s by itself",
++        (CHAR16)Status->TargetSlot,
++        From
++        );
++    } else {
++      UnicodeSPrint (mModel.Footer, sizeof (mModel.Footer), L"The laptop restarts to start it");
++    }
++  } else if (Phase == FIRMWARE_UPDATE_PHASE_FAILED) {
++    mModel.FooterTone = UpdateScreenToneError;
++    if (Status->RunningSlot != 0) {
++      UnicodeSPrint (mModel.Footer, sizeof (mModel.Footer), L"Slot %c, the one in use, was not touched", (CHAR16)Status->RunningSlot);
++    } else {
++      UnicodeSPrint (mModel.Footer, sizeof (mModel.Footer), L"Keep the laptop on and try the update again");
++    }
++  } else if (!mProgress && ((mMessageTone == UpdateScreenToneWarning) || (mMessageTone == UpdateScreenToneError))) {
++    mModel.FooterTone = UpdateScreenToneNormal;
++    UnicodeSPrint (mModel.Footer, sizeof (mModel.Footer), L"The firmware in use was not changed");
++  } else {
++    mModel.FooterTone = UpdateScreenToneWarning;
++    UnicodeSPrint (mModel.Footer, sizeof (mModel.Footer), L"Do not turn off the laptop or unplug the AC adapter");
++  }
++
++}
++
++STATIC
++VOID
++Redraw (
++  VOID
++  )
++{
++  if (!ScreenReady ()) {
++    return;
++  }
++
++  UpdateModel ();
++  UpdateScreenDrawRender (mDraw, &mCanvas, &mModel);
++}
++
++/**
++  Function indicates the current completion progress of a firmware update.
++
++  @param[in] Completion  A value between 0 and 100 indicating the current
++                         completion progress of a firmware update.  A value
++                         lower than the one before starts a new update.
++  @param[in] Color       Not used: the screen has its own colors.
++
++  @retval EFI_SUCCESS            Progress displayed, or logged without a screen.
++  @retval EFI_INVALID_PARAMETER  Completion is not in range 0..100.
++**/
++EFI_STATUS
++EFIAPI
++DisplayUpdateProgress (
++  IN UINTN                                Completion,
++  IN EFI_GRAPHICS_OUTPUT_BLT_PIXEL_UNION  *Color       OPTIONAL
++  )
++{
++  if (Completion > 100) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if (!mProgress || (Completion < mCompletion)) {
++    //
++    // A capsule starts, with its own estimate of the time
++    //
++    mEtaStarted = FALSE;
++    mEtaCalls   = 0;
++    mCountdown  = 0;
++  }
++
++  mProgress     = TRUE;
++  mCompletion   = Completion;
++  mMessageFresh = FALSE;
++  Redraw ();
++  return EFI_SUCCESS;
++}
++
++VOID
++EFIAPI
++UpdateScreenStatus (
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN CONST CHAR16        *Format,
++  ...
++  )
++{
++  VA_LIST  Marker;
++
++  VA_START (Marker, Format);
++  UnicodeVSPrint (mMessage, sizeof (mMessage), Format, Marker);
++  VA_END (Marker);
++
++  mMessageTone  = Tone;
++  mMessageFresh = TRUE;
++  DEBUG ((DEBUG_INFO, "UpdateScreen: %s\n", mMessage));
++  if (ScreenReady ()) {
++    Redraw ();
++  } else if ((gST != NULL) && (gST->ConOut != NULL)) {
++    Print (L"%s\n", mMessage);
++  }
++}
++
++VOID
++EFIAPI
++UpdateScreenRestart (
++  IN UPDATE_SCREEN_TONE  Tone,
++  IN UINTN               Seconds
++  )
++{
++  if (!ScreenReady ()) {
++    gBS->Stall (Seconds * 1000000);
++    return;
++  }
++
++  if ((Tone == UpdateScreenToneSuccess) && (Seconds != 0)) {
++    //
++    // The snake winks: the firmware is reborn
++    //
++    mCountdown       = Seconds;
++    mModel.EyeClosed = TRUE;
++    Redraw ();
++    gBS->Stall (WINK_CLOSED);
++    mModel.EyeClosed = FALSE;
++    Redraw ();
++    gBS->Stall (WINK_OPEN);
++    Seconds--;
++    gBS->Stall (1000000 - WINK_CLOSED - WINK_OPEN);
++  }
++
++  for ( ; Seconds > 0; Seconds--) {
++    mCountdown = Seconds;
++    Redraw ();
++    gBS->Stall (1000000);
++  }
++
++  mCountdown = 0;
++}
+diff --git a/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf
+new file mode 100644
+index 000000000..51ca5819f
+--- /dev/null
++++ b/UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf
+@@ -0,0 +1,46 @@
++## @file
++#  The firmware update screen of ouroBIOS: the ouroboros of the logo as the
++#  progress, the map of the flash blocks being written, the versions and the
++#  vboot slots.  Also the DisplayUpdateProgressLib of the payload.
++#
++#  UpdateScreenFont.c is made by tools/ui-font.py of ouroBIOS from the fonts
++#  of LvglPkg, when the tree is prepared.
++#
++#  Copyright (c) 2026, ouroBIOS contributors
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++##
++
++[Defines]
++  INF_VERSION    = 0x00010005
++  BASE_NAME      = UpdateScreenLib
++  FILE_GUID      = 7D674A69-54EF-44DB-B04E-686198201CED
++  MODULE_TYPE    = DXE_DRIVER
++  VERSION_STRING = 1.0
++  LIBRARY_CLASS  = DisplayUpdateProgressLib|DXE_DRIVER UEFI_DRIVER UEFI_APPLICATION
++  LIBRARY_CLASS  = UpdateScreenLib|DXE_DRIVER UEFI_DRIVER UEFI_APPLICATION
++
++[Sources]
++  UpdateScreenLib.c
++  UpdateScreenDraw.c
++  UpdateScreenDraw.h
++  UpdateScreenFont.c
++  UpdateScreenFont.h
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++  UefiPayloadPkg/UefiPayloadPkg.dec
++
++[LibraryClasses]
++  BaseLib
++  BaseMemoryLib
++  DebugLib
++  MemoryAllocationLib
++  PrintLib
++  UefiBootServicesTableLib
++  UefiLib
++  UefiRuntimeServicesTableLib
++
++[Protocols]
++  gEfiGraphicsOutputProtocolGuid      ## SOMETIMES_CONSUMES
++  gFirmwareUpdateStatusProtocolGuid   ## SOMETIMES_CONSUMES
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dec b/UefiPayloadPkg/UefiPayloadPkg.dec
+index ff3eb359d..a1701fc9a 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dec
++++ b/UefiPayloadPkg/UefiPayloadPkg.dec
+@@ -21,6 +21,8 @@
+   PayloadEntryHelperLib|Include/Library/PayloadEntryHelperLib.h
+   BootSplashLib|Include/Library/BootSplashLib.h
+   CbfsLib|Include/Library/CbfsLib.h
++  ## @libraryclass  The firmware update screen; also a DisplayUpdateProgressLib
++  UpdateScreenLib|Include/Library/UpdateScreenLib.h
+ 
+ [Guids]
+   # SMMSTORE for coreboot and EDK-2
+@@ -97,6 +99,9 @@
+   # Gop Temp
+   #
+   gPlatformGOPPolicyGuid                  = { 0xec2e931b, 0x3281, 0x48a5, { 0x81, 0x07, 0xdf, 0x8a, 0x8b, 0xed, 0x3c, 0x5d } }
++  ## The state of the firmware update being written, for the update screen
++  #  Include/Protocol/FirmwareUpdateStatus.h
++  gFirmwareUpdateStatusProtocolGuid       = { 0xe769a170, 0xb26e, 0x4763, { 0x9b, 0xbd, 0x42, 0xb7, 0xf6, 0x68, 0xdd, 0xa5 } }
+ 
+ ################################################################################
+ #
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 625b2829b..33c5bf008 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -390,10 +390,9 @@
+   OemHookStatusCodeLib|MdeModulePkg/Library/OemHookStatusCodeLibNull/OemHookStatusCodeLibNull.inf
+ !if $(CAPSULE_SUPPORT) == TRUE
+   CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibFmp/DxeCapsuleLib.inf
+-  # Use the graphics implementation for update progress.
+-  # BOOT_ON_FLASH_UPDATE initializes the graphics console before
+-  # processing capsules.
+-  DisplayUpdateProgressLib|MdeModulePkg/Library/DisplayUpdateProgressLibGraphics/DisplayUpdateProgressLibGraphics.inf
++  # The update screen of ouroBIOS shows the progress: the boot manager
++  # initializes the graphics console before processing capsules.
++  DisplayUpdateProgressLib|UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf
+   # If there are no specific checks to do, null-library suffices
+   CapsuleUpdatePolicyLib|FmpDevicePkg/Library/CapsuleUpdatePolicyLibNull/CapsuleUpdatePolicyLibNull.inf
+   FmpAuthenticationLib|SecurityPkg/Library/FmpAuthenticationLibPkcs7/FmpAuthenticationLibPkcs7.inf
+@@ -406,6 +405,7 @@
+   CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibNull/DxeCapsuleLibNull.inf
+   !endif
+   SecurityManagementLib|MdeModulePkg/Library/DxeSecurityManagementLib/DxeSecurityManagementLib.inf
++  UpdateScreenLib|UefiPayloadPkg/Library/UpdateScreenLib/UpdateScreenLib.inf
+   UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
+   BootLogoLib|MdeModulePkg/Library/BootLogoLib/BootLogoLib.inf
+   CustomizedDisplayLib|MdeModulePkg/Library/CustomizedDisplayLib/CustomizedDisplayLib.inf
+-- 
+2.43.0
+

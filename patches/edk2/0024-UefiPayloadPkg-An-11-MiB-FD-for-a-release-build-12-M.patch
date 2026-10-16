@@ -1,29 +1,38 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Domenico D'Arrigo <DCHEM88@hotmail.it>
 Date: Fri, 16 Oct 2026 11:10:00 +0200
-Subject: [PATCH] UefiPayloadPkg: An 11 MiB FD for the release build too
+Subject: [PATCH] UefiPayloadPkg: An 11 MiB FD for a release build, 12 MiB for
+ a debug one
 
 The firmware device of the payload, its image in memory, is 10 MiB in a
 release build and 11 in a debug one. With Secure Boot, the LVGL setup,
 the capsule update, iPXE and CSMWrap the DXE volume of a release build
 is past 10 MiB and GenFv stops: "the required fv image size 0xa6b520
-exceeds the set fv image size 0xa00000". 11 MiB for the release build
-as well: it is memory the payload takes while it runs, not flash, which
-holds the compressed image.
+exceeds the set fv image size 0xa00000". With the firmware update
+screen as well (UpdateScreenLib), the payload volume of a debug build,
+iPXE and CSMWrap left out, no longer fits in 11 MiB. 11 MiB for a
+release build and 12 for a debug one: it is memory the payload takes
+while it runs, not flash, which holds the compressed image.
 
 Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- UefiPayloadPkg/UefiPayloadPkg.fdf | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ UefiPayloadPkg/UefiPayloadPkg.fdf | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/UefiPayloadPkg/UefiPayloadPkg.fdf b/UefiPayloadPkg/UefiPayloadPkg.fdf
-index 55e5ce139..f9967bcc3 100644
+index 4353556..76e1db1 100644
 --- a/UefiPayloadPkg/UefiPayloadPkg.fdf
 +++ b/UefiPayloadPkg/UefiPayloadPkg.fdf
-@@ -21,8 +21,8 @@ DEFINE NUM_BLOCKS  = 0x850
- DEFINE FD_SIZE     = 0x0B00000
- DEFINE NUM_BLOCKS  = 0xB00
+@@ -18,11 +18,11 @@ DEFINE FD_SIZE     = 0x00850000
+ DEFINE NUM_BLOCKS  = 0x850
+ !else
+ !if $(TARGET) == DEBUG
+-DEFINE FD_SIZE     = 0x0B00000
+-DEFINE NUM_BLOCKS  = 0xB00
++DEFINE FD_SIZE     = 0x0C00000
++DEFINE NUM_BLOCKS  = 0xC00
  !else
 -DEFINE FD_SIZE     = 0x0A00000
 -DEFINE NUM_BLOCKS  = 0xA00

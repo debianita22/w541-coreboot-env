@@ -141,7 +141,9 @@ Inside coreboot:
   stages the capsule of a release on the EFI system partition, and at the
   next boot the firmware checks its signature and version and writes the
   slot that is not running, keeping settings, VPD and event log, also with
-  *BIOS Lock* and *Firmware protection* on;
+  *BIOS Lock* and *Firmware protection* on; from v1.3.6 on a screen of its
+  own, where the ouroboros of the logo fills up and a map of the flash
+  shows each 4 KiB block as it is written;
   the version is in the ESRT, and from v1.2.2 each release has an fwupd
   package too, `fwupdmgr install`; from v1.3.4 the project's fwupd remote
   (`configs/fwupd/ourobios.conf`) offers each release to `fwupdmgr update`,
@@ -231,11 +233,12 @@ tools/build.sh                      # both variants, into dist/
 `tools/build.sh` fetches coreboot at the pinned commit into `work/coreboot`,
 applies `patches/series`, copies the blobs (checked against their
 `SHA256SUMS`), fetches MrChromebox's EDK2 at the commit of the defconfigs and
-applies `patches/edk2` and `patches/lvglpkg`, fetches iPXE at the commit
-coreboot pins (which must be `IPXE_COMMIT` of `tools/build.sh`) and
-CSMWrap at the commit `tools/build.sh` pins and builds the latter with the
-system compiler (`nasm`, `xxd`), builds the coreboot cross toolchain the
-first time (30-60 minutes, then reused), builds each variant and runs
+applies `patches/edk2` and `patches/lvglpkg`, writes the font of the
+update screen from those of LvglPkg (`tools/ui-font.py`), fetches iPXE at
+the commit coreboot pins (which must be `IPXE_COMMIT` of `tools/build.sh`)
+and CSMWrap at the commit `tools/build.sh` pins and builds the latter with
+the system compiler (`nasm`, `xxd`), builds the coreboot cross toolchain
+the first time (30-60 minutes, then reused), builds each variant and runs
 `tools/verify-rom.sh` on it. Useful options:
 
 ```sh
@@ -354,4 +357,6 @@ The scripts, configurations and patches are GPL-2.0, like coreboot
 The images also carry, built from source at the commits each release
 names, MrChromebox's EDK2 (BSD-2-Clause-Patent), iPXE (GPL-2.0-or-later
 for the build with the Intel driver) and CSMWrap (LGPL-2.1) with SeaBIOS
-(LGPL-3.0).
+(LGPL-3.0). The setup and the update screen draw their text with Montserrat
+(SIL Open Font License 1.1) and icons of Font Awesome Free (CC BY 4.0), as
+LvglPkg has them.

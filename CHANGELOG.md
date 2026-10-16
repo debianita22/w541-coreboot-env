@@ -62,6 +62,21 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   image in memory grows to 11 MiB (patch `edk2/0024`); each flash slot
   keeps about 215 KiB free with `mrc` and 148 KiB with `nri` (about 510
   and 443 before).
+- A screen of its own for the firmware update (patch `edk2/0026`, after
+  v1.3.6-rc3), instead of a white bar under the logo: the ouroboros of the
+  logo lights up from its head around to its tail as the progress, and the
+  bar under it is a map of the flash region being written, one column per
+  4 KiB block (rewritten, already as in the capsule, still to do, the one
+  being written). Around them the versions and the vboot slots, what is
+  being done, the percentage, how much was rewritten and how much was
+  already there, the time left, and what not to do; at the end the snake
+  winks and the screen counts down to the reset; after a failure it shows
+  the block that failed and that the slot in use was not touched.
+  FmpDeviceSmmLib publishes what it writes for the screen; the text is
+  Montserrat, as in the setup, which `tools/ui-font.py` turns into a compact
+  font from the files of LvglPkg when the tree is prepared. The firmware
+  that is running draws it: it shows from the update after the one that
+  installs it.
 - Reproducible builds: the release build of each variant is built a second
   time from scratch in CI, CSMWrap and iPXE included, and compared bit by
   bit with the first (`tools/build.sh repro`). The build date was already

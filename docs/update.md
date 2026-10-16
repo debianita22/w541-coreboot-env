@@ -114,11 +114,25 @@ for that boot only, and the payload, before anything else runs:
 3. reads and deletes the files in `\EFI\UpdateCapsule` of every EFI system
    partition and USB drive;
 4. verifies each capsule: signature, variant, version, flash layout;
-5. finds the slot that is running in `RW_NVRAM`, writes the other one,
-   showing a progress bar under the logo and *Updating the firmware: do not
-   turn off the computer*, and asks vboot to try it at the next boot;
-6. shows *Firmware updated, restarting* (or *failed* and the reason) and
-   restarts.
+5. finds the slot that is running in `RW_NVRAM`, writes the other one and
+   asks vboot to try it at the next boot;
+6. shows the result and restarts after a three-second countdown.
+
+From v1.3.6 the update has a screen of its own (patch `edk2/0026`; the
+firmware that is running draws it, so an update made from v1.3.6-rc3 or
+older still shows the bar): the ouroboros of the logo is the progress,
+lighting up from its head around to its tail, and the bar under it is a map
+of the region being written, one column per 4 KiB block: blue rewritten,
+green already as in the capsule (not written), grey still to do, white the
+block being written. Around them the versions and the slots (*v1.3.6-rc3 ·
+slot B › v1.3.6 · slot A*), what is being done (looking for the capsule,
+checking its signature, clearing the memory training data, writing the slot,
+asking vboot to try it), the percentage, how much was rewritten and how much
+was already there, the time left, and at the bottom *Do not turn off the
+laptop or unplug the AC adapter*. At the end the snake winks and the screen
+says what happens if the new slot does not start; after a failure it shows
+where (the block, in red on the map) and that the slot in use was not
+touched.
 
 The next boot runs the new slot; when it reaches the boot logo, the payload
 tells vboot that it works. If it does not verify, or two boots in a row do
