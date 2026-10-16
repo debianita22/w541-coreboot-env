@@ -237,15 +237,16 @@ version is the latest one (v1.3.6), the two remotes describe the version in
 different formats; whoever follows the candidates in the meantime keeps the
 other remote off, or installs the `.cab` by hand.
 
-- The remote offers releases, not release candidates: those go with
-  `update.py stage` or their `.cab` by hand. An rc and its release have one
-  version for fwupd (v1.3.4-rc2 and v1.3.4 are both 1.3.4), so from the rc
-  `fwupdmgr update` finds nothing: `fwupdmgr reinstall` installs the
-  release, as `update.py stage --latest` does.
+- The project remote offers releases; the candidates come from the testing
+  remote, `update.py stage` or their `.cab` by hand. From v1.3.6 each
+  candidate has a version of its own, below its release (v1.3.7-rc2 is
+  1.3.6.2, v1.3.7 is 1.3.7.0), so from a candidate `fwupdmgr update` offers
+  the release. A candidate up to v1.3.6-rc1 had the version of its release
+  (v1.3.5-rc2 and v1.3.5 are both 1.3.5): from one of those `fwupdmgr
+  update` waits for a later release, and `fwupdmgr reinstall` installs the
+  release now, as `update.py stage --latest` does.
 - The metadata of a release has its nri too: a laptop that runs nri is
   offered nri, and an mrc one mrc.
-- Until v1.3.4 is the latest release, `fwupdmgr refresh` finds no metadata
-  (404).
 - Without the certificate the refresh fails (*signatures were required,
   but none supplied*) and a `.cab` by hand stops at *Firmware version
   formats were different* (see above). Do not set `OnlyTrusted=false`
@@ -308,11 +309,18 @@ print the tag (v1.3.7-rc2); `fwupdmgr` the four numbers.
 Up to v1.3.6-rc1 the number was X.Y.Z with Z in the low 16 bits and no
 room for the candidate (v1.3.6-rc1 is `0x01030006`): read as quad that is
 1.3.0.6, below every later number, so a W541 on one of those updates as
-usual.
+usual. The setup and `tools/update.py` still print those numbers by their
+tag (`0x01030005` is v1.3.5; a candidate of then has the number of its
+release), and `tools/update.py` still reads their `.cab` (*triplet*
+format).
 
 The firmware refuses capsules older than its lowest supported version,
 v1.3.0 (v1.2.0 for v1.2.x): an older release goes back with flashrom. Older
-capsules from that version up install with `--allow-older`.
+capsules from that version up install with `--allow-older`. The lowest
+supported version can later go up to v1.3.6 (`0x01030600`) or beyond, not
+in between: there the two layouts overlap (v1.3.5 was `0x01030005`, below
+v1.3.5 in the new one, `0x01030500`), and `tools/ci-check.sh` refuses such
+a value.
 
 `mrc` and `nri` are different firmware for the ESRT (each its own GUID):
 a capsule installs only on its own variant. The GUIDs changed with the flash

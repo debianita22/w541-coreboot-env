@@ -114,9 +114,27 @@ class Error(Exception):
     pass
 
 
+# L'ultimo numero nel formato di prima, (X << 24) | (Y << 16) | Z, senza le
+# rc: v1.3.6-rc1. Fino a li' i numeri delle release sui portatili hanno il
+# byte 1 a zero, e in quel formato si leggono; nel formato di adesso li'
+# cadrebbero solo le rc di una vX.Y.1 di allora (v1.3.1-rc5 = 0x01030005),
+# che non ci sono mai state
+LAST_OLD_LAYOUT = 0x01030006
+
+
+def old_layout(v):
+    """Un numero di una release fino a v1.3.6-rc1, nel formato di prima."""
+    return v <= LAST_OLD_LAYOUT and v & 0xFF00 == 0
+
+
 def version_str(v):
     """La versione dell'ESRT come il tag della release: X.Y.Z.R un byte ciascuno,
-    vX.Y.Z e' X.Y.Z.0 e vX.Y.Z-rcN la release prima con R = N (tools/build.sh)."""
+    vX.Y.Z e' X.Y.Z.0 e vX.Y.Z-rcN la release prima con R = N (tools/build.sh);
+    i numeri fino a v1.3.6-rc1 nel loro formato (X.Y.Z, le rc come la release)."""
+    if old_layout(v):
+        # in quel formato una rc aveva il numero della sua release; di v1.3.6
+        # pero' c'e' stata solo la rc1, l'ultima prima del formato di adesso
+        return "v1.3.6-rc1" if v == LAST_OLD_LAYOUT else "v%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, v & 0xFFFF)
     if v & 0xFF == 0:
         return "v%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, (v >> 8) & 0xFF)
     rel = (v & ~0xFF) + 0x100
@@ -126,6 +144,11 @@ def version_str(v):
 def version_quad(v):
     """La stessa versione come la scrive fwupd (formato "quad"): X.Y.Z.R."""
     return "%d.%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF)
+
+
+def version_triplet(v):
+    """Come la scrivevano i pacchetti fwupd fino a v1.3.6-rc1 ("triplet"): X.Y.Z."""
+    return "%d.%d.%d" % (v >> 24, (v >> 16) & 0xFF, v & 0xFFFF)
 
 
 def attempt_str(status):
@@ -401,7 +424,12 @@ def load_cab(path, data):
     v = cap["version"]
     if meta["guid"] != cap["type_id"]:
         raise Error("metainfo per %s, capsula per %s" % (meta["guid"], cap["type_id"]))
-    if meta["format"] != "quad" or meta["version"] != version_quad(v):
+    # i pacchetti fino a v1.3.6-rc1 hanno il formato "triplet", i successivi "quad"
+    if meta["format"] == "quad":
+        same = meta["version"] == version_quad(v)
+    else:
+        same = meta["format"] == "triplet" and old_layout(v) and meta["version"] == version_triplet(v)
+    if not same:
         raise Error("metainfo: versione %s (%s), la capsula e' %s (quad %s)" % (meta["version"], meta["format"],
                                                                               version_str(v), version_quad(v)))
     cap["cab"] = {"files": files, "meta": meta}

@@ -25,7 +25,7 @@ here.
 Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- .../FirmwareUpdateDxe/FirmwareUpdate.c        | 867 ++++++++++++++++++
+ .../FirmwareUpdateDxe/FirmwareUpdate.c        | 886 ++++++++++++++++++
  .../FirmwareUpdateDxe/FirmwareUpdate.uni      |  37 +
  .../FirmwareUpdateDxe/FirmwareUpdateDxe.inf   |  68 ++
  .../FirmwareUpdateDxe/FirmwareUpdateVfr.vfr   |  52 ++
@@ -33,7 +33,7 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  UefiPayloadPkg/UefiPayloadPkg.dec             |   3 +
  UefiPayloadPkg/UefiPayloadPkg.dsc             |   1 +
  UefiPayloadPkg/UefiPayloadPkg.fdf             |   1 +
- 8 files changed, 1035 insertions(+)
+ 8 files changed, 1066 insertions(+)
  create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
  create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.uni
  create mode 100644 UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdateDxe.inf
@@ -42,10 +42,10 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 
 diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 new file mode 100644
-index 0000000000..3c412f68da
+index 0000000000..7eecc97351
 --- /dev/null
 +++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
-@@ -0,0 +1,867 @@
+@@ -0,0 +1,886 @@
 +/** @file
 +  Firmware Update setup page.
 +
@@ -160,12 +160,21 @@ index 0000000000..3c412f68da
 +  }
 +};
 +
++//
++// The last ESRT number in the format before X.Y.Z.R: v1.3.6-rc1
++//
++#define LAST_OLD_LAYOUT_VERSION  0x01030006
++
 +/**
 +  A version of the ESRT as the releases number it: X.Y.Z.R, one byte each.
 +  A release vX.Y.Z is X.Y.Z.0; its candidate N is one release below with
 +  R = N (v1.3.7-rc2 is 1.3.6.2), so the candidates sort after the release
 +  before and before the one they lead to. Shown as the tag reads: "1.3.7",
-+  "1.3.7-rc2".
++  "1.3.7-rc2". The releases up to v1.3.6-rc1 were (X << 24) | (Y << 16) | Z,
++  their candidates with the number of the release: up to
++  LAST_OLD_LAYOUT_VERSION, with byte 1 zero, a number is shown that way (of
++  v1.3.6 there was only the rc1). A capsule of one of them can still be
++  installed, back to an older release.
 +**/
 +STATIC
 +VOID
@@ -176,6 +185,16 @@ index 0000000000..3c412f68da
 +  )
 +{
 +  UINT32  Release;
++
++  if ((Version <= LAST_OLD_LAYOUT_VERSION) && ((Version & 0xFF00) == 0)) {
++    if (Version == LAST_OLD_LAYOUT_VERSION) {
++      StrCpyS (Buffer, BufferSize / sizeof (CHAR16), L"1.3.6-rc1");
++    } else {
++      UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, Version & 0xFFFF);
++    }
++
++    return;
++  }
 +
 +  if ((Version & 0xFF) == 0) {
 +    UnicodeSPrint (Buffer, BufferSize, L"%u.%u.%u", Version >> 24, (Version >> 16) & 0xFF, (Version >> 8) & 0xFF);

@@ -25,13 +25,17 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   `tools/update.py` show the tag (v1.3.7-rc2), `fwupdmgr` the four numbers;
   a W541 on v1.3.6-rc1 or older (X.Y.Z in the old layout, read as 1.3.0.6)
   updates to any of the new numbers as usual
-  ([docs/update.md](docs/update.md#versions-variants-downgrades)). The
-  *Go back to* of the setup and coreboot's check behind it (patches
-  `edk2/0020` and 0065) read the version from the release name in the other
-  slot in the same layout, `-rcN` included: in the old one, once the lowest
-  supported version is raised, they would have refused a newer release
-  (v1.3.7 read as `0x01030007`, below v1.3.6). The update test in QEMU
-  numbers its ROMs so that a parser left on the old layout fails it.
+  ([docs/update.md](docs/update.md#versions-variants-downgrades)), and the
+  setup page and `tools/update.py` still show the old numbers by their tag
+  (v1.3.5, not v1.3.1-rc5); `tools/update.py` still reads the `.cab` of
+  those releases (format *triplet*). `tools/ci-check.sh` refuses a lowest
+  supported version between v1.3.0 and v1.3.6, where the two layouts
+  overlap. The *Go back to* of the setup and coreboot's check behind it
+  (patches `edk2/0020` and 0065) read the version from the release name in
+  the other slot in the same layout, `-rcN` included: in the old one, once
+  the lowest supported version is raised, they would have refused a newer
+  release (v1.3.7 read as `0x01030007`, below v1.3.6). The update test in
+  QEMU numbers its ROMs so that a parser left on the old layout fails it.
 - A testing remote for fwupd, `configs/fwupd/ourobios-testing.conf`, off
   until turned on (`fwupdmgr enable-remote ourobios-testing`): the metadata
   of the latest release, candidates included, from the assets of the fixed
@@ -39,28 +43,36 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   it is the highest so far ([docs/update.md](docs/update.md#the-fwupd-remote)).
 - Network boot: *iPXE Network Boot* in the boot menu (iPXE 2025.12 with its
   Intel driver, for the I217 of the W541, and nothing of EDK2's network
-  stack: patches 0075 and `edk2/0022`), last in the boot order. PXE, HTTP
-  and iPXE scripts; Ctrl-B at the banner for its shell.
+  stack: patches 0075 and `edk2/0022`), at the end of the boot order. PXE,
+  HTTP and iPXE scripts; Ctrl-B at the banner for its shell.
 - Legacy BIOS boot: *CSMWrap Legacy Boot* in the boot menu
   ([CSMWrap](https://github.com/CSMWrap/CSMWrap), the CSM and VGA BIOS of
   SeaBIOS as a UEFI application, built by `tools/build.sh prepare`:
   patches 0076 and `edk2/0023`), for what does not boot from UEFI, from
-  the disks and USB drives the firmware sees. Only while Secure Boot is
-  off.
+  SATA, NVMe and USB drives through SeaBIOS's own drivers; one logical
+  processor stays with CSMWrap. While Secure Boot is on the entry goes,
+  and the firmware refuses to start CSMWrap even from a `Boot####`,
+  `BootNext` or `SysPrep####` written from the OS (a file of the firmware
+  volume is not checked against the Secure Boot keys: patch `edk2/0025`,
+  after v1.3.6-rc2).
 - *General* → *Boot* in the setup turns each of the two off (patch 0077).
   The smoke test in QEMU starts both from the boot manager: iPXE gets its
   address from QEMU's DHCP, downloads a script over TFTP and runs it;
   CSMWrap boots the master boot record of a SATA disk. The payload's
-  image in memory grows to 11 MiB (patch `edk2/0024`); in the flash slots
-  about 210 KiB stay free, 507 before.
+  image in memory grows to 11 MiB (patch `edk2/0024`); each flash slot
+  keeps about 215 KiB free with `mrc` and 148 KiB with `nri` (about 510
+  and 443 before).
 - Reproducible builds: the release build of each variant is built a second
-  time from scratch in CI and compared bit by bit with the first
-  (`tools/build.sh repro`). The build date was already the date of the
-  commit; the payload now has no debug directory in its PE images (patch
-  `edk2/0021`, `GenFw --zero`), whose CodeView entries named the `.dll` of
-  each module with the absolute path of the build, 116 of them. With the
-  same coreboot toolchain, the ROM of a release can be rebuilt from its tag
-  and compared.
+  time from scratch in CI, CSMWrap and iPXE included, and compared bit by
+  bit with the first (`tools/build.sh repro`). The build date was already
+  the date of the commit; the payload now has no debug directory in its PE
+  images (patch `edk2/0021`, `GenFw --zero`), whose CodeView entries named
+  the `.dll` of each module with the absolute path of the build, 116 of
+  them. With the same compilers (coreboot's cross toolchain; GCC and
+  binutils of Ubuntu 24.04 for the payload, iPXE and CSMWrap, named in the
+  `-layout.txt` of the releases after v1.3.6-rc2) the stages and the
+  payload of a release can be rebuilt from its tag and compared; the whole
+  ROM also needs the project's vboot key, which signs the slots.
 
 ## v1.3.5
 

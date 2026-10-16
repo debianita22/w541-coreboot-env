@@ -152,20 +152,23 @@ Inside coreboot:
   back to the release in the other slot
   ([docs/update.md](docs/update.md));
 - network boot with iPXE (from v1.3.6): the *iPXE Network Boot* entry of
-  the boot menu drives the Intel I217 Ethernet controller itself (iPXE
-  with its Intel driver, no UEFI network stack), does PXE and HTTP and
-  runs iPXE scripts; Ctrl-B at its banner opens its shell. Last in the boot
-  order, so it runs when chosen or when nothing else boots; *General* →
-  *Boot* in the setup turns it off;
+  the boot menu (Esc at power-on) drives the Intel I217 Ethernet
+  controller itself (iPXE with its Intel driver, no UEFI network stack),
+  does PXE and HTTP and runs iPXE scripts; Ctrl-B at its banner opens its
+  shell. The entry goes at the end of the boot order, after the disks and
+  the UEFI Shell; *General* → *Boot* in the setup turns it off;
 - legacy BIOS boot with CSMWrap (from v1.3.6): the *CSMWrap Legacy Boot*
   entry of the boot menu starts [CSMWrap](https://github.com/CSMWrap/CSMWrap),
-  which runs the CSM and the VGA BIOS of SeaBIOS as a UEFI application: INT
-  13h over the disks and USB drives the firmware sees, INT 10h on the
-  firmware's framebuffer (there is no Intel VBIOS in this firmware), E820,
-  ACPI and SMBIOS from the firmware, for the operating systems and tools
-  that do not boot from UEFI. A legacy BIOS runs unsigned code, so the
-  entry exists only while Secure Boot is off; *General* → *Boot* in the
-  setup turns it off;
+  which runs the CSM and the VGA BIOS of SeaBIOS as a UEFI application:
+  SeaBIOS's own drivers for SATA (AHCI), NVMe and USB drives behind INT
+  13h, its boot menu on Esc, INT 10h on the firmware's framebuffer (there
+  is no Intel VBIOS in this firmware), E820, ACPI and SMBIOS from the
+  firmware, for the operating systems and tools that do not boot from
+  UEFI. It keeps one logical processor for itself (a quad-core i7 shows 7
+  of its 8 threads to the legacy OS). A legacy BIOS runs unsigned code, so
+  while Secure Boot is on the entry goes and the firmware refuses to start
+  CSMWrap, however it is chosen; *General* → *Boot* in the setup turns it
+  off;
 - fixes for wake from suspend (lid, Fn), the Fn hotkeys, Bluetooth and WWAN
   state on resume, xHCI ports, USB over-current mapping, PCIe interrupts, the
   backlight, HDMI/DisplayPort audio clocks, the battery `_UID` and the AES-NI
@@ -229,10 +232,11 @@ tools/build.sh                      # both variants, into dist/
 applies `patches/series`, copies the blobs (checked against their
 `SHA256SUMS`), fetches MrChromebox's EDK2 at the commit of the defconfigs and
 applies `patches/edk2` and `patches/lvglpkg`, fetches iPXE at the commit
-coreboot pins and CSMWrap at the commit `tools/build.sh` pins and builds
-the latter with the system compiler (`nasm`, `xxd`), builds the coreboot
-cross toolchain the first time (30-60 minutes, then reused), builds each
-variant and runs `tools/verify-rom.sh` on it. Useful options:
+coreboot pins (which must be `IPXE_COMMIT` of `tools/build.sh`) and
+CSMWrap at the commit `tools/build.sh` pins and builds the latter with the
+system compiler (`nasm`, `xxd`), builds the coreboot cross toolchain the
+first time (30-60 minutes, then reused), builds each variant and runs
+`tools/verify-rom.sh` on it. Useful options:
 
 ```sh
 tools/build.sh --variant mrc                  # one variant
@@ -246,13 +250,18 @@ tools/build.sh --help
 
 The builds are reproducible (from v1.3.6): the date in the ROM is the date
 of the commit, the payload has no debug directory in its PE images, and
-CI builds each release twice and compares the two (`repro`). From a
-checkout of a release tag, with the coreboot toolchain and the project's
-vboot key (`VBOOT_SIGNING_KEY`: the slots are signed), `tools/build.sh
---release --version vX.Y.Z roms` gives the `.rom` of the release byte for
-byte; without the key the slots are signed with vboot's test keys, and
-`config` in CBFS says so: the stages and the payload still compare, the
-ROM does not.
+CI builds each release twice from scratch, CSMWrap and iPXE included, and
+compares the two (`repro`). The same ROM needs the same compilers:
+coreboot's cross toolchain, whose versions the coreboot commit fixes, and
+for the payload, iPXE and CSMWrap the GCC and binutils of the build
+machine, GitHub's Ubuntu 24.04 runner (the `-layout.txt` of a release
+names them, after v1.3.6-rc2). From a checkout of a release tag,
+`tools/build.sh --version vX.Y.Z roms` then gives the stages, the payload
+and the other CBFS files of the release; the whole `.rom` compares byte
+for byte only with the project's vboot key (`VBOOT_SIGNING_KEY`: the
+slots are signed), without which the slots are signed with vboot's test
+keys and `config` in CBFS says so. `--release` also wants the capsule
+key.
 
 `smoke` puts the EDK2 payload of each variant, as built, into a coreboot
 image for QEMU's q35 and boots it with `tools/qemu-smoke.py`: coreboot must
@@ -342,3 +351,7 @@ from; their redistribution terms are those of Intel, Lenovo and NVIDIA.
 
 The scripts, configurations and patches are GPL-2.0, like coreboot
 ([LICENSE](LICENSE)). The binary blobs keep their own licenses (see above).
+The images also carry, built from source at the commits each release
+names, MrChromebox's EDK2 (BSD-2-Clause-Patent), iPXE (GPL-2.0-or-later
+for the build with the Intel driver) and CSMWrap (LGPL-2.1) with SeaBIOS
+(LGPL-3.0).

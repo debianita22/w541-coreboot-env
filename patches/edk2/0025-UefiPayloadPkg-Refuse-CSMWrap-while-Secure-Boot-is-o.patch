@@ -1,0 +1,222 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Domenico D'Arrigo <DCHEM88@hotmail.it>
+Date: Fri, 16 Oct 2026 14:38:19 +0200
+Subject: [PATCH] UefiPayloadPkg: Refuse CSMWrap while Secure Boot is on
+
+Images from a firmware volume are not checked against the Secure Boot
+databases: DxeImageVerificationLib gives them ALWAYS_EXECUTE. The boot
+manager deletes the CSMWrap boot option while Secure Boot is on, but a
+Boot#### or BootNext variable written from the OS can still name its
+file, and CSMWrap then starts unsigned code, the master boot record of a
+disk, before the OS: a way around Secure Boot for whoever can write those
+variables and a disk.
+
+CsmWrapSecureBootLib, linked into SecurityStubDxe with -D CSMWRAP=TRUE,
+registers a Security2 handler that denies the file (EFI_ACCESS_DENIED)
+while the SecureBoot variable is 1, however it is started.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
+---
+ .../CsmWrapSecureBootLib.c                    | 127 ++++++++++++++++++
+ .../CsmWrapSecureBootLib.inf                  |  39 ++++++
+ UefiPayloadPkg/UefiPayloadPkg.dsc             |   3 +
+ 3 files changed, 169 insertions(+)
+ create mode 100644 UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.c
+ create mode 100644 UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.inf
+
+diff --git a/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.c b/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.c
+new file mode 100644
+index 000000000..945ad208d
+--- /dev/null
++++ b/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.c
+@@ -0,0 +1,127 @@
++/** @file
++  Refuse CSMWrap, the legacy BIOS in the firmware volume, while Secure Boot
++  is on.
++
++  Images from a firmware volume are not checked against the Secure Boot
++  databases: DxeImageVerificationLib lets them run (IMAGE_FROM_FV,
++  ALWAYS_EXECUTE). PlatformBootManagerLib deletes the CSMWrap boot option
++  while Secure Boot is on, but a Boot#### or BootNext variable written from
++  the OS can still name the file, and CSMWrap then starts unsigned code, a
++  master boot record, before the OS. This Security2 handler denies the file
++  whenever the SecureBoot variable is 1, however it is started.
++
++  Copyright (c) 2026, ouroBIOS contributors
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include <Uefi.h>
++#include <Guid/GlobalVariable.h>
++#include <Guid/ImageAuthentication.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/DevicePathLib.h>
++#include <Library/PcdLib.h>
++#include <Library/SecurityManagementLib.h>
++#include <Library/UefiLib.h>
++#include <Library/UefiRuntimeServicesTableLib.h>
++
++/**
++  Does the device path name the CSMWrap file of a firmware volume?
++
++  @param File   The device path of the image, or NULL.
++
++  @retval TRUE   It has a firmware volume file node with PcdCsmWrapFile.
++  @retval FALSE  It has not.
++**/
++STATIC
++BOOLEAN
++IsCsmWrap (
++  IN CONST EFI_DEVICE_PATH_PROTOCOL  *File
++  )
++{
++  CONST EFI_DEVICE_PATH_PROTOCOL  *Node;
++  EFI_GUID                        *NameGuid;
++
++  if (File == NULL) {
++    return FALSE;
++  }
++
++  for (Node = File; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++    NameGuid = EfiGetNameGuidFromFwVolDevicePathNode ((CONST MEDIA_FW_VOL_FILEPATH_DEVICE_PATH *)Node);
++    if ((NameGuid != NULL) && CompareGuid (NameGuid, (EFI_GUID *)PcdGetPtr (PcdCsmWrapFile))) {
++      return TRUE;
++    }
++  }
++
++  return FALSE;
++}
++
++/**
++  Is Secure Boot on? The SecureBoot variable, as AuthVariableLib keeps it:
++  1 with a platform key enrolled and Secure Boot enabled.
++
++  @retval TRUE   On.
++  @retval FALSE  Off, or no such variable.
++**/
++STATIC
++BOOLEAN
++SecureBootOn (
++  VOID
++  )
++{
++  EFI_STATUS  Status;
++  UINT8       SecureBoot;
++  UINTN       Size;
++
++  SecureBoot = 0;
++  Size       = sizeof (SecureBoot);
++  Status     = gRT->GetVariable (EFI_SECURE_BOOT_MODE_NAME, &gEfiGlobalVariableGuid, NULL, &Size, &SecureBoot);
++  return !EFI_ERROR (Status) && (SecureBoot == SECURE_BOOT_MODE_ENABLE);
++}
++
++/**
++  The Security2 handler: CSMWrap is denied while Secure Boot is on, every
++  other image goes on to the other handlers.
++
++  @retval EFI_SUCCESS        Not CSMWrap, or Secure Boot is off.
++  @retval EFI_ACCESS_DENIED  CSMWrap while Secure Boot is on: not loaded.
++**/
++STATIC
++EFI_STATUS
++EFIAPI
++CsmWrapSecureBootHandler (
++  IN  UINT32                          AuthenticationStatus,
++  IN  CONST EFI_DEVICE_PATH_PROTOCOL  *File,
++  IN  VOID                            *FileBuffer,
++  IN  UINTN                           FileSize,
++  IN  BOOLEAN                         BootPolicy
++  )
++{
++  if (IsCsmWrap (File) && SecureBootOn ()) {
++    DEBUG ((DEBUG_WARN, "CsmWrapSecureBootLib: CSMWrap refused: Secure Boot is on\n"));
++    return EFI_ACCESS_DENIED;
++  }
++
++  return EFI_SUCCESS;
++}
++
++/**
++  Register the handler for the images that are loaded.
++
++  @param ImageHandle  The image handle of the driver.
++  @param SystemTable  The EFI system table.
++
++  @return The status of RegisterSecurity2Handler.
++**/
++EFI_STATUS
++EFIAPI
++CsmWrapSecureBootLibConstructor (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++  return RegisterSecurity2Handler (
++           CsmWrapSecureBootHandler,
++           EFI_AUTH_OPERATION_VERIFY_IMAGE | EFI_AUTH_OPERATION_IMAGE_REQUIRED
++           );
++}
+diff --git a/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.inf b/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.inf
+new file mode 100644
+index 000000000..5fefd2b0d
+--- /dev/null
++++ b/UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.inf
+@@ -0,0 +1,39 @@
++## @file
++#  Refuse CSMWrap, the legacy BIOS in the firmware volume, while Secure Boot
++#  is on: a Security2 handler for SecurityStubDxe.
++#
++#  Copyright (c) 2026, ouroBIOS contributors
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++##
++
++[Defines]
++  INF_VERSION                    = 0x00010005
++  BASE_NAME                      = CsmWrapSecureBootLib
++  FILE_GUID                      = E4D0E1EE-D12F-4359-9903-A4189E87549F
++  MODULE_TYPE                    = DXE_DRIVER
++  VERSION_STRING                 = 1.0
++  LIBRARY_CLASS                  = NULL|DXE_DRIVER DXE_RUNTIME_DRIVER UEFI_APPLICATION UEFI_DRIVER
++  CONSTRUCTOR                    = CsmWrapSecureBootLibConstructor
++
++[Sources]
++  CsmWrapSecureBootLib.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++  UefiPayloadPkg/UefiPayloadPkg.dec
++
++[LibraryClasses]
++  BaseMemoryLib
++  DebugLib
++  DevicePathLib
++  PcdLib
++  SecurityManagementLib
++  UefiLib
++  UefiRuntimeServicesTableLib
++
++[Guids]
++  gEfiGlobalVariableGuid          ## SOMETIMES_CONSUMES ## Variable:L"SecureBoot"
++
++[Pcd]
++  gUefiPayloadPkgTokenSpaceGuid.PcdCsmWrapFile    ## CONSUMES
+diff --git a/UefiPayloadPkg/UefiPayloadPkg.dsc b/UefiPayloadPkg/UefiPayloadPkg.dsc
+index 99579f438..625b2829b 100644
+--- a/UefiPayloadPkg/UefiPayloadPkg.dsc
++++ b/UefiPayloadPkg/UefiPayloadPkg.dsc
+@@ -1213,6 +1213,9 @@
+       <LibraryClasses>
+ !if $(SECURE_BOOT_ENABLE) == TRUE
+       NULL|SecurityPkg/Library/DxeImageVerificationLib/DxeImageVerificationLib.inf
++!endif
++!if $(CSMWRAP) == TRUE
++      NULL|UefiPayloadPkg/Library/CsmWrapSecureBootLib/CsmWrapSecureBootLib.inf
+ !endif
+   }
+ !endif
+-- 
+2.43.0
+

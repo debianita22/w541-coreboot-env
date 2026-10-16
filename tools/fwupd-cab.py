@@ -2,7 +2,7 @@
 # fwupd-cab.py - il pacchetto fwupd (.cab) di una capsula, e i metadati del
 # remote fwupd del progetto (docs/update.md)
 #
-#   tools/fwupd-cab.py metainfo --variant mrc --guid GUID --version 1.2.3 \
+#   tools/fwupd-cab.py metainfo --variant mrc --guid GUID --version 1.2.3.0 \
 #       --date 2026-10-11 --url URL > firmware.metainfo.xml
 #   tools/fwupd-cab.py pack --date 2026-10-11 -o OUT.cab \
 #       firmware.bin firmware.metainfo.xml [firmware.jcat]

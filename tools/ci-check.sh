@@ -130,6 +130,9 @@ assert cap["signed"] == payload + struct.pack("<Q", 7)
 update.check_capsule(cap, {"variant": "nri", "legacy": False})
 assert update.version_str(0x01020302) == "v1.2.4-rc2" and update.version_quad(0x01020302) == "1.2.3.2"
 assert update.version_str(0x01020300) == "v1.2.3" and update.version_str(0x0103ff01) == "v1.4.0-rc1"
+# i numeri fino a v1.3.6-rc1, nel formato di prima, sono ancora sui portatili
+assert update.version_str(0x01030005) == "v1.3.5" and update.version_str(0x01020003) == "v1.2.3"
+assert update.version_str(0x01030006) == "v1.3.6-rc1" and update.version_str(0x01030000) == "v1.3.0"
 # il pacchetto fwupd di tools/fwupd-cab.py, riletto da tools/update.py
 import datetime, importlib.util
 spec = importlib.util.spec_from_file_location("fwupd_cab", "tools/fwupd-cab.py")
@@ -142,6 +145,21 @@ files = update.read_cab(cab)
 assert files == {"firmware.bin": data, "firmware.metainfo.xml": meta.encode()}
 capdata, cap2 = update.load_cab("prova.cab", cab)
 assert capdata == data and cap2["version"] == 0x01020302 and cap2["cab"]["meta"]["format"] == "quad"
+# un pacchetto di prima (fino a v1.3.6-rc1): "triplet", con un numero di allora
+old = bytearray(data)
+struct.pack_into("<I", old, old.index(b"MSS1") + 8, 0x01020003)
+old_meta = meta.replace(">quad<", ">triplet<").replace('version="1.2.3.2"', 'version="1.2.3"')
+_, cap3 = update.load_cab("vecchio.cab", fc.make_cab([("firmware.bin", bytes(old)), ("firmware.metainfo.xml", old_meta.encode())],
+                                                    datetime.datetime(2026, 10, 11)))
+assert cap3["version"] == 0x01020003 and cap3["cab"]["meta"]["format"] == "triplet"
+# "triplet" con un numero di adesso: no
+bad_meta = meta.replace(">quad<", ">triplet<").replace('version="1.2.3.2"', 'version="1.2.770"')
+try:
+    update.load_cab("misto.cab", fc.make_cab([("firmware.bin", data), ("firmware.metainfo.xml", bad_meta.encode())],
+                                             datetime.datetime(2026, 10, 11)))
+    raise AssertionError("triplet con un numero di adesso accettato")
+except update.Error:
+    pass
 # i metadati del remote fwupd con quel pacchetto (e una firma finta)
 import gzip, hashlib, os, tempfile
 import xml.etree.ElementTree as ET
@@ -424,6 +442,16 @@ if [ -f configs/w541-mrc.defconfig ] && [ -f configs/w541-nri.defconfig ]; then
 		grep -qE "^ +\"${v}\": uuid\.UUID\(\"${!g}\"\),$" tools/update.py \
 			|| bad "tools/update.py: VARIANTS[\"${v}\"] non e' ${!g}"
 	done
+	# La versione minima (LSV) fino a v1.3.0 o da v1.3.6 in su: in mezzo i
+	# numeri del formato di prima (fino a v1.3.6-rc1, 0x0103000Z) e quelli
+	# X.Y.Z.R si mescolano, e con 0x01030500 (v1.3.5) la v1.3.5 di prima,
+	# 0x01030005, sarebbe rifiutata (docs/update.md#versions-variants-downgrades)
+	lsv="$(sed -n 's/^CONFIG_DRIVERS_EFI_MAIN_FW_LSV=\(0x[0-9a-fA-F]\{1,8\}\)$/\1/p' configs/w541-mrc.defconfig)"
+	if [ -n "${lsv}" ] && { [ $((lsv)) -le $((0x01030000)) ] || [ $((lsv)) -ge $((0x01030600)) ]; }; then
+		ok "LSV ${lsv}"
+	else
+		bad "CONFIG_DRIVERS_EFI_MAIN_FW_LSV '${lsv}': fino a 0x01030000 (v1.3.0) o da 0x01030600 (v1.3.6), non in mezzo"
+	fi
 	r_build="$(sed -n 's/^CAPSULE_REGIONS=(\(.*\))$/\1/p' tools/build.sh)"
 	r_upd="$(sed -n 's/^REGIONS = \[\(.*\)\]$/\1/p' tools/update.py | tr -d '",')"
 	if [ -n "${r_build}" ] && [ "${r_build}" = "${r_upd}" ]; then
@@ -566,6 +594,12 @@ if [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] && [[ "${desc}" =~ -g([0-9a-f]+)$ ]] && [
 else
 	bad "COREBOOT_COMMIT '${commit}' e COREBOOT_DESCRIBE '${desc}' non coerenti"
 fi
+# iPXE (lo stesso commit di STABLE_COMMIT_ID nel Makefile di coreboot: lo
+# controlla prepare) e CSMWrap, pinnati a un commit intero
+for p in IPXE_COMMIT CSMWRAP_COMMIT; do
+	c="$(sed -n "s/^${p}=\"\([^\"]*\)\".*/\1/p" tools/build.sh)"
+	if [[ "${c}" =~ ^[0-9a-f]{40}$ ]]; then ok "${p} ${c:0:12}"; else bad "${p} in tools/build.sh: '${c}', non un commit intero"; fi
+done
 ro_cb="$(awk '$1 == "coreboot" { print $2 }' configs/ro-interface.txt 2>/dev/null)"
 if [ "${ro_cb}" = "${desc}" ]; then
 	ok "la parte RO sui portatili e' della stessa coreboot (configs/ro-interface.txt)"

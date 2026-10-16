@@ -176,7 +176,7 @@ cmd_version() {
 
 # Le note della release della variante $2, dai file di $1
 cmd_notes() {
-	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cab cfg lay repo sha cb cbdesc edk2 npatch nedk2 pre=no
+	local d="${1:?cartella con le ROM}" v="${2:?variante}" version rom chip8 chip4 cap cab cfg lay repo sha cb cbdesc ipxe csm edk2 npatch nedk2 pre=no
 	: "${VERSION:?}"
 	repo="${GITHUB_REPOSITORY:-debianita22/ourobios}"
 	sha="${GITHUB_SHA:-$(git -C "${O}" rev-parse HEAD)}"
@@ -191,6 +191,9 @@ cmd_notes() {
 	for f in "${rom}" "${chip8}" "${chip4}" "${cap}" "${cab}" "${cfg}" "${lay}"; do [ -f "${d}/${f}" ] || die "${d}/${f} non c'e'"; done
 	cb="$(pin COREBOOT_COMMIT)"
 	cbdesc="$(pin COREBOOT_DESCRIBE)"
+	ipxe="$(pin IPXE_COMMIT)"
+	csm="$(pin CSMWRAP_COMMIT)"
+	[ -n "${ipxe}" ] && [ -n "${csm}" ] || die "tools/build.sh: IPXE_COMMIT o CSMWRAP_COMMIT non trovati"
 	edk2="$(sed -n 's/^CONFIG_EDK2_TAG_OR_REV="\(.*\)"$/\1/p' "${O}/configs/w541-${v}.defconfig")"
 	npatch="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "${O}/patches/series" | wc -l)"
 	nedk2="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "${O}/patches/edk2/series" "${O}/patches/lvglpkg/series" | wc -l)"
@@ -200,13 +203,15 @@ cmd_notes() {
 	# --latest salta le pre-release: per queste ci vuole anche --pre
 	local latest="--latest"
 	if [ "${pre}" = yes ]; then latest="--latest --pre"; fi
-	# il remote fwupd: i metadati dell'ultima release mrc (latest), con la nri
-	# della stessa versione; mai una release candidate
+	# i remote fwupd: quello del progetto con i metadati dell'ultima release
+	# mrc (latest), con la nri della stessa versione, mai una candidate;
+	# quello testing (TESTING_TAG) anche con le candidate. Ogni candidate ha
+	# la sua versione, sotto quella della release a cui porta
 	local fwupd_how meta_row=""
 	if [ "${version%%-*}" = "${version}" ] && [ "${PRERELEASE:-false}" != true ]; then
-		fwupd_how="with the project remote and certificate installed ([docs/update.md](https://github.com/debianita22/ourobios/blob/main/docs/update.md#the-fwupd-remote)), \`fwupdmgr refresh\` then \`fwupdmgr update\` (or GNOME Software, KDE Discover) offers this release as long as it is the latest; or \`sudo fwupdmgr install ${cab}\`. From one of its release candidates, which fwupd sees as the same version: \`sudo fwupdmgr reinstall\` with the remote, or \`install --allow-reinstall\`. Then reboot."
+		fwupd_how="with the project remote and certificate installed ([docs/update.md](https://github.com/debianita22/ourobios/blob/main/docs/update.md#the-fwupd-remote)), \`fwupdmgr refresh\` then \`fwupdmgr update\` (or GNOME Software, KDE Discover) offers this release as long as it is the latest, also to a laptop on one of its release candidates, each of which has a version of its own, below the release's; or \`sudo fwupdmgr install ${cab}\`. Then reboot."
 	else
-		fwupd_how="the project remote (\`configs/fwupd/ourobios.conf\`) offers releases, not release candidates: with the project certificate in \`/etc/pki/fwupd\` (once: \`sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem\` from a clone, then restart fwupd), \`sudo fwupdmgr install --allow-reinstall ${cab}\` (fwupd sees the candidates of a release as the same version), then reboot. Without the certificate it stops at *Firmware version formats were different*."
+		fwupd_how="the project remote (\`configs/fwupd/ourobios.conf\`) offers releases only; the testing remote (\`configs/fwupd/ourobios-testing.conf\`, off until \`sudo fwupdmgr enable-remote ourobios-testing\`) offers the release candidates too, each with a version of its own ([docs/update.md](https://github.com/debianita22/ourobios/blob/main/docs/update.md#the-fwupd-remote)). With the project certificate in \`/etc/pki/fwupd\` (once: \`sudo install -m 644 keys/capsule-signing.pem /etc/pki/fwupd/ourobios.pem\` from a clone, then restart fwupd), \`fwupdmgr refresh\` then \`fwupdmgr update\` with the testing remote on, or \`sudo fwupdmgr install ${cab}\`; then reboot. Without the certificate it stops at *Firmware version formats were different*."
 	fi
 	if [ "${v}" = mrc ]; then
 		meta_row=$'\n'"| \`${FWUPD_METADATA}\`, \`${FWUPD_METADATA}.jcat\` | the signed metadata of the project's **fwupd remote**: the \`.cab\` of both variants of this release |"
@@ -362,10 +367,17 @@ with [${nedk2} patches](https://github.com/${repo}/blob/${sha}/patches/README.md
 to EDK2 and LvglPkg: the setup menu laid out like System Preferences on a
 wallpaper that follows the hour of the day, the TrackPoint and the touchpad
 moving the cursor by their speed),
-libgfxinit for the Intel GPU, the NVIDIA Quadro K2100M VBIOS exposed to the OS
-through ACPI \`_ROM\` and the Optimus key the Windows NVIDIA driver asks for,
-CPU microcode from coreboot's intel-microcode. Built with the coreboot cross
-toolchain.
+iPXE [\`${ipxe:0:12}\`](https://github.com/ipxe/ipxe/commit/${ipxe}) with its Intel
+driver for network boot, [CSMWrap](https://github.com/CSMWrap/CSMWrap)
+[\`${csm:0:12}\`](https://github.com/CSMWrap/CSMWrap/commit/${csm}) with the CSM of
+SeaBIOS for legacy boot, libgfxinit for the Intel GPU, the NVIDIA Quadro
+K2100M VBIOS exposed to the OS through ACPI \`_ROM\` and the Optimus key the
+Windows NVIDIA driver asks for, CPU microcode from coreboot's intel-microcode.
+coreboot is built with its cross toolchain, the payload, iPXE and CSMWrap
+with the GCC and binutils of the build machine (GitHub's Ubuntu 24.04
+runner): \`${lay}\` names them. Licenses: coreboot GPL-2.0, EDK2
+BSD-2-Clause-Patent, iPXE GPL-2.0-or-later, CSMWrap LGPL-2.1, SeaBIOS
+LGPL-3.0; the sources are at the commits above.
 EOF
 
 	# i cambi dall'ultima release di questa variante (pubblicata, antenata di
@@ -406,6 +418,24 @@ cmd_publish() {
 	if [ "${pre}" != true ]; then
 		cur="$(latest_tag)" || fail "Pubblica" "la release latest non si legge"
 		if [ -z "${cur}" ] || newer "${VERSION}" "${cur}"; then latest=true; fi
+	fi
+	# Rieseguito dopo che le due release sono uscite da questo commit (per
+	# esempio quando l'aggiornamento del remote testing si era fermato su
+	# un errore di rete): resta publish_testing, che ripete solo cio' che
+	# manca. Una sola delle due pubblicata, o da un altro commit: ci si
+	# ferma qui sotto.
+	local pub=0
+	for v in "${VARIANTS[@]}"; do
+		t="${VERSION}-${v}"
+		tag="$(tag_commit "${t}")" || fail "Pubblica" "origin non risponde (git ls-remote)"
+		rels="$(release_ids "${t}")" || fail "Pubblica" "elenco delle release illeggibile"
+		if [ "${tag}" = "${sha}" ] && grep -q ' false$' <<< "${rels}"; then pub=$((pub + 1)); fi
+	done
+	if [ "${pub}" -eq "${#VARIANTS[@]}" ]; then
+		echo "  ${VERSION}: mrc e nri gia' pubblicate da ${sha:0:12}, resta il remote testing"
+		summ "${VERSION}: mrc e nri gia' pubblicate da ${sha:0:12}."
+		publish_testing "${d}" "${sha}"
+		return 0
 	fi
 	for v in "${VARIANTS[@]}"; do
 		t="${VERSION}-${v}"

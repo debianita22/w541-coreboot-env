@@ -17,14 +17,14 @@ TEST=Built for Lenovo ThinkPad W541; the form in the setup on QEMU q35.
 Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
 ---
- src/mainboard/lenovo/haswell/cfr.c | 37 ++++++++++++++++++++++++++++++
- 1 file changed, 37 insertions(+)
+ src/mainboard/lenovo/haswell/cfr.c | 38 ++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
 
 diff --git a/src/mainboard/lenovo/haswell/cfr.c b/src/mainboard/lenovo/haswell/cfr.c
-index 94aaed170..c27c612dd 100644
+index 94aaed170..db38ee470 100644
 --- a/src/mainboard/lenovo/haswell/cfr.c
 +++ b/src/mainboard/lenovo/haswell/cfr.c
-@@ -203,6 +203,42 @@ static const struct sm_object general_about = SM_DECLARE_FORM({
+@@ -203,6 +203,43 @@ static const struct sm_object general_about = SM_DECLARE_FORM({
  	},
  });
  
@@ -36,9 +36,9 @@ index 94aaed170..c27c612dd 100644
 +	.flags		= CONFIG(EDK2_ENABLE_IPXE) ? 0 : CFR_OPTFLAG_SUPPRESS,
 +	.opt_name	= "ipxe_boot",
 +	.ui_name	= "Network boot (iPXE)",
-+	.ui_helptext	= "The iPXE entry of the boot menu: PXE, HTTP and iPXE\n"
-+			  "scripts over the Ethernet port. Last in the boot order:\n"
-+			  "it runs when chosen, or when nothing else boots.",
++	.ui_helptext	= "The iPXE entry of the boot menu (ESC at power on): PXE,\n"
++			  "HTTP and iPXE scripts over the Ethernet port. Off, the\n"
++			  "entry goes.",
 +	.default_value	= true,
 +});
 +
@@ -49,7 +49,8 @@ index 94aaed170..c27c612dd 100644
 +	.ui_helptext	= "The CSMWrap entry of the boot menu: a legacy BIOS (the\n"
 +			  "CSM of SeaBIOS) for the operating systems and tools that\n"
 +			  "do not boot from UEFI, from the disks and USB drives.\n"
-+			  "Needs Secure Boot off: hidden while it is on.",
++			  "Needs Secure Boot off: while it is on the entry goes\n"
++			  "and the firmware refuses to start CSMWrap.",
 +	.default_value	= true,
 +});
 +
@@ -67,7 +68,7 @@ index 94aaed170..c27c612dd 100644
  static const struct sm_object general_sound = SM_DECLARE_FORM({
  	.ui_name	= "Sound",
  	.obj_list	= (const struct sm_object *[]) {
-@@ -510,6 +546,7 @@ static struct sm_obj_form general = {
+@@ -510,6 +547,7 @@ static struct sm_obj_form general = {
  	.ui_name = "General",
  	.obj_list = (const struct sm_object *[]) {
  		&general_about,

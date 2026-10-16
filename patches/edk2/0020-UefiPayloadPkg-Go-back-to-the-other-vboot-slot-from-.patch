@@ -46,7 +46,7 @@ Claude-Session: https://claude.ai/code/session_018n3yuWwDLW63F4vdf7ZFTv
  11 files changed, 795 insertions(+), 7 deletions(-)
 
 diff --git a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
-index 3c412f68d..e241a085d 100644
+index 7eecc9735..e43ee3444 100644
 --- a/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 +++ b/UefiPayloadPkg/FirmwareUpdateDxe/FirmwareUpdate.c
 @@ -13,10 +13,20 @@
@@ -152,7 +152,7 @@ index 3c412f68d..e241a085d 100644
  //
  // The files of the \EFI\UpdateCapsule folders that the next boot would read.
  //
-@@ -303,6 +364,400 @@ GetBiosVersion (
+@@ -322,6 +383,400 @@ GetBiosVersion (
    return String;
  }
  
@@ -553,7 +553,7 @@ index 3c412f68d..e241a085d 100644
  /**
    Fill in the values of the page.
  **/
-@@ -325,6 +780,7 @@ RefreshInfo (
+@@ -344,6 +799,7 @@ RefreshInfo (
    }
  
    GetSystemFirmwareInfo (&Info);
@@ -561,7 +561,7 @@ index 3c412f68d..e241a085d 100644
    if (!Info.Found) {
      return;
    }
-@@ -743,6 +1199,149 @@ UpdateFromDrive (
+@@ -762,6 +1218,149 @@ UpdateFromDrive (
    CpuDeadLoop ();
  }
  
@@ -711,7 +711,7 @@ index 3c412f68d..e241a085d 100644
  /**
    No varstore: nothing to extract.
  **/
-@@ -785,8 +1384,9 @@ FirmwareUpdateRouteConfig (
+@@ -804,8 +1403,9 @@ FirmwareUpdateRouteConfig (
  }
  
  /**
@@ -723,7 +723,7 @@ index 3c412f68d..e241a085d 100644
  **/
  STATIC
  EFI_STATUS
-@@ -816,6 +1416,8 @@ FirmwareUpdateCallback (
+@@ -835,6 +1435,8 @@ FirmwareUpdateCallback (
  
    if (QuestionId == FIRMWARE_UPDATE_INSTALL_QUESTION_ID) {
      UpdateFromDrive ();

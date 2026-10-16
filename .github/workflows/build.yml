@@ -47,7 +47,8 @@
 #       gh release edit v1.0.0-mrc --repo debianita22/ourobios --prerelease=false --latest
 #   - il job Release si puo' rilanciare: le bozze di un tentativo fallito si
 #     cancellano e si rifanno; un tag che c'e' gia' deve essere sul commit della
-#     build.
+#     build; con le due release gia' pubblicate da quel commit resta solo
+#     l'aggiornamento del remote testing.
 #
 # Il crossgcc di coreboot (i386 con Ada, iasl, nasm: 30-60 minuti) sta nella
 # cache di Actions con la chiave di "tools/build.sh toolchain-key": si

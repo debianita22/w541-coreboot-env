@@ -27,9 +27,9 @@
 #      eseguirlo; lo script ne chiama un altro, e la richiesta TFTP di quel
 #      secondo file nel pcap del traffico (filter-dump) e' la prova;
 #   8. CSMWrap: la voce "CSMWrap Legacy Boot" in BootNext, poi un avvio con
-#      due CPU (CSMWrap tiene un core per i suoi servizi BIOS) e un disco
+#      due CPU (CSMWrap ne tiene una per i suoi servizi BIOS) e un disco
 #      SATA il cui MBR scrive una riga sulla porta seriale: il BIOS legacy
-#      deve avviarlo (INT 13h sui dischi del firmware).
+#      deve avviarlo (INT 13h di SeaBIOS, con il suo driver AHCI).
 # Le schermate di ogni passo vanno in DIR (PNG), con la console seriale.
 #
 # Il W541 non si emula: qui girano il payload (UEFIPayloadPkg, LvglPkg, le
@@ -486,7 +486,7 @@ def run(rom, out, timeout):
         n = boot_next("shell-csm", "CSMWrap Legacy Boot")
         disk = os.path.join(sm.tmp, "legacy.img")
         mbr_image(disk)
-        # due CPU: CSMWrap tiene un core per i suoi servizi BIOS (il "BIOS
+        # due CPU: CSMWrap ne tiene una, logica, per i suoi servizi BIOS (il "BIOS
         # proxy": senza un AP si ferma, "BIOS proxy initialization failed")
         sm.boot("csmwrap", ["-smp", "2", "-drive", "file=%s,format=raw,if=ide" % disk])
         to_payload()

@@ -24,9 +24,10 @@
 #                  remote fwupd (docs/update.md). Gli slot RW di vboot si
 #                  firmano con la chiave in VBOOT_SIGNING_KEY (docs/vboot.md);
 #                  senza, con le chiavi di prova di vboot: build di prova
-#   repro          dopo roms: ogni variante costruita di nuovo da capo e la
-#                  ROM confrontata bit a bit con quella in dist/; uguali, o
-#                  le regioni e i file CBFS diversi
+#   repro          dopo roms: CSMWrap e ogni variante (coreboot, EDK2,
+#                  iPXE) costruiti di nuovo da capo, confrontati bit a bit
+#                  con quelli di prepare e di roms in dist/; uguali, o le
+#                  regioni e i file CBFS diversi
 #   smoke          dopo roms, la prova di fumo del payload: per ogni variante
 #                  una ROM coreboot per QEMU q35 con lo stesso UEFIPAYLOAD.fd
 #                  (EDK2 non si ricompila), avviata in QEMU da
@@ -82,8 +83,10 @@
 # i .cab delle due varianti con gli indirizzi delle release. La versione
 # nell'ESRT e nella capsula e' X.Y.Z.R, un byte ciascuno (il "quad" di
 # fwupd): X.Y.Z.0 per --version vX.Y.Z, la release prima con R = N per
-# vX.Y.Z-rcN (fw_version); con le altre versioni (dev, ci-...) e' 0 e la
-# capsula non si fa.
+# vX.Y.Z-rcN (fw_version). Con le altre versioni (dev, ci-...) la capsula non
+# si fa e CONFIG_DRIVERS_EFI_MAIN_FW_VERSION e' 0: coreboot allora mette
+# nell'ESRT X << 16 | Y di un "X.Y" nella versione (v1.4-prova: 0x00010004),
+# 0 se non c'e' (dev-<commit>).
 set -euo pipefail
 O="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -112,14 +115,17 @@ EDK2_REPO="https://github.com/mrchromebox/edk2"
 EDK2_SUBDIR="payloads/external/edk2/workspace/mrchromebox"
 
 # iPXE (patch 0075, CONFIG_EDK2_ENABLE_IPXE): il Makefile di coreboot lo
-# clona da git.ipxe.org al commit di IPXE_STABLE e lo compila; prepare lo
-# clona prima dal mirror GitHub, con i tag (git describe ne fa la versione),
-# allo stesso commit, letto dal Makefile. CSMWrap (patch 0076,
+# clona da git.ipxe.org al commit di IPXE_STABLE (STABLE_COMMIT_ID) e lo
+# compila; prepare lo clona prima dal mirror GitHub, con i tag (git describe
+# ne fa la versione), allo stesso commit, che deve essere IPXE_COMMIT: un
+# nuovo pin di coreboot che lo cambia si ferma li', e IPXE_COMMIT va nelle
+# note delle release (tools/ci.sh) e nel file del layout. CSMWrap (patch 0076,
 # CONFIG_EDK2_ENABLE_CSMWRAP): un BIOS legacy come voce di boot, compilato
 # da prepare al commit pinnato con i suoi submodule e messo in w541/
 # dell'albero; la versione che scrive nel binario e' il commit, non la
 # data, e SeaBIOS non ci mette ora e host perche' l'albero e' pulito.
 IPXE_REPO="https://github.com/ipxe/ipxe.git"
+IPXE_COMMIT="7c39c04a537ce29dccc6f2bae9749d1d371429c1"
 IPXE_SUBDIR="payloads/external/iPXE/ipxe"
 CSMWRAP_REPO="https://github.com/CSMWrap/CSMWrap.git"
 CSMWRAP_COMMIT="008f141f419db566f6f4ee23bfe394f6a4e638d7"
@@ -269,6 +275,7 @@ state() {
 		while read -r p; do sha256sum "patches/lvglpkg/${p}"; done < <(series lvglpkg)
 		for p in "${TREE_FILES[@]}" "${VBOOT_KEYS[@]}"; do sha256sum "${p}"; done
 		sha256sum "${OPVK_FILE}"
+		echo "${IPXE_COMMIT}"
 		echo "${CSMWRAP_COMMIT}"
 	) | sha256sum | cut -d' ' -f1
 }
@@ -430,6 +437,8 @@ prepare_ipxe() {
 	local d="${TREE}/${IPXE_SUBDIR}" commit
 	commit="$(sed -n 's/^STABLE_COMMIT_ID=\([0-9a-f]\{40\}\)$/\1/p' "${TREE}/payloads/external/iPXE/Makefile")"
 	[ -n "${commit}" ] || die "payloads/external/iPXE/Makefile: STABLE_COMMIT_ID non trovato"
+	[ "${commit}" = "${IPXE_COMMIT}" ] \
+		|| die "iPXE: coreboot ${COREBOOT_DESCRIBE} vuole ${commit:0:12}, IPXE_COMMIT e' ${IPXE_COMMIT:0:12}: aggiornare IPXE_COMMIT"
 	say "iPXE ${commit:0:12}"
 	if [ ! -d "${d}/.git" ]; then
 		rm -rf "${d}"
@@ -461,6 +470,13 @@ prepare_csmwrap() {
 		git -C "${d}" fetch -q origin || die "CSMWrap: fetch da ${CSMWRAP_REPO} fallito"
 	fi
 	git -C "${d}" checkout -q --force --detach "${CSMWRAP_COMMIT}" || die "CSMWrap: ${CSMWRAP_COMMIT} non c'e'"
+	make_csmwrap "${TREE}/${CSMWRAP_TREE}"
+	echo "  ${CSMWRAP_TREE} ($(stat -c%s "${TREE}/${CSMWRAP_TREE}") byte, SeaBIOS $(git -C "${d}/seabios" rev-parse --short=7 HEAD))"
+}
+# CSMWrap da capo in WORK/csmwrap (l'albero e i submodule puliti), il
+# binario in $1; prepare e repro, con il PATH del sistema (non il crossgcc)
+make_csmwrap() {
+	local d="${WORK}/csmwrap"
 	git -C "${d}" clean -q -fdx
 	git -C "${d}" submodule update -q --init --force --depth 1 || die "CSMWrap: submodule"
 	git -C "${d}" submodule foreach -q 'git clean -q -fdx'
@@ -469,8 +485,27 @@ prepare_csmwrap() {
 		die "CSMWrap: build fallita (${d}/build.log)"
 	fi
 	[ -s "${d}/bin-x86_64/csmwrap.efi" ] || die "CSMWrap: bin-x86_64/csmwrap.efi non c'e'"
-	cp "${d}/bin-x86_64/csmwrap.efi" "${TREE}/${CSMWRAP_TREE}"
-	echo "  ${CSMWRAP_TREE} ($(stat -c%s "${TREE}/${CSMWRAP_TREE}") byte, SeaBIOS $(git -C "${d}/seabios" rev-parse --short=7 HEAD))"
+	cp "${d}/bin-x86_64/csmwrap.efi" "$1"
+}
+# iPXE da capo alla prossima build: via oggetti e ipxe.rom (il Makefile di
+# coreboot ricompila solo cio' che e' cambiato, e la variante dopo la prima
+# riuserebbe gli oggetti della prima)
+clean_ipxe() {
+	git -C "${TREE}/${IPXE_SUBDIR}" clean -q -fdx
+}
+# I compilatori, nel file del layout, per chi rifa' la build: coreboot con
+# il crossgcc (il suo pin ne fissa le versioni), il payload, iPXE e CSMWrap
+# con gcc e binutils del sistema
+toolchain_line() {
+	local cb os
+	if [ "${TOOLCHAIN}" = crossgcc ]; then
+		cb="$("${XGCC}/bin/i386-elf-gcc" --version | head -n 1)"
+	else
+		cb="$(gcc --version | head -n 1), --toolchain host"
+	fi
+	os="$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/os-release 2>/dev/null || true)"
+	printf 'toolchain: coreboot %s; EDK2, iPXE and CSMWrap %s, %s%s\n' "${cb}" \
+		"$(gcc --version | head -n 1)" "$(ld --version | head -n 1)" "${os:+ (${os})}"
 }
 
 # EDK2 al commit dei defconfig, i submodule ai loro commit, poi le patch
@@ -691,6 +726,9 @@ collect() {
 		echo "coreboot ${COREBOOT_DESCRIBE} (${COREBOOT_COMMIT}) + $(series | wc -l) patches (patches/series)"
 		echo "EDK2 $(edk2_rev) + $(series edk2 | wc -l) patches (patches/edk2/series)," \
 			"LvglPkg + $(series lvglpkg | wc -l) patches (patches/lvglpkg/series)"
+		echo "iPXE ${IPXE_COMMIT}, CSMWrap ${CSMWRAP_COMMIT}" \
+			"(SeaBIOS $(git -C "${WORK}/csmwrap/seabios" rev-parse HEAD 2>/dev/null || echo '?'))"
+		toolchain_line
 		local w
 		for w in "${WITH[@]}"; do echo "+ patches/optional/${w}.patch"; done
 		echo "CONFIG_LOCALVERSION=\"$(localversion "${v}")\""
@@ -963,6 +1001,7 @@ cmd_roms() {
 		say ".config ${v}"
 		variant_config "${v}"
 		say "build ${v} ($(localversion "${v}"))"
+		clean_ipxe
 		if ! mk "${v}" -j"${JOBS}" 2>&1 | tee "${TREE}/build-${v}/make.log"; then
 			# con -j l'errore non e' per forza in fondo: anche le righe con "rror"
 			grep -n -i -B2 -A6 'error' "${TREE}/build-${v}/make.log" | tail -n 60 > "${TREE}/build-${v}/errors.log" || true
@@ -1001,13 +1040,15 @@ cmd_roms() {
 	ls -l "${DIST}"
 }
 
-# La build e' riproducibile? Ogni variante di nuovo da capo (coreboot ed
-# EDK2: la cartella di build si rifa', il workspace di EDK2 si pulisce da
-# solo) e la ROM confrontata bit a bit con quella di roms in DIST. La
-# data e' quella del commit, i PE del payload sono senza la directory di
-# debug (patches/edk2/0021): con lo stesso toolchain (il crossgcc, a
-# versioni fisse) le due devono essere uguali. Se no, le regioni diverse
-# e, negli slot, i file CBFS diversi.
+# La build e' riproducibile? CSMWrap di nuovo da capo, confrontato con quello
+# di prepare nell'albero; poi ogni variante di nuovo da capo (coreboot, EDK2
+# e iPXE: la cartella di build si rifa', il workspace di EDK2 si pulisce da
+# solo, iPXE lo pulisce clean_ipxe) e la ROM confrontata bit a bit con
+# quella di roms in DIST. La data e' quella del commit, i PE del payload
+# sono senza la directory di debug (patches/edk2/0021): con gli stessi
+# compilatori (il crossgcc, a versioni fisse; gcc e binutils del sistema per
+# EDK2, iPXE e CSMWrap) le due devono essere uguali. Se no, le regioni
+# diverse e, negli slot, i file CBFS diversi.
 cmd_repro() {
 	need_prepared
 	local v first again b bad=0
@@ -1016,6 +1057,16 @@ cmd_repro() {
 		install_vboot_key
 		VBOOT_KEYS_REAL=yes
 	fi
+	# prima del crossgcc nel PATH: CSMWrap si compila con nasm del sistema
+	say "seconda build di CSMWrap ${CSMWRAP_COMMIT:0:12}"
+	make_csmwrap "${WORK}/csmwrap-again.efi"
+	if cmp -s "${TREE}/${CSMWRAP_TREE}" "${WORK}/csmwrap-again.efi"; then
+		echo "  ok  csmwrap.efi uguale a quello di prepare ($(sha256sum "${WORK}/csmwrap-again.efi" | cut -c1-16)...)"
+	else
+		bad=1
+		echo "  NO  csmwrap.efi diverso da quello di prepare ($(stat -c%s "${TREE}/${CSMWRAP_TREE}") e $(stat -c%s "${WORK}/csmwrap-again.efi") byte)"
+	fi
+	rm -f "${WORK}/csmwrap-again.efi"
 	if [ "${TOOLCHAIN}" = crossgcc ]; then
 		xgcc_ok || die "crossgcc mancante in ${XGCC}: prima tools/build.sh toolchain"
 		export PATH="${XGCC}/bin:${PATH}"
@@ -1026,6 +1077,7 @@ cmd_repro() {
 		b="${TREE}/build-${v}"
 		say "seconda build ${v} ($(localversion "${v}"))"
 		variant_config "${v}"
+		clean_ipxe
 		if ! mk "${v}" -j"${JOBS}" > "${b}/make-again.log" 2>&1; then
 			grep -n -i -B2 -A6 'error' "${b}/make-again.log" | tail -n 60 > "${b}/errors.log" || true
 			failure_report "seconda build ${v}" "${b}/errors.log" "${b}/make-again.log"
@@ -1041,10 +1093,10 @@ cmd_repro() {
 		repro_diff "${v}" "${first}" "${again}"
 	done
 	if [ "${bad}" != 0 ]; then
-		note error "Build riproducibile" "la seconda build non e' uguale alla prima (regioni e file nel log)"
+		note error "Build riproducibile" "la seconda build non e' uguale alla prima (CSMWrap, regioni e file nel log)"
 		die "repro: build non riproducibile"
 	fi
-	echo "Build riproducibile: la seconda build di ogni variante e' uguale alla prima." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+	echo "Build riproducibile: CSMWrap e la seconda build di ogni variante uguali alla prima." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 }
 
 # Le regioni della mappa e, negli slot, i file CBFS in cui $2 e $3 differiscono

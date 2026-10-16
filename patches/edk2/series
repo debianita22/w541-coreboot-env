@@ -22,3 +22,4 @@
 0022-UefiPayloadPkg-iPXE-on-its-own-and-a-setup-switch-fo.patch
 0023-UefiPayloadPkg-CSMWrap-a-legacy-BIOS-as-a-boot-optio.patch
 0024-UefiPayloadPkg-An-11-MiB-FD-for-the-release-build-to.patch
+0025-UefiPayloadPkg-Refuse-CSMWrap-while-Secure-Boot-is-o.patch
