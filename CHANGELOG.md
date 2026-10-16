@@ -76,9 +76,9 @@ the [releases page](https://github.com/debianita22/ourobios/releases).
   Montserrat, as in the setup, which `tools/ui-font.py` turns into a compact
   font from the files of LvglPkg when the tree is prepared. The firmware
   that is running draws it: it shows from the update after the one that
-  installs it. It takes about 6 KiB of each flash slot (the compression of
-  the payload finds most of the font in the setup's), which keeps about
-  207 KiB free with `mrc` and 140 KiB with `nri`.
+  installs it. It takes about 18 KiB of each flash slot, measured between
+  v1.3.6-rc3 and rc4: about 195 KiB stay free with `mrc` and 129 KiB with
+  `nri`.
 - Reproducible builds: the release build of each variant is built a second
   time from scratch in CI, CSMWrap and iPXE included, and compared bit by
   bit with the first (`tools/build.sh repro`). The build date was already

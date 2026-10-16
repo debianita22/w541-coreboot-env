@@ -190,8 +190,8 @@ flashrom, would change. Nothing of it is in the ROMs of the releases.
   bump the keyblock or preamble version (`VBOOT_KEYBLOCK_VERSION`, 1 today)
   when a release has to cut off the ones before.
 - **Larger RW slots**, if the payload needs them: the flash map is in the
-  read-only part, and in v1.3.6 about 207 KiB of `FW_MAIN_A` are free with
-  `mrc` and 140 KiB with `nri`, whose romstage carries the RAM init
+  read-only part, and in v1.3.6 about 195 KiB of `FW_MAIN_A` are free with
+  `mrc` and 129 KiB with `nri`, whose romstage carries the RAM init
   (about 510 and 443 before iPXE, CSMWrap and the update screen went into
   the payload).
 - **With the same release, optional**: a newer coreboot pin, and vboot's
